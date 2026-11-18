@@ -26,6 +26,7 @@ vi.mock("../../lib/tauri_services", () => ({
 }));
 
 import MinutesView from "./MinutesView";
+import { _clearReviseMemory } from "./reviseStore";
 
 const meta = { id: "mtg_1", title: "周会", created_at: "2026-10-01T10:00:00", attendees: 2 } as never;
 const base = { meeting_id: "mtg_1", summary: "讨论了二期。", decisions: [], action_items: [], open_questions: [] };
@@ -38,12 +39,14 @@ beforeEach(() => {
   const data = new Map<string, string>();
   Object.defineProperty(window, "localStorage", {
     configurable: true,
-    value: { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v) },
+    value: { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v),
+             removeItem: (k: string) => void data.delete(k) },
   });
   api.minutes = null;
   api.templates = [];
   api.generate.mockClear();
   api.revise.mockReset();
+  _clearReviseMemory();
   api.save.mockClear();
 });
 afterEach(cleanup);
@@ -218,3 +221,59 @@ describe("纪要标出是哪个模型写的 (11/17)", () => {
     expect(screen.queryByText(/写的$/)).toBeNull();
   });
 });
+
+describe("让小鲶改: 切走再回来不丢 (11/18)", () => {
+  const minutes = {
+    json: { ...base, action_items: [{ task: "交材料", owner: "说话人2", due: "" }] }, markdown: "# 周会", path: "/x",
+  };
+  const proposal = {
+    reply: "负责人换成王总了。", markdown: null, transcript_full: true, changed: ["action_items"], changed_labels: ["待办"],
+    fields: { ...minutes.json, action_items: [{ task: "交材料", owner: "王总", due: "" }] },
+    sources: [{ kind: "知识库", title: "王总", where: "wiki/entities/王总.md" }],
+  };
+
+  it("没采用就切到别的 tab (整页卸载) 再回来: 提议、说过的话都还在; 查过的资料列出来", async () => {
+    api.minutes = minutes;
+    api.revise.mockResolvedValueOnce(proposal);
+    await mount();
+    const box = screen.getByLabelText("让小鲶改纪要");
+    fireEvent.change(box, { target: { value: "说话人2 是王总" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(screen.getByText(/依据 \(你电脑上的\): 知识库「王总」/)).toBeTruthy();
+    cleanup();                                   // 切到工作台: 会议页整个卸载
+    await mount();                               // 切回来
+    expect(screen.getByText(/小鲶改了: 待办/)).toBeTruthy();
+    expect(screen.getByText("🐟 负责人换成王总了。")).toBeTruthy();
+  });
+
+  it("小鲶还在改时切走: 结果回来存下, 切回来就在", async () => {
+    api.minutes = minutes;
+    let finish: (v: unknown) => void = () => undefined;
+    api.revise.mockReturnValueOnce(new Promise((r) => { finish = r; }));
+    await mount();
+    const box = screen.getByLabelText("让小鲶改纪要");
+    fireEvent.change(box, { target: { value: "说话人2 是王总" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(screen.getByText(/小鲶在查资料、对照转写改/)).toBeTruthy();
+    cleanup();
+    await act(async () => { finish(proposal); });   // 页面不在的时候结果回来了
+    await mount();
+    expect(screen.getByText(/小鲶改了: 待办/)).toBeTruthy();
+  });
+
+  it("纪要已经变了 (重新生成 / 手动改过): 旧提议作废, 不往新纪要上套; 打了一半的字留着", async () => {
+    api.minutes = minutes;
+    api.revise.mockResolvedValueOnce(proposal);
+    await mount();
+    const box = screen.getByLabelText("让小鲶改纪要");
+    fireEvent.change(box, { target: { value: "说话人2 是王总" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    fireEvent.change(screen.getByLabelText("让小鲶改纪要"), { target: { value: "再补一条" } });
+    cleanup();
+    api.minutes = { ...minutes, json: { ...minutes.json, edited_at: "2026-11-18T09:00:00" } };
+    await mount();
+    expect(screen.queryByText(/小鲶改了/)).toBeNull();
+    expect((screen.getByLabelText("让小鲶改纪要") as HTMLTextAreaElement).value).toBe("再补一条");
+  });
+});
+

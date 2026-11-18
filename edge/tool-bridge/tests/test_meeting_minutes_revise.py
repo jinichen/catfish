@@ -7,8 +7,16 @@ from pathlib import Path
 
 import pytest
 
-from catfish_tool_bridge import gateway_llm
+from catfish_tool_bridge import gateway_llm, local_lookup
 from catfish_tool_bridge import meeting_minutes_revise as mr
+
+
+@pytest.fixture(autouse=True)
+def _no_local_lookup(monkeypatch):
+    """查本机资料 (local_lookup) 另有测试; 这里默认什么都没查到, 不占假模型的回复。"""
+    async def none(question, context, call_llm, kw):
+        return {"queries": ["x"], "found": [], "block": ""}
+    monkeypatch.setattr(local_lookup, "lookup", none)
 
 MID = "mtg_20261116-143600_cc01"
 DOC = {"version": 1, "meeting_id": MID, "summary": "讨论 CCRC 整改。", "decisions": ["一个月内提交新项目"],
@@ -150,3 +158,30 @@ def test_restructure_that_drops_items_is_flagged(tmp_path, monkeypatch):
     assert r["shrink"] == {"before": 13, "after": 2}
     _fake(monkeypatch, {"reply": "好", "markdown": "# 会\n" + "".join(f"- 条目{i}\n" for i in range(12)), "action_items": []})
     assert asyncio.run(mr.handle_revise(_p(tmp_path, instruction="分两块")))["shrink"] is None
+
+
+def test_revise_looks_up_local_material_first(tmp_path, monkeypatch):
+    """11/18「这里的小鲶无法调用工具?」: 先查知识库 / 文件 / 邮件, 查到的进提示词, 出处给界面。"""
+    _meeting(tmp_path)
+
+    async def found(question, context, call_llm, kw):
+        assert "金智达" in question
+        return {"queries": ["金智达"], "block": "【知识库】金智达: 福建金智达信息技术有限公司, CCRC 辅导机构",
+                "found": [{"kind": "wiki", "title": "金智达", "where": "wiki/entities/金智达.md", "text": "…"}]}
+    monkeypatch.setattr(local_lookup, "lookup", found)
+    seen = _fake(monkeypatch, {**DOC, "reply": "写成了全称"})
+    r = asyncio.run(mr.handle_revise(_p(tmp_path, instruction="辅导方是金智达, 写全称")))
+    assert "福建金智达信息技术有限公司" in seen[0][1]["content"]
+    assert "只当材料" in seen[0][0]["content"]
+    assert r["sources"] == [{"kind": "wiki", "title": "金智达", "where": "wiki/entities/金智达.md"}]
+
+
+def test_lookup_failure_does_not_block_revise(tmp_path, monkeypatch):
+    _meeting(tmp_path)
+
+    async def boom(*a, **k):
+        raise RuntimeError("搜索挂了")
+    monkeypatch.setattr(local_lookup, "lookup", boom)
+    _fake(monkeypatch, {**DOC, "reply": "没改"})
+    r = asyncio.run(mr.handle_revise(_p(tmp_path, instruction="精简摘要")))
+    assert r["reply"] == "没改" and r["sources"] == []

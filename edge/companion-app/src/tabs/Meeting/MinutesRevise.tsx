@@ -8,13 +8,15 @@
  *   · 不满意接着说, 小鲶在这一版上继续改 (采用前可以来回几轮)。
  * 后端 tool-bridge meeting_minutes_revise.py (只出提议, 不写文件)。
  */
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 
 import { Markdown } from "../../lib/markdown";
 import {
-  meetingMinutesRevise, meetingMinutesSave, type ActionItem, type Minutes, type MinutesFields, type MinutesRevision,
+  meetingMinutesRevise, meetingMinutesSave, type ActionItem, type Minutes, type MinutesFields,
 } from "../../lib/tauri_meeting";
 import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
+import { emptyState, loadRevise, minutesSig, saveRevise, subscribeRevise, type ReviseState } from "./reviseStore";
+import { sourcesLine } from "../Collab/RoomAskXiaonian";
 import { diffItems, diffList, itemText, markdownHunks, reviseSuggestions, type DiffRow } from "./reviseDiff";
 
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
@@ -28,43 +30,60 @@ const rowStyle = (kind: DiffRow<unknown>["kind"]): CSSProperties => ({
   ...(kind === "removed" ? { color: "var(--catfish-text-muted)", textDecoration: "line-through" } : null),
 });
 
-export interface Turn { instruction: string; reply: string }
+export type { Turn } from "./reviseStore";
 
-/** 状态放在 MinutesView 里 (预览要替换纪要正文), 组件只管画。 */
+/** 状态放在 MinutesView 里 (预览要替换纪要正文), 组件只管画。按会议存在 reviseStore —— 切 tab / 重开都还在。 */
 export function useRevise(meetingId: string, minutes: Minutes | null, markdownView: boolean, onApplied: () => void) {
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const sig = minutesSig(minutes);
+  const [st, setSt] = useState<ReviseState>(() => loadRevise(meetingId, sig));
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [proposal, setProposal] = useState<MinutesRevision | null>(null);
-  const [turns, setTurns] = useState<Turn[]>([]);
+
+  useEffect(() => {
+    setSt(loadRevise(meetingId, sig));
+    setError(null);
+    // 别处 (另一次挂载里发出去的那次) 改完了: 重新读
+    return subscribeRevise((id) => { if (id === meetingId) setSt(loadRevise(meetingId, sig)); });
+  }, [meetingId, sig]);
+
+  const update = (patch: Partial<ReviseState>) => {
+    if (!sig) return;   // 纪要还没读回来, 没东西可改
+    const next = { ...loadRevise(meetingId, sig), ...patch };
+    saveRevise(meetingId, next);
+  };
 
   async function send(text?: string) {
-    const instruction = (text ?? draft).trim();
-    if (!instruction || !minutes || busy) return;
-    setBusy(true);
+    const instruction = (text ?? st.draft).trim();
+    if (!instruction || !minutes || st.pending) return;
     setError(null);
+    const id = meetingId;
+    const base = st.proposal ? { fields: st.proposal.fields, markdown: st.proposal.markdown } : null;
+    const history = st.turns.map((t) => t.instruction);
+    update({ pending: instruction, draft: "" });
     try {
-      const base = proposal ? { fields: proposal.fields, markdown: proposal.markdown } : null;
-      const r = await meetingMinutesRevise(meetingId, instruction, base, turns.map((t) => t.instruction));
-      setTurns([...turns, { instruction, reply: r.reply }]);
-      // 这一轮没改动: 保留上一轮的提议 (要是有), 只显示小鲶的说明
-      if (r.changed.length) setProposal(r);
-      setDraft("");
+      const r = await meetingMinutesRevise(id, instruction, base, history);
+      // 结果直接写进存储 —— 界面这时可能已经切走 / 卸载了, 回来时照样在
+      const cur = loadRevise(id, sig);
+      saveRevise(id, {
+        ...cur, pending: null,
+        turns: [...cur.turns, { instruction, reply: r.reply, sources: r.sources }],
+        // 这一轮没改动: 保留上一轮的提议 (要是有), 只显示小鲶的说明
+        proposal: r.changed.length ? r : cur.proposal,
+      });
     } catch (e) {
+      const cur = loadRevise(id, sig);
+      saveRevise(id, { ...cur, pending: null, draft: cur.draft || instruction });
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
     }
   }
 
   function discard() {
-    setProposal(null);
-    setTurns([]);
+    update({ proposal: null, turns: [] });
     setError(null);
   }
 
   async function apply() {
+    const proposal = st.proposal;
     if (!proposal) return;
     setApplying(true);
     setError(null);
@@ -73,7 +92,7 @@ export function useRevise(meetingId: string, minutes: Minutes | null, markdownVi
       const md = markdownView || proposal.markdown != null;
       const fields: MinutesFields = md ? { action_items: proposal.fields.action_items ?? [] } : proposal.fields;
       await meetingMinutesSave(meetingId, fields, md ? proposal.markdown : null);
-      discard();
+      saveRevise(meetingId, emptyState(sig));
       onApplied();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -82,13 +101,15 @@ export function useRevise(meetingId: string, minutes: Minutes | null, markdownVi
     }
   }
 
+  /** 换了会议: 读那场存着的 (useEffect 已经按 meetingId 读了, 这里只清报错) */
   function reset() {
-    discard();
-    setDraft("");
-    setBusy(false);
+    setError(null);
   }
 
-  return { draft, setDraft, busy, applying, error, proposal, turns, send, discard, apply, reset };
+  return {
+    draft: st.draft, setDraft: (v: string) => update({ draft: v }), busy: !!st.pending, applying, error,
+    proposal: st.proposal, turns: st.turns, send, discard, apply, reset,
+  };
 }
 
 export type ReviseApi = ReturnType<typeof useRevise>;
@@ -131,11 +152,12 @@ export function ReviseComposer({ api, minutes, names, disabled }: {
           ))}
         </div>
       )}
-      {api.busy && <div style={muted}>小鲶在对照转写改, 长会议要半分钟到一分钟。</div>}
+      {api.busy && <div style={muted}>小鲶在查资料、对照转写改, 长会议要半分钟到一分钟 (可以先切去干别的, 改好了回来就在)。</div>}
       {last && !api.busy && (
         <div style={{ fontSize: 13, lineHeight: 1.6 }}>
           <span style={muted}>你: {last.instruction}</span>
           <div>🐟 {last.reply}</div>
+          {sourcesLine(last.sources) && <div style={muted}>🔎 {sourcesLine(last.sources)}</div>}
         </div>
       )}
       {api.error && <ErrorLine>{api.error}</ErrorLine>}

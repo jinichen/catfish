@@ -312,6 +312,8 @@ export interface MinutesRevision {
   model?: string;
   /** 重排后条目明显变少 (模型自己删了内容): 改前 / 改后几条 */
   shrink?: { before: number; after: number } | null;
+  /** 11/18 改之前先查的本机资料 (知识库 / 文件 / 邮件) 出处 */
+  sources?: { kind: string; title: string; where: string }[];
 }
 export const meetingMinutesRevise = (
   id: string, instruction: string, base: { fields: MinutesFields; markdown: string | null } | null, history: string[],
