@@ -72,6 +72,8 @@ export function PracticeEvent({ ev }: { ev: LearnEvent }) {
       return <div style={{ ...muted, alignSelf: "flex-end" }}>这题不做了</div>;
     case "cards":
       return <div style={muted}>🔁 做了 {ev.added} 张复习卡{ev.skipped ? ` (${ev.skipped} 张跟已有的重复, 没加)` : ""}, 明天开始复习。</div>;
+    case "graph":
+      return <div style={muted}>📚 沉淀了 {ev.added} 条新要点{ev.linked ? `, ${ev.linked} 条跟以前学过的是同一条 (合并了)` : ""}{ev.chains ? `, ${ev.chains} 条推理` : ""}。</div>;
     default:
       return null;
   }

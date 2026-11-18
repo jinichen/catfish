@@ -41,6 +41,7 @@ export type LearnEvent = { id: string; at: number; role: "tutor" | "learner" } &
   | { kind: "conclude"; pid: string; outcome: "solved" | "solvedWithHints" | "movedOn"; verdict: string; rung: string | null;
       miss: string | null; retest: boolean }
   | { kind: "cards"; added: number; skipped: number }
+  | { kind: "graph"; added: number; linked: number; chains: number }
 );
 
 export type PracticeMode = "recall" | "discrimination" | "composition";
@@ -97,7 +98,7 @@ export const PHASE_LABEL: Record<LearnPhase, string> = {
 // ── 第 2 步 (11/18): 练习 / 复习卡 / 复习 ──
 export const learnPractice = (id: string, next = false) => rawInvoke<LearnView>("learn_practice", { id, next });
 export const learnAttempt = (id: string, text: string, thinking?: string) => rawInvoke<LearnView>("learn_attempt", { id, text, thinking });
-export const learnAction = (id: string, action: "hint" | "give_up" | "teach" | "cards") => rawInvoke<LearnView>("learn_action", { id, action });
+export const learnAction = (id: string, action: "hint" | "give_up" | "teach" | "cards" | "ingest") => rawInvoke<LearnView>("learn_action", { id, action });
 
 export interface ReviewCard { id: number; type: string; question: string; options: Record<string, string>; tags: string[] }
 export interface ReviewStats { total: number; new: number; wrong: number; due_today: number; reviewed_today: number; mastered: number }
@@ -114,3 +115,24 @@ export const learnReviewAnswer = (qid: number, userAnswer?: string, rating?: Rat
 export const meetingMinutesCards = (id: string) => rawInvoke<{ added: number; skipped: number }>("meeting_minutes_cards", { id });
 
 export const RATING_LABEL: Record<Rating, string> = { again: "忘了", hard: "想得很费劲", good: "想起来了", easy: "很轻松" };
+
+// ── 第 3 步 (11/18): 我学过的要点 ──
+export interface GraphPoint {
+  id: string; name: string; statement: string; wiki: string; wiki_title: string;
+  /** 除了出生的那份, 还有哪些材料也提到 */
+  also: string[];
+  /** 推出它的推理链 (「A + B ⇒ 本条」) */
+  chains: string[];
+}
+export interface GraphSource { source: string; label: string; kind: "learn" | "file" | "meeting" | string; points: GraphPoint[] }
+export interface GraphView {
+  sources: GraphSource[]; points: number; chains: number;
+  /** 正在导入的资料名 */
+  running: string | null;
+  last: { name?: string; added?: number; linked?: number; chains?: number; error?: string; deleted?: { points: number; chains: number } } | null;
+}
+export const learnGraphView = () => rawInvoke<GraphView>("learn_graph", { action: "view" });
+export const learnGraphImport = (stageId: string, name: string) =>
+  rawInvoke<GraphView & { chars: number; parts: number }>("learn_graph", { action: "import", params: { stage_id: stageId, name } });
+export const learnGraphDelete = (source: string) => rawInvoke<GraphView>("learn_graph", { action: "delete", params: { source } });
+export const GRAPH_ACCEPT = ".docx,.pdf,.txt,.md,.pptx,.xlsx";

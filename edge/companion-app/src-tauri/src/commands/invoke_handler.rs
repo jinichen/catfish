@@ -300,6 +300,7 @@ pub(crate) fn handler(
             crate::commands::learn_cmd::learn_review_next,
             crate::commands::learn_cmd::learn_review_answer,
             crate::commands::learn_cmd::meeting_minutes_cards,
+            crate::commands::learn_cmd::learn_graph,
             crate::commands::meeting_minutes_cmd::meeting_minutes,
             crate::commands::meeting_minutes_cmd::meeting_templates_list,
             crate::commands::meeting_minutes_cmd::meeting_template_save,

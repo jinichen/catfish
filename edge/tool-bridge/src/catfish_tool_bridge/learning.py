@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import secrets
 from pathlib import Path
 from typing import Any
@@ -38,202 +37,17 @@ MAX_ATTEMPTS = 3
 PROBE_MAX = 10
 #: 出「检查」题这一轮至少要讲这么多字 —— 11/18 实测快速模式下模型只出题不讲, 题干还写「根据刚才讲的」
 CHECK_MIN_SAY = 120
-#: 软规则 (例 别出重复的题): 前几次照样退回让它改, 最后一次只剩软规则没满足就收下 —— 别为这个让整步失败
-SOFT = "~"
 TRANSCRIPT_CHARS = 30000
 MATERIAL_CHARS = 9000
-_SLUG = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 
 _RUNNING: set[str] = set()
 _TASKS: set[asyncio.Task] = set()
 
 
-# ── 校验 (每条错都要说清楚, 让模型能改) ─────────────────────────────
-
-def _heal(v: Any) -> Any:
-    """模型把数组 / 对象写成 JSON 字符串时还原。"""
-    if isinstance(v, str) and v.strip()[:1] in "[{":
-        try:
-            return json.loads(v)
-        except ValueError:
-            return v
-    return v
-
-
-def check_question(q: Any, phase: str, plan: dict | None) -> tuple[dict | None, list[str]]:
-    if not isinstance(q, dict):
-        return None, ["question 必须是对象"]
-    q = {k: _heal(v) for k, v in q.items()}
-    errs: list[str] = []
-    qtype = q.get("type")
-    if qtype not in ("choice", "recall", "ask"):
-        errs.append("question.type 只能是 choice / recall / ask")
-    text = str(q.get("question") or "").strip()
-    if not text:
-        errs.append("question.question 不能空")
-    out: dict[str, Any] = {"type": qtype, "question": text[:2000]}
-    if qtype in ("choice", "ask"):
-        opts = q.get("options") or []
-        if not isinstance(opts, list):
-            opts = []
-        if opts and all(isinstance(o, str) for o in opts):   # ["1 个", "3 个"] —— 模型常这么写, 按顺序编 a b c
-            opts = [{"value": "abcdefgh"[i], "label": o} for i, o in enumerate(opts[:8])]
-        opts = [{"value": str(o.get("value") or o.get("id") or o.get("key") or "abcdefgh"[i]), "label": o.get("label") or o.get("text")}
-                if isinstance(o, dict) else o for i, o in enumerate(opts)]
-        clean, seen = [], set()
-        for o in opts:
-            if isinstance(o, dict) and str(o.get("value") or "").strip() and str(o.get("label") or "").strip():
-                v = str(o["value"]).strip()[:20]
-                if v in seen:
-                    errs.append(f"选项 value 重复: {v}")
-                seen.add(v)
-                clean.append({"value": v, "label": str(o["label"]).strip()[:500]})
-        if qtype == "choice" and not 2 <= len(clean) <= 6:
-            errs.append("choice 要 2–6 个选项, 每个有 value 和 label")
-        out["options"] = clean
-        out["multi"] = bool(q.get("multi")) if qtype == "choice" else False
-    if qtype == "choice":
-        ans = q.get("answer")
-        ans = [ans] if isinstance(ans, (str, int)) else ans
-        by_label = {o["label"]: o["value"] for o in clean}
-        values = [o["value"] for o in clean]
-        fixed = []
-        for a in ans or []:   # 写成选项原文 / 序号的也认
-            a = by_label.get(str(a).strip(), a)
-            if isinstance(a, int) and not isinstance(a, bool) and 0 <= a < len(values) and str(a) not in seen:
-                a = values[a]
-            fixed.append(a)
-        ans = [str(a).strip() for a in fixed if str(a).strip()]
-        if not ans or any(a not in seen for a in ans):
-            errs.append("choice 的 answer 要是选项 value 的列表, 例 [\"a\"]")
-        elif not out["multi"] and len(ans) != 1:
-            errs.append("单选题 answer 只能有一个; 多选要写 \"multi\": true")
-        if not str(q.get("explanation") or "").strip():
-            errs.append("choice 要写 explanation (为什么对)")
-        out["answer"] = ans
-        out["explanation"] = str(q.get("explanation") or "").strip()[:2000]
-    if qtype == "recall":
-        if not str(q.get("answer") or "").strip():
-            errs.append("recall 要写 answer (完整标准答案)")
-        out["answer"] = str(q.get("answer") or "").strip()[:3000]
-    if phase == "probe":
-        out["role"] = "ask" if qtype == "ask" else "probe"
-    elif qtype == "ask":
-        out["role"] = "ask"
-        if q.get("node") and plan and q["node"] in {n["id"] for n in plan["nodes"]}:
-            out["node"] = q["node"]
-    else:
-        role = q.get("role")
-        if role not in ("predict", "check"):
-            errs.append("讲解时的 choice / recall 要写 role: predict (讲之前猜) 或 check (讲完检查)")
-        out["role"] = role
-        ids = {n["id"] for n in (plan or {}).get("nodes") or []}
-        if q.get("node") not in ids:
-            errs.append(f"question.node 必须是路线图里的节点 id, 现有: {', '.join(sorted(ids)) or '(还没有路线图)'}")
-        out["node"] = q.get("node")
-    return (None if errs else out), errs
-
-
-def check_plan(p: Any) -> tuple[dict | None, list[str]]:
-    p = _heal(p)
-    if not isinstance(p, dict):
-        return None, ["plan 必须是 {nodes, edges}"]
-    nodes_in = _heal(p.get("nodes")) or []
-    edges_in = _heal(p.get("edges")) or []
-    errs: list[str] = []
-    nodes, ids = [], []
-    for n in nodes_in if isinstance(nodes_in, list) else []:
-        nid = str((n or {}).get("id") or "").strip() if isinstance(n, dict) else ""
-        title = str((n or {}).get("title") or "").strip() if isinstance(n, dict) else ""
-        if not _SLUG.match(nid):
-            errs.append(f"节点 id「{nid}」不合格: 只能小写英文字母 / 数字, 用 - 或 _ 连 (例 cert-levels)")
-            continue
-        if nid in ids:
-            errs.append(f"节点 id 重复: {nid}")
-            continue
-        ids.append(nid)
-        nodes.append({"id": nid, "title": (title or nid)[:40]})
-    if not 2 <= len(nodes) <= 40:
-        errs.append("路线图要 2–40 个节点")
-    edges = []
-    for e in edges_in if isinstance(edges_in, list) else []:
-        if isinstance(e, dict):
-            e = [e.get("from"), e.get("to")]
-        if not (isinstance(e, list) and len(e) == 2):
-            errs.append(f"边要写成 [前置, 后续]: {e}")
-            continue
-        a, b = str(e[0]), str(e[1])
-        if a not in ids or b not in ids:
-            errs.append(f"边 [{a}, {b}] 里有不存在的节点")
-        elif a == b:
-            errs.append(f"边 [{a}, {b}] 自己连自己")
-        elif [a, b] not in edges:
-            edges.append([a, b])
-    if not errs and _has_cycle(ids, edges):
-        errs.append("路线图里有环 (A 要先懂 B, B 又要先懂 A), 去掉一条边")
-    return (None if errs else {"nodes": nodes, "edges": edges}), errs
-
-
-def _has_cycle(ids: list[str], edges: list[list[str]]) -> bool:
-    indeg = {i: 0 for i in ids}
-    nxt: dict[str, list[str]] = {i: [] for i in ids}
-    for a, b in edges:
-        indeg[b] += 1
-        nxt[a].append(b)
-    queue = [i for i in ids if indeg[i] == 0]
-    seen = 0
-    while queue:
-        x = queue.pop()
-        seen += 1
-        for y in nxt[x]:
-            indeg[y] -= 1
-            if indeg[y] == 0:
-                queue.append(y)
-    return seen != len(ids)
-
-
-def topo_order(plan: dict) -> list[str]:
-    ids = [n["id"] for n in plan["nodes"]]
-    indeg = {i: 0 for i in ids}
-    for _, b in plan["edges"]:
-        indeg[b] += 1
-    order, queue = [], [i for i in ids if indeg[i] == 0]
-    while queue:
-        x = queue.pop(0)
-        order.append(x)
-        for a, b in plan["edges"]:
-            if a == x:
-                indeg[b] -= 1
-                if indeg[b] == 0:
-                    queue.append(b)
-    return order
-
-
-def _norm(t: str) -> str:
-    return re.sub(r"[\s'\"‘’“”「」，,。.？?！!：:]", "", t or "")
-
-
-def asked_before(q: dict | None, evs: list[dict]) -> bool:
-    """题干跟之前出过的一样 (去掉标点空白比)。"""
-    if not q:
-        return False
-    t = _norm(q.get("question", ""))
-    return any(ev.get("kind") == "question" and _norm((ev.get("q") or {}).get("question", "")) == t for ev in evs)
-
-
-def probe_count(evs: list[dict]) -> int:
-    return sum(1 for ev in evs if ev.get("kind") == "question" and (ev.get("q") or {}).get("role") == "probe")
-
-
-def json_obj(raw: str) -> dict:
-    raw = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.S)
-    m = re.search(r"\{.*\}", raw, re.S)
-    if not m:
-        raise ValueError("没找到 JSON 对象")
-    obj = json.loads(m.group(0))
-    if not isinstance(obj, dict):
-        raise ValueError("要的是一个 JSON 对象")
-    return obj
+# ── 校验 / 修模型输出: 在 learning_checks.py (11/18 这个文件超了 800 行, 拆出去); 这里照旧能 learning.xxx 用 ──
+from .learning_checks import (  # noqa: E402,F401
+    SOFT, _heal, _norm, asked_before, check_plan, check_question, json_obj, probe_count, shuffle_options, topo_order,
+)
 
 
 # ── 给模型看的上下文 ─────────────────────────────────────────────
@@ -388,6 +202,13 @@ async def _materials(d: Path, meta: dict, node: str | None, llm_kw: dict) -> lis
         meta["materials"] = {"items": items, "sources": [{k: i[k] for k in ("kind", "title", "where")} for i in items]}
         store.save(d, meta)
     items = list(meta["materials"]["items"])
+    # 第 3 步: 他以前学过的要点 (知识图谱, 跟目标 / 当前节点相关的)
+    from . import learning_graph  # noqa: PLC0415
+    home = str(d.parents[2])
+    title = next((n["title"] for n in (meta.get("plan") or {}).get("nodes", []) if n["id"] == node), "") if node else ""
+    for g in await asyncio.to_thread(learning_graph.relevant, home, f"{meta['goal']} {title}", 6):
+        items.append({"kind": "学过的要点", "title": g["name"], "where": g["id"],
+                      "text": g["statement"] + ("; 推理: " + " / ".join(g["chains"]) if g["chains"] else "")})
     if node and meta.get("plan"):
         nm = meta.setdefault("node_materials", {})
         if node not in nm:
@@ -418,20 +239,6 @@ def _ungraded_recall(evs: list[dict]) -> str | None:
                 return ev["qid"]
             return None
     return None
-
-
-def shuffle_options(q: dict, seed: str) -> dict:
-    """选择题选项打乱、重新编 a b c (11/18 实测: 模型八成把对的放第一个, 员工几题下来就知道「选 a」)。
-    同一道题 (seed = qid) 打乱结果固定; 标准答案跟着换编号。"""
-    if q.get("type") != "choice" or len(q.get("options") or []) < 2:
-        return q
-    import random  # noqa: PLC0415
-    opts = list(q["options"])
-    random.Random(seed).shuffle(opts)
-    letters = "abcdefgh"
-    remap = {o["value"]: letters[i] for i, o in enumerate(opts)}
-    return {**q, "options": [{"value": letters[i], "label": o["label"]} for i, o in enumerate(opts)],
-            "answer": sorted(remap[a] for a in q.get("answer") or [])}
 
 
 def _post_question(d: Path, meta: dict, q: dict) -> None:
@@ -549,12 +356,30 @@ async def run_step(home: str, sid: str, llm_kw: dict) -> None:
 
 
 async def _auto_cards(home: str, sid: str, llm_kw: dict) -> None:
-    """学完自动做复习卡 (第 2 步); 做不成不影响这一步, 员工可以在界面上点「做成复习卡」再来。"""
+    """学完自动做复习卡 (第 2 步) + 把讲过的沉淀成要点 / 推理链 (第 3 步); 做不成不影响这一步,
+    员工可以在界面上点「做成复习卡」「沉淀要点」再来。"""
     from . import learning_cards  # noqa: PLC0415
     try:
         await learning_cards.session_cards(home, sid, llm_kw)
     except Exception as e:  # noqa: BLE001
         logger.info("learning: %s 自动做复习卡失败: %s", sid, e)
+    try:
+        await ingest_session(home, sid, llm_kw)
+    except Exception as e:  # noqa: BLE001
+        logger.info("learning: %s 沉淀要点失败: %s", sid, e)
+
+
+async def ingest_session(home: str, sid: str, llm_kw: dict) -> dict:
+    """学习会话里小鲶讲过的 → 要点 / 推理链 (learning_graph)。只用讲解, 不用员工答了什么。"""
+    from . import learning_graph  # noqa: PLC0415
+    d = store.session_dir(home, sid)
+    meta = store.load(d)
+    text = "\n\n".join(ev["text"] for ev in store.events(d) if ev.get("kind") == "say" and ev.get("role") == "tutor")
+    if not text.strip():
+        raise ValueError("还没讲什么, 没东西可沉淀")
+    r = await learning_graph.ingest(home, f"learn:{sid}", f"学习: {meta['goal']}", "learn", text, llm_kw)
+    store.append(d, {"role": "tutor", "kind": "graph", **{k: r[k] for k in ("added", "linked", "chains")}})
+    return r
 
 
 async def _plan_step(d: Path, meta: dict, evs: list[dict], mats: list[dict], llm_kw: dict, revised: bool) -> None:
@@ -626,6 +451,9 @@ async def handle(method: str, params: dict) -> dict:
     home, llm_kw = _ctx(params)
     if method == "learn/list":
         return {"sessions": store.list_all(home)}
+    if method.startswith("learn/graph_"):
+        from . import learning_graph_rpc  # noqa: PLC0415
+        return await learning_graph_rpc.handle(method, params, home, llm_kw)
     if method.startswith("learn/review_"):
         from . import learning_cards  # noqa: PLC0415
         return learning_cards.review(method, params, home)
@@ -640,6 +468,8 @@ async def handle(method: str, params: dict) -> dict:
         if sid in _RUNNING:
             raise ValueError("小鲶还在想, 等这一步出来再删")
         store.delete(home, sid)
+        from . import learning_graph  # noqa: PLC0415
+        learning_graph.delete_source(home, f"learn:{sid}")   # 别的材料也提到的要点留着
         return {"ok": True}
     d = store.session_dir(home, sid)
     if sid in _RUNNING:
@@ -756,6 +586,11 @@ async def handle(method: str, params: dict) -> dict:
         if meta["phase"] == "done":
             return _view(home, sid)
         _kick(home, sid, llm_kw)
+        return _view(home, sid)
+    if method == "learn/ingest":
+        async def ing(h: str, s_: str, kw: dict) -> None:
+            await ingest_session(h, s_, kw)
+        _kick(home, sid, llm_kw, runner=ing)
         return _view(home, sid)
     if method == "learn/cards":
         from . import learning_cards  # noqa: PLC0415

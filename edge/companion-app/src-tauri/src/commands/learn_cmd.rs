@@ -87,7 +87,7 @@ pub async fn learn_attempt(id: String, text: String, thinking: Option<String>) -
     call("learn/attempt", json!({ "id": id, "text": text, "thinking": thinking.unwrap_or_default() }), true).await
 }
 
-/// action: hint (要提示) / give_up (不做了) / teach (回去接着学) / cards (做成复习卡)
+/// action: hint (要提示) / give_up (不做了) / teach (回去接着学) / cards (做成复习卡) / ingest (沉淀要点)
 #[tauri::command]
 pub async fn learn_action(id: String, action: String) -> Result<Value, String> {
     let method = match action.as_str() {
@@ -95,6 +95,7 @@ pub async fn learn_action(id: String, action: String) -> Result<Value, String> {
         "give_up" => "learn/give_up",
         "teach" => "learn/teach",
         "cards" => "learn/cards",
+        "ingest" => "learn/ingest",
         _ => return Err(format!("不认识的操作: {action}")),
     };
     call(method, json!({ "id": id }), action != "give_up").await
@@ -135,3 +136,17 @@ pub async fn meeting_minutes_cards(id: String) -> Result<Value, String> {
 
 /// 做卡最多重交 3 次, 每次几十秒
 const CARDS_TIMEOUT: Duration = Duration::from_secs(600);
+
+// ── 第 3 步 (11/18): 我学过的要点 (要点 + 推理链) ──────────────────────
+
+/// action: view / import ({stage_id, name}: 导入一份资料, 后台提炼) / delete ({source})
+#[tauri::command]
+pub async fn learn_graph(action: String, params: Option<Value>) -> Result<Value, String> {
+    let method = match action.as_str() {
+        "view" => "learn/graph_view",
+        "import" => "learn/graph_import",
+        "delete" => "learn/graph_delete",
+        _ => return Err(format!("不认识的操作: {action}")),
+    };
+    call(method, params.unwrap_or_else(|| json!({})), action == "import").await
+}

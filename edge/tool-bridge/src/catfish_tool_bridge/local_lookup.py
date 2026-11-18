@@ -1,4 +1,4 @@
-"""问小鲶之前先查本机资料 (11/15)。
+"""问小鲶之前先查本机资料 (11/15; 11/18 加学过的要点 + 推理链)。
 
 鸿波 11/15 在群里「@小鲶 ITSS 一级现状」, 小鲶答「不知道, 群聊记录里没提」—— 它只看了群聊记录, 没去本机找;
 而知识库里有「ITSS 运维服务能力成熟度一级」条目, 文件索引里有一级提交清单 / 答辩安排, 邮箱里有现场评审通知。
@@ -276,6 +276,21 @@ def _mails(queries: list[str]) -> list[dict[str, str]]:
     return list(out.values())
 
 
+LEARNED_KEEP = 4
+
+
+def _learned(query: str) -> list[dict[str, str]]:
+    """11/18 学习第 3 步: 员工学过、沉淀下来的要点 + 推出它的推理链 (learning_graph) —— 问「为什么二级要三个项目」时能讲出依据。"""
+    try:
+        from . import learning_graph  # noqa: PLC0415
+        rows = learning_graph.relevant(str(_catfish_home()), query, LEARNED_KEEP)
+    except Exception as e:  # noqa: BLE001
+        logger.info("local_lookup: 学过的要点查不了: %s", e)
+        return []
+    return [{"kind": "学过的要点", "title": r["name"], "where": r["id"],
+             "text": r["statement"] + ("; 推理: " + " / ".join(r["chains"]) if r["chains"] else "")} for r in rows]
+
+
 def render(found: list[dict[str, str]], limit: int = BLOCK_CHARS) -> str:
     lines, used = [], 0
     for f in found:
@@ -290,10 +305,11 @@ def render(found: list[dict[str, str]], limit: int = BLOCK_CHARS) -> str:
 async def lookup(question: str, context: str, call_llm: LLM, llm_kw: dict[str, Any]) -> dict[str, Any]:
     """→ {"queries": [...], "found": [{kind, title, where, text}], "block": 拼好的一段 (没找到是空串)}"""
     queries = await search_queries(question, context, call_llm, llm_kw)
-    wiki, files, mails = await asyncio.gather(asyncio.to_thread(_wiki, queries, question), asyncio.to_thread(_files, queries),
-                                              asyncio.to_thread(_mails, queries))
-    # 知识库 (员工确认过的) 在前; 文件多, 先放几份再放邮件, 免得邮件被字数上限挤掉
-    found = [*wiki, *files[:4], *mails, *files[4:10]]
+    wiki, files, mails, learned = await asyncio.gather(
+        asyncio.to_thread(_wiki, queries, question), asyncio.to_thread(_files, queries), asyncio.to_thread(_mails, queries),
+        asyncio.to_thread(_learned, " ".join([question, *queries])))
+    # 知识库 (员工确认过的) 在前; 学过的要点 (带推理) 其次; 文件多, 先放几份再放邮件, 免得邮件被字数上限挤掉
+    found = [*wiki, *learned, *files[:4], *mails, *files[4:10]]
     return {"queries": queries, "found": found, "block": render(found)}
 
 

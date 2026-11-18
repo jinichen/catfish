@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "catfish-companion-app"
-version = "1.2.216"
+version = "1.2.217"
 dependencies = [
  "age",
  "anyhow",

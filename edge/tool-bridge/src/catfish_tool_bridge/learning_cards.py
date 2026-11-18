@@ -109,10 +109,19 @@ async def meeting_cards(params: dict) -> dict[str, Any]:
     try:
         cards = await make_cards(material[:20000], f"会议「{meta.get('title', '')}」的纪要, 员工想记住会上定下来的事 (决议、规定、谁负责什么、截止时间)。",
                                  llm_kw, existing(con, origin))
-        return practice.add_cards(con, [{**c, "source": f"会议: {meta.get('title', '')[:60]}"} for c in cards],
-                                  origin, [str(meta.get("title") or "会议")[:20]])
+        res = practice.add_cards(con, [{**c, "source": f"会议: {meta.get('title', '')[:60]}"} for c in cards],
+                                 origin, [str(meta.get("title") or "会议")[:20]])
     finally:
         con.close()
+    # 第 3 步: 纪要里定下来的事也沉淀成要点 (跟学过的、导入的资料对上同一条就合并); 做不成不影响做卡
+    try:
+        from . import learning_graph  # noqa: PLC0415
+        g = await learning_graph.ingest(str(home), origin, f"会议: {meta.get('title', '')}", "meeting", material[:20000], llm_kw)
+        res["points"] = g["added"] + g["linked"]
+    except Exception as e:  # noqa: BLE001
+        import logging  # noqa: PLC0415
+        logging.getLogger("catfish.tool_bridge.learning").info("纪要沉淀要点失败: %s", e)
+    return res
 
 
 def review(method: str, params: dict, home: str) -> dict[str, Any]:

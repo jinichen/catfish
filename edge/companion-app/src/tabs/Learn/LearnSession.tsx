@@ -118,6 +118,10 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
             <button type="button" style={ghostBtn} disabled={busy} title="把讲过的要点做成复习卡, 明天开始按遗忘规律复习"
               onClick={() => void act(() => learnAction(id, "cards"))}>🔁 做成复习卡{s.cards ? ` (已有 ${s.cards})` : ""}</button>
           )}
+          {taught && (
+            <button type="button" style={ghostBtn} disabled={busy} title="把讲过的提炼成要点和推理, 存进「我学过的要点」"
+              onClick={() => void act(() => learnAction(id, "ingest"))}>📚 沉淀要点</button>
+          )}
           <button type="button" style={{ ...ghostBtn, ...(confirmDel ? { color: "var(--status-err)", borderColor: "var(--status-err)" } : null) }}
             title="讲解、做过的题都会删掉 (已经做成的复习卡留着)" onClick={() => void remove()} disabled={running}>
             {confirmDel ? "再点一次确认删除" : "删除"}
@@ -184,7 +188,7 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
               );
             case "problem":
               return <ProblemView key={ev.id} ev={ev} conclude={concludes.get(ev.pid)} titles={titles} />;
-            case "attempt": case "hint_request": case "hint": case "give_up": case "cards":
+            case "attempt": case "hint_request": case "hint": case "give_up": case "cards": case "graph":
               return <PracticeEvent key={ev.id} ev={ev} />;
             default:
               return null;
