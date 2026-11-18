@@ -78,3 +78,48 @@ def test_wiki_excerpt_puts_semantic_chunk_first():
     out = ll.wiki_excerpt(body, [], focus="## 集训\n住世宁大厦 12 层, 11/14 开始。")
     assert "世宁大厦" in out and len(out) <= ll.ENTRY_BUDGET + 40
     assert ll.wiki_excerpt(body, [], focus="# 资质\n开头").count("开头") == 1     # 命中的就是开头: 不重复
+
+
+def _graph(tmp_path, nodes, edges):
+    import sqlite3
+    con = sqlite3.connect(tmp_path / "wiki_graph.db")
+    con.execute("CREATE TABLE wiki_graph_node (rel_path TEXT PRIMARY KEY, title TEXT, slug TEXT, kind TEXT, aliases TEXT, mtime REAL)")
+    con.execute("CREATE TABLE wiki_graph_edge (source_path TEXT, target_path TEXT, relation_type TEXT, source_name TEXT)")
+    con.executemany("INSERT INTO wiki_graph_node VALUES (?,?,?,?,'[]',0)", [(p, t, p, "entity") for p, t in nodes])
+    con.executemany("INSERT INTO wiki_graph_edge VALUES (?,?,?,'')", edges)
+    con.commit()
+    con.close()
+
+
+def test_relation_line_from_ontology(tmp_path):
+    """11/18「那现在的本体都没起作用吗?」: 给模型的知识库资料带上本体里的关系 (出边 + 入边),
+    同一对正反关系只列一次, 「提及」不算关系; 没有图库返回空串。"""
+    assert ll.relation_line(tmp_path, "wiki/entities/jzd.md") == ""
+    _graph(tmp_path, [("wiki/entities/jzd.md", "金智达"), ("wiki/entities/ff.md", "中电福富"), ("wiki/entities/yxy.md", "杨新宇"),
+                      ("wiki/entities/x.md", "某周报")],
+           [("wiki/entities/ff.md", "wiki/entities/jzd.md", "协作"), ("wiki/entities/jzd.md", "wiki/entities/yxy.md", "包含"),
+            ("wiki/entities/yxy.md", "wiki/entities/jzd.md", "隶属"), ("wiki/entities/x.md", "wiki/entities/jzd.md", "提及")])
+    assert ll.relation_line(tmp_path, "wiki/entities/jzd.md") == "关系: 本条 包含「杨新宇」; 「中电福富」协作 本条"
+
+
+def test_relation_line_caps_hub_entries(tmp_path):
+    nodes = [("wiki/entities/co.md", "公司")] + [(f"wiki/entities/d{i}.md", f"部门{i}") for i in range(20)]
+    _graph(tmp_path, nodes, [(f"wiki/entities/d{i}.md", "wiki/entities/co.md", "隶属") for i in range(20)])
+    line = ll.relation_line(tmp_path, "wiki/entities/co.md", limit=5)
+    assert line.startswith("关系: 「部门0」") and "等 20 条隶属 本条" in line and "部门5" not in line
+
+
+def test_wiki_hit_text_carries_type_status_props_relations(tmp_path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
+    (tmp_path / "wiki" / "entities").mkdir(parents=True)
+    (tmp_path / "wiki" / "entities" / "c.md").write_text("---\ntitle: 应急二级\n---\n# 应急二级\n正文", encoding="utf-8")
+    _graph(tmp_path, [("wiki/entities/c.md", "应急二级"), ("wiki/entities/ff.md", "中电福富")],
+           [("wiki/entities/ff.md", "wiki/entities/c.md", "持有")])
+    from catfish_tool_bridge import wiki_search
+    monkeypatch.setattr(ll, "_catfish_home", lambda: tmp_path)
+    monkeypatch.setattr(wiki_search, "search_wiki", lambda q, top_k: {"matches": [
+        {"rel_path": "wiki/entities/c.md", "title": "应急二级", "type": "cert", "status": "即将到期",
+         "props": {"valid_until": "2027-04-25"}, "via": "中电福富", "matched_in": ["graph-1hop"]}]})
+    text = ll._wiki(["应急"], "应急证书")[0]["text"]
+    assert text.startswith("(顺着「中电福富」的关系找到的) [cert · 即将到期] [valid_until=2027-04-25] 关系: 「中电福富」持有 本条\n")
+    assert "正文" in text
