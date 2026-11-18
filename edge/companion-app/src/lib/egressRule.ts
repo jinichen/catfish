@@ -77,7 +77,7 @@ export function egressPurpose(url: string): string {
   try {
     const u = new URL(url);
     const src = u.searchParams.get("catfish_source");
-    if (src) return SOURCE_PURPOSE[src] ?? src;
+    if (src) return sourceLabel(src);
     for (const [prefix, label] of PATH_PURPOSE) if (u.pathname.includes(prefix)) return label;
     return u.pathname || u.hostname;
   } catch {
@@ -86,7 +86,7 @@ export function egressPurpose(url: string): string {
 }
 
 /** 前端几处单发模型调用打的 catfish_source → 用途 */
-const SOURCE_PURPOSE: Record<string, string> = {
+export const SOURCE_PURPOSE: Record<string, string> = {
   "companion-chat": "对话",
   "companion-profile": "员工画像",
   "companion-advisor": "早安建议",
@@ -124,11 +124,55 @@ const SOURCE_PURPOSE: Record<string, string> = {
   // 11/17: 小鲶出图 / 出视频 (hermes 插件 media_gen.py, 跟 egress_log.py 同一套叫法)
   "plugin:media-image": "出图 / 改图",
   "plugin:media-video": "出视频",
+  // 11/19 跟 egress_log.py 的 _SOURCE_PURPOSE 补齐 (测试钉住两边同一套): 外发记录里存的是原始标签时页面照样翻成中文
+  "plugin:memory-wiki-ground": "知识卡核对",
+  "plugin:memory-wiki-analysis": "资料蒸馏",
+  "plugin:memory-wiki-generation": "资料蒸馏",
+  "plugin:memory-wiki-merge": "资料蒸馏",
+  "plugin:memory-wiki": "知识卡整理",
+  "plugin:memory-distill": "长期记忆整理",
+  "plugin:memory-summarize": "长期记忆整理",
+  "plugin:memory-reconcile": "长期记忆整理",
+  "plugin:memory-classify": "记忆归类",
+  "plugin:memory-recall-embed": "记忆检索",
+  "plugin:memory": "长期记忆",
+  "companion-email-scheduler": "邮件整理",
+  "companion-phishing-scan": "钓鱼邮件检查",
+  "hermes:aux:compression": "对话 · 上下文压缩",
+  "hermes:aux:vision": "对话 · 看图",
+  "hermes:aux:title_generation": "对话 · 起标题",
+  "hermes:aux:approval": "对话 · 审批判断",
+  "hermes:aux:background_review": "后台 · 技能 / 记忆复盘",
+  "hermes:aux:mcp": "MCP 工具",
+  "hermes:aux": "hermes 辅助",
+  "hermes:api_server": "对话",
+  "hermes:webui": "对话",
+  "hermes:weixin": "微信对话",
+  "hermes:cron": "定时任务",
+  "hermes:curator": "后台 · 技能整理",
+  "hermes:subagent": "子任务",
+  "companion": "Companion",
 };
 
 /** 10/28: 老记录里存的用途名换成现在的叫法再显示。
  *  「做什么」是指纹链的一部分 (_CHAIN_FIELDS 里有 purpose), 老记录不能改库, 只能显示时换。 */
+/** catfish_source 标签 → 用途。跟 egress_log.py purpose() 一样按前缀、长的优先;
+ *  一个都对不上时跟中央配额日志 (auditSource.ts) 同样的兜底叫法, 不把 plugin:toolbridge-xxx 原样露出来。 */
+export function sourceLabel(src: string): string {
+  const s = src.trim();
+  const hit = Object.keys(SOURCE_PURPOSE).filter((k) => s.startsWith(k)).sort((a, b) => b.length - a.length)[0];
+  if (hit) return SOURCE_PURPOSE[hit];
+  if (s.startsWith("plugin:toolbridge-")) return `小鲶后台 · ${s.slice("plugin:toolbridge-".length)}`;
+  if (s.startsWith("plugin:memory-")) return `后台 · 记忆 (${s.slice("plugin:memory-".length)})`;
+  if (s.startsWith("companion-")) return `Companion · ${s.slice("companion-".length)}`;
+  return s;
+}
+
+const RAW_SOURCE = /^(plugin:|hermes:|companion(-|$)|room-)/;
+
 export function displayPurpose(purpose: string, destHost: string, url = ""): string {
+  // 11/19 鸿波「companion 也应该和中央端一样的表述」: 早先 (标签还没登记 / 后台没重启) 记下的是原始标签, 显示时再翻一次
+  if (RAW_SOURCE.test(purpose)) return sourceLabel(purpose);
   if (purpose === "/api/egress/anchor") return "报指纹 (防篡改)";
   if (purpose === "/api/show") return "查询模型信息";
   if (purpose === "/api/room-link/mailbox") return "同事协作 · 邮筒";

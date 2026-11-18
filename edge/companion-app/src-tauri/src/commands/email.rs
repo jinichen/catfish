@@ -236,7 +236,7 @@ pub fn email_source_select(client: String, root: Option<String>) -> Result<(), S
     email_config::save_selected_email_source(&client, root.as_deref())
 }
 
-fn email_component_missing_error() -> String {
+pub(crate) fn email_component_missing_error() -> String {
     let log_dir = if cfg!(target_os = "windows") {
         r"%LOCALAPPDATA%\hermes\logs\"
     } else if cfg!(target_os = "macos") {

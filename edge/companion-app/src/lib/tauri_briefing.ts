@@ -252,6 +252,10 @@ export const emailListFetch = (unreadOnly: boolean, limit?: number, folder?: str
     limit: limit ?? null,
     folder: folder ?? null,
   });
+/** 11/19: 搜索框搜列表 (最多 500 封) 以外更早的信 —— 去「邮件」App / 邮箱服务器里按主题 / 发件人搜。
+ *  返回 list 同格式的 JSON 数组; 少于 2 个字直接空。见 src-tauri/src/commands/email_search.rs。 */
+export const emailSearch = (query: string, folder?: string) =>
+  rawInvoke<string>("email_search", { query, folder: folder ?? null, limit: null });
 /** 10/31: 邮件列表落盘缓存 (~/.catfish/email_list_cache.json) —— 重启后先显示上次的列表。
  *  见 src-tauri/src/commands/email_list_cache.rs。 */
 export const emailListCacheLoad = () => rawInvoke<string | null>("email_list_cache_load");

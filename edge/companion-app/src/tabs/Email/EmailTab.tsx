@@ -59,6 +59,9 @@ import FullDiskAccessHint from "./components/FullDiskAccessHint";
 // 5/20: ListItem / DetailPane / helpers 抽到 components/ (拆 1204 → <500)
 import DetailPane, { type FullMessage } from "./components/DetailPane";
 import ListItem from "./components/ListItem";
+import MailSearchBox from "./components/MailSearchBox";
+import OlderMailResults from "./components/OlderMailResults";
+import { useOlderMailSearch } from "./useOlderMailSearch";
 // P3.5.204 (7/9): 复用 P3.5.58 isReplied 算法给 ListItem 显 "↩ 已回复" badge.
 import { isReplied } from "../../lib/emailThread";
 
@@ -322,6 +325,7 @@ export default function EmailTab() {
     () => filterAndRankEmails(items, { search, actionFilter, actionMap }),
     [items, search, actionFilter, actionMap],
   );
+  const olderSearch = useOlderMailSearch(search, folder, items); // 11/19 搜列表以外更早的信
   const actionCounts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const m of items) {
@@ -582,29 +586,8 @@ export default function EmailTab() {
                 onPickMailDirectory={() => void handlePickMailDirectory()}
               />
             )}
-          {/* 搜索框 — 前端 filter 主题/发件人/账号 */}
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="🔍 搜主题 / 发件人 / 账号"
-            style={{
-              width: "100%",
-              padding: "4px 8px",
-              fontSize: 12,
-              border: "1px solid var(--catfish-border)",
-              borderRadius: 4,
-              background: "var(--catfish-bg)",
-              color: "var(--catfish-text)",
-              fontFamily: "inherit",
-              boxSizing: "border-box",
-            }}
-          />
-          {search && (
-            <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginTop: 4 }}>
-              🔍 已筛选 {filteredItems.length} / {items.length}
-            </div>
-          )}
+          {/* 搜索框: 列表里先筛; 列表以外更早的信在下面 OlderMailResults (11/19) */}
+          <MailSearchBox value={search} onChange={setSearch} shown={filteredItems.length} total={items.length} />
         </div>
 
         {/* 错误态 */}
@@ -654,7 +637,7 @@ export default function EmailTab() {
               }}
             >
               {search
-                ? `🔍 没匹配 "${search}"`
+                ? `🔍 列表里没匹配 "${search}"`
                 : actionFilter !== "全部" ? `✅ 没有「要${actionFilter === "办" ? "办事" : "回信"}」的邮件`
                 : unreadOnly ? "🌊 没有未读邮件, 都处理完了" : EMPTY_FOLDER_TEXT[folder]}
             </li>
@@ -672,6 +655,7 @@ export default function EmailTab() {
               onClick={() => setSelectedId(m.id)}
             />
           ))}
+          <OlderMailResults result={olderSearch} search={search} selectedId={selectedId} showRecipients={folder !== "Inbox"} onSelect={(m) => setSelectedId(m.id)} />
         </ul>
       </aside>
 
