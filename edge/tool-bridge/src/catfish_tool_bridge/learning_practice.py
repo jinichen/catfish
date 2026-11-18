@@ -149,8 +149,12 @@ def summary(evs: list[dict]) -> dict[str, Any]:
     return out
 
 
+SOURCE = "plugin:toolbridge-learning-practice"
+
+
 async def step(d: Path, meta: dict, evs: list[dict], llm_kw: dict) -> None:
     """练习的一步: 没有进行中的题 → 出题; 有 → 按员工最后做的 (交答案 / 要提示 / 插话) 回应。"""
+    llm_kw = {**llm_kw, "source": SOURCE}
     from .learning import _call, _heal, _materials, _say, build_messages  # noqa: PLC0415
     pid = active(meta)
     kind = _last_input(evs, pid) if pid else ""

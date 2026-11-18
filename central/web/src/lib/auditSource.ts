@@ -24,7 +24,25 @@ const LABELS: Record<string, string> = {
   "plugin:memory-wiki-analysis": "后台 · 知识库整理",
   "plugin:memory-wiki-generation": "后台 · 知识库整理",
   "plugin:memory-wiki-merge": "后台 · 知识库整理",
-  "plugin:toolbridge-meeting": "会议纪要",
+  "plugin:toolbridge-meeting": "会议 · 纪要 / 让小鲶改",
+  // 11/18: 跟 Companion 本机数据外发记录 (egress_log.py / egressRule.ts) 同一套叫法; 原来这些没登记, 显示一串 plugin:toolbridge-…
+  "plugin:toolbridge-meeting-live": "会议 · 会中问小鲶 / 提示",
+  "plugin:toolbridge-learning": "学习 · 摸底 / 讲解",
+  "plugin:toolbridge-learning-practice": "学习 · 练习",
+  "plugin:toolbridge-learning-cards": "学习 · 做复习卡",
+  "plugin:toolbridge-learning-graph": "学习 · 沉淀要点",
+  "plugin:toolbridge-learning-drill": "学习 · 答辩陪练",
+  "plugin:toolbridge-learning-lang": "学习 · 外语",
+  "plugin:toolbridge-card": "对话 · 卡片",
+  "plugin:toolbridge-room-revise": "一起改文档 · 合并建议",
+  "plugin:toolbridge-style-samples": "文书风格 · 总结范文",
+  "plugin:toolbridge-task-check": "派任务 · 核对结果",
+  "plugin:toolbridge-expert-builder": "专家 · 一句话搭专家",
+  "plugin:memory-wiki-ground": "后台 · 知识卡核对",
+  "plugin:memory-wiki": "后台 · 知识卡整理",
+  "plugin:memory-reconcile": "后台 · 记忆整理",
+  "plugin:memory-recall-embed": "后台 · 记忆检索",
+  "companion-wiki-relation-suggest": "知识库 · 关系类型建议",
   // 11/06: tool-bridge 直接调网关的这几处原来不带来源, 配额日志一串「未标来源」(当天那几条是整理记忆)
   "plugin:toolbridge-room-assist": "群聊 · 小鲶总结 / 起草",
   "plugin:toolbridge-memory-compact": "记忆 · 整理记忆",
@@ -80,6 +98,10 @@ export function auditSourceLabel(source: string | undefined, user: string): stri
       }
       return HERMES_PLATFORMS[p] ?? `hermes · ${p}`;
     }
+    // 11/18: 还没登记的新来源别原样甩一串英文 —— 按前缀给个大类, 原文在鼠标悬停里
+    if (s.startsWith("plugin:toolbridge-")) return `小鲶后台 · ${s.slice("plugin:toolbridge-".length)}`;
+    if (s.startsWith("plugin:memory-")) return `后台 · 记忆 (${s.slice("plugin:memory-".length)})`;
+    if (s.startsWith("companion-")) return `Companion · ${s.slice("companion-".length)}`;
     return s;
   }
   // 10/30 之前网关自己调自己 (身份 internal:gateway-loopback) 不带来源。查过只有主动搭话一处这么调

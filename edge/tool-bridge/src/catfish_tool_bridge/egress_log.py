@@ -111,6 +111,16 @@ _SOURCE_PURPOSE = {
     "plugin:toolbridge-workflow": "工作流 · 小鲶判断",
     "plugin:toolbridge-expert-builder": "专家 · 一句话搭专家",
     "plugin:toolbridge-wiki-props": "知识库 · 整理属性",
+    # 11/18 学习 (learning*.py, 按功能分开标) / 会中问小鲶 / 对话卡片 —— 原来没登记, 中央配额日志显示一串 plugin:toolbridge-…
+    "plugin:toolbridge-learning": "学习 · 摸底 / 讲解",
+    "plugin:toolbridge-learning-practice": "学习 · 练习",
+    "plugin:toolbridge-learning-cards": "学习 · 做复习卡",
+    "plugin:toolbridge-learning-graph": "学习 · 沉淀要点",
+    "plugin:toolbridge-learning-drill": "学习 · 答辩陪练",
+    "plugin:toolbridge-learning-lang": "学习 · 外语",
+    "plugin:toolbridge-meeting": "会议 · 纪要 / 让小鲶改",
+    "plugin:toolbridge-meeting-live": "会议 · 会中问小鲶 / 提示",
+    "plugin:toolbridge-card": "对话 · 卡片",
 }
 _PATH_PURPOSE = (
     ("/v1/chat/completions", "模型调用"),

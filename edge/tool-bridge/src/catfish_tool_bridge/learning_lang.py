@@ -115,7 +115,11 @@ def _session_text(evs: list[dict]) -> str:
     return "\n".join(out[-120:])
 
 
+SOURCE = "plugin:toolbridge-learning-lang"
+
+
 async def step(d: Path, meta: dict, evs: list[dict], llm_kw: dict) -> None:
+    llm_kw = {**llm_kw, "source": SOURCE}
     from .learning import _call, _heal  # noqa: PLC0415
     lg = meta.setdefault("lang", {"code": "en"})
     if lg.get("ending"):

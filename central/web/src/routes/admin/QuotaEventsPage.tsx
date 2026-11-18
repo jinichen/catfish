@@ -184,7 +184,7 @@ export function AdminQuotaEvents() {
         );
       },
       truncate: true,
-      width: 128,
+      width: 176,
     },
     {
       header: "部门",

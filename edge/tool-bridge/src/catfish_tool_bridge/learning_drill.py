@@ -75,8 +75,12 @@ def _last_kind(evs: list[dict]) -> str:
     return ""
 
 
+SOURCE = "plugin:toolbridge-learning-drill"
+
+
 async def step(d: Path, meta: dict, evs: list[dict], llm_kw: dict) -> None:
     """没题库 → 出题库 + 问第一题; 最后一条是员工的回答 → 对照评分点 (要追问就追问)。"""
+    llm_kw = {**llm_kw, "source": SOURCE}
     from .learning import _call, _heal, _materials  # noqa: PLC0415
     if not (meta.get("drill") or {}).get("questions"):
         mats = await _materials(d, meta, None, llm_kw)

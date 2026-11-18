@@ -305,8 +305,12 @@ def chunks(text: str, size: int = CHUNK_CHARS) -> list[str]:
     return out
 
 
+LLM_SOURCE = "plugin:toolbridge-learning-graph"
+
+
 async def ingest(home: str, source: str, label: str, kind: str, text: str, llm_kw: dict) -> dict[str, int]:
     """一份材料: 按段串行 (后一段看得到前一段并进来的), 每段提炼 → 排队认同 + 合并。"""
+    llm_kw = {**llm_kw, "source": LLM_SOURCE}
     total = {"added": 0, "linked": 0, "chains": 0, "dropped": 0, "parts": 0}
     con = connect(home)
     try:
