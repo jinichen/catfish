@@ -8,6 +8,7 @@ import {
   LANG_NAMES, learnCreate, learnCreateLang, learnGraphView, learnList, learnReviewNext, PHASE_LABEL, type LearnMode, type LearnSummary,
 } from "../../lib/tauri_learn";
 import { useUIStore } from "../../store/ui";
+import { useVoiceSupport, voiceMissing, voiceTag } from "../../lib/voiceSupport";
 import { cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import { COL_CARD } from "../Meeting/meetingHelpers";
 import LearnSession from "./LearnSession";
@@ -24,6 +25,7 @@ function NewLearning({ onCreated }: { onCreated: (id: string) => void }) {
   const [goal, setGoal] = useState("");
   const [mode, setMode] = useState<LearnMode>("quick");
   const [lang, setLang] = useState("en");
+  const voice = useVoiceSupport();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const start = async () => {
@@ -67,9 +69,12 @@ function NewLearning({ onCreated }: { onCreated: (id: string) => void }) {
         <label style={{ ...muted, display: "flex", alignItems: "center", gap: 8 }}>
           练哪种语言
           <select aria-label="语言" value={lang} onChange={(e) => setLang(e.target.value)} style={{ ...inputStyle, width: "auto", padding: "4px 8px" }}>
-            {Object.entries(LANG_NAMES).map(([k, v]) => <option key={k} value={k}>{v}{k === "en" ? "" : " (语音要高精度组件)"}</option>)}
+            {Object.entries(LANG_NAMES).map(([k, v]) => <option key={k} value={k}>{v}{voiceTag(k, voice)}</option>)}
           </select>
         </label>
+      )}
+      {mode === "language" && voiceMissing(lang, voice) && (
+        <span style={{ fontSize: 12, color: "var(--status-warn)" }}>{voiceMissing(lang, voice)}</span>
       )}
       <button type="button" style={primaryBtn(busy || !goal.trim())} disabled={busy || !goal.trim()} onClick={() => void start()}>
         {mode === "defense" ? "开始 (小鲶先出一套评审会问的题)" : mode === "language" ? "开始" : "开始 (小鲶先问几道题摸摸底)"}

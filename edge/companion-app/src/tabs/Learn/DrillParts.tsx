@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { speak, speechAvailable, stopSpeaking } from "../../lib/speak";
 import { speechCancel, speechStart, speechStopAndTranscribe, type LearnEvent } from "../../lib/tauri_learn";
+import { useVoiceSupport, voiceMissing } from "../../lib/voiceSupport";
 import { inputStyle } from "../Collab/roomLinkUi";
 import { ghostBtn, primaryBtn } from "./QuestionCard";
 
@@ -98,6 +99,7 @@ export function DrillAnswerBox({ disabled, onAnswer, onSkip }: {
   const [rec, setRec] = useState<"idle" | "recording" | "transcribing">("idle");
   const [secs, setSecs] = useState<number | undefined>(undefined);
   const [err, setErr] = useState<string | null>(null);
+  const noVoiceMsg = voiceMissing("zh", useVoiceSupport());
   const started = useRef(0);
   // 离开页面时还在录 → 停掉 (不然录音器一直占着, 会议录不了); 只在卸载时看, 别在「说完了」切状态时误停
   const recRef = useRef(rec);
@@ -130,12 +132,15 @@ export function DrillAnswerBox({ disabled, onAnswer, onSkip }: {
       {rec === "recording" && <span style={{ fontSize: 12, color: "var(--status-err)" }}>● 录音中… 说完再点一下「说完了」</span>}
       {rec === "transcribing" && <span style={muted}>转文字中 (第一次要十几秒加载)…</span>}
       {err && <span style={{ fontSize: 12, color: "var(--status-err)" }}>{err}</span>}
+      {noVoiceMsg && <span style={{ fontSize: 12, color: "var(--status-warn)" }}>{noVoiceMsg}</span>}
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
         <button type="button" style={ghostBtn} disabled={disabled || rec !== "idle"} onClick={onSkip}>这题跳过</button>
-        <button type="button" style={rec === "recording" ? { ...ghostBtn, color: "var(--status-err)", borderColor: "var(--status-err)" } : ghostBtn}
-          disabled={disabled || rec === "transcribing"} onClick={() => void toggle()}>
-          {rec === "recording" ? "⏹ 说完了" : "🎤 口头回答"}
-        </button>
+        {!noVoiceMsg && (
+          <button type="button" style={rec === "recording" ? { ...ghostBtn, color: "var(--status-err)", borderColor: "var(--status-err)" } : ghostBtn}
+            disabled={disabled || rec === "transcribing"} onClick={() => void toggle()}>
+            {rec === "recording" ? "⏹ 说完了" : "🎤 口头回答"}
+          </button>
+        )}
         <button type="button" style={primaryBtn(disabled || !text.trim() || rec !== "idle")} disabled={disabled || !text.trim() || rec !== "idle"}
           onClick={send}>交给评审</button>
       </div>

@@ -9,6 +9,7 @@ import { speak, speechAvailable, stopSpeaking } from "../../lib/speak";
 import {
   LANG_BCP47, LANG_NAMES, speechCancel, speechStart, speechStopAndTranscribeLang, type LearnEvent,
 } from "../../lib/tauri_learn";
+import { useVoiceSupport, voiceMissing } from "../../lib/voiceSupport";
 import { inputStyle } from "../Collab/roomLinkUi";
 import { ghostBtn, primaryBtn } from "./QuestionCard";
 
@@ -62,8 +63,15 @@ export function LangStart({ code, disabled, onStart }: { code: string; disabled:
         <button type="button" style={ghostBtn} disabled={disabled} onClick={() => onStart("shadow", scene)}>🔁 跟读</button>
       </div>
       <span style={muted}>对话: 小鲶扮角色跟你聊, 每句帮你改; 跟读: 小鲶读一句你读一句, 对照哪些词没读出来。都用🎤说, 也可以打字。</span>
+      <VoiceMissing code={code} />
     </div>
   );
+}
+
+/** 这台电脑 🎤 转不了这种语言时的一行提示 (按实际装了哪个组件说) */
+export function VoiceMissing({ code }: { code: string }) {
+  const msg = voiceMissing(code, useVoiceSupport());
+  return msg ? <span style={{ fontSize: 12, color: "var(--status-warn)" }}>{msg}</span> : null;
 }
 
 export function LangScene({ ev }: { ev: Ev<"lang_scene"> }) {
@@ -122,6 +130,7 @@ export function LangSay({ code, disabled, onSay, onEnd }: { code: string; disabl
   const [text, setText] = useState("");
   const [secs, setSecs] = useState<number | undefined>();
   const rec = useRecorder(code);
+  const noVoice = !!voiceMissing(code, useVoiceSupport());
   const toggle = async () => {
     if (rec.state === "idle") { await rec.start(); return; }
     const r = await rec.stop();
@@ -131,14 +140,17 @@ export function LangSay({ code, disabled, onSay, onEnd }: { code: string; disabl
   return (
     <div style={{ ...box, borderColor: "var(--catfish-cyan)" }} aria-label="外语回答">
       <textarea aria-label="用外语说" rows={3} value={text} disabled={disabled || rec.state !== "idle"} onChange={(e) => setText(e.target.value)}
-        placeholder={`用${LANG_NAMES[code] ?? "外语"}回答 (点🎤说; 不会说就写中文, 小鲶教你怎么说)`} style={{ ...inputStyle, resize: "vertical" }} />
+        placeholder={`用${LANG_NAMES[code] ?? "外语"}回答 (${noVoice ? "打字" : "点🎤说"}; 不会说就写中文, 小鲶教你怎么说)`} style={{ ...inputStyle, resize: "vertical" }} />
       {rec.state === "recording" && <span style={{ fontSize: 12, color: "var(--status-err)" }}>● 录音中… 说完再点「说完了」</span>}
       {rec.state === "transcribing" && <span style={muted}>转文字中…</span>}
       {rec.err && <span style={{ fontSize: 12, color: "var(--status-err)" }}>{rec.err}</span>}
+      <VoiceMissing code={code} />
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
         <button type="button" style={ghostBtn} disabled={disabled || rec.state !== "idle"} onClick={onEnd}>结束这段, 复盘</button>
-        <button type="button" style={rec.state === "recording" ? { ...ghostBtn, color: "var(--status-err)", borderColor: "var(--status-err)" } : ghostBtn}
-          disabled={disabled || rec.state === "transcribing"} onClick={() => void toggle()}>{rec.state === "recording" ? "⏹ 说完了" : "🎤 说"}</button>
+        {!noVoice && (
+          <button type="button" style={rec.state === "recording" ? { ...ghostBtn, color: "var(--status-err)", borderColor: "var(--status-err)" } : ghostBtn}
+            disabled={disabled || rec.state === "transcribing"} onClick={() => void toggle()}>{rec.state === "recording" ? "⏹ 说完了" : "🎤 说"}</button>
+        )}
         <button type="button" style={primaryBtn(disabled || !text.trim() || rec.state !== "idle")} disabled={disabled || !text.trim() || rec.state !== "idle"}
           onClick={send}>发送</button>
       </div>
@@ -153,6 +165,7 @@ export function ShadowSet({ ev, code, results, disabled, onRead, onEnd }: {
 }) {
   const bcp = LANG_BCP47[code] ?? "en-US";
   const rec = useRecorder(code);
+  const noVoice = !!voiceMissing(code, useVoiceSupport());
   const [active, setActive] = useState<number | null>(null);
   const toggle = async (i: number) => {
     if (rec.state === "idle") { setActive(i); await rec.start(); return; }
@@ -180,9 +193,9 @@ export function ShadowSet({ ev, code, results, disabled, onRead, onEnd }: {
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
               {speechAvailable() && <button type="button" style={small} onClick={() => speak(s.text, 0.9, bcp)}>🔊 听</button>}
               {speechAvailable() && <button type="button" style={small} onClick={() => speak(s.text, 0.65, bcp)}>🐢 慢点</button>}
-              <button type="button" disabled={disabled || rec.state === "transcribing" || (rec.state === "recording" && active !== i)}
+              {!noVoice && <button type="button" disabled={disabled || rec.state === "transcribing" || (rec.state === "recording" && active !== i)}
                 style={rec.state === "recording" && active === i ? { ...small, color: "var(--status-err)", borderColor: "var(--status-err)" } : small}
-                onClick={() => void toggle(i)}>{rec.state === "recording" && active === i ? "⏹ 读完了" : rec.state === "transcribing" && active === i ? "对照中…" : "🎤 跟读"}</button>
+                onClick={() => void toggle(i)}>{rec.state === "recording" && active === i ? "⏹ 读完了" : rec.state === "transcribing" && active === i ? "对照中…" : "🎤 跟读"}</button>}
               {r && (
                 <span style={{ fontSize: 12, color: r.score >= 0.9 ? "var(--status-ok)" : r.score >= 0.6 ? "var(--status-warn)" : "var(--status-err)" }}>
                   对上 {Math.round(r.score * 100)}%{r.missed.length ? ` · 没听出来: ${r.missed.join(" ")}` : ""}
@@ -194,6 +207,7 @@ export function ShadowSet({ ev, code, results, disabled, onRead, onEnd }: {
         );
       })}
       {rec.err && <span style={{ fontSize: 12, color: "var(--status-err)" }}>{rec.err}</span>}
+      {noVoice && <VoiceMissing code={code} />}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button type="button" style={primaryBtn(disabled || done.length === 0)} disabled={disabled || done.length === 0} onClick={onEnd}>读完了, 复盘</button>
         <span style={muted}>{avg !== null ? `读了 ${done.length} 句, 平均对上 ${avg}%。` : ""}标红的是没识别出来的词 (读错 / 漏读 / 太快); 这是对字, 不是口音打分。</span>

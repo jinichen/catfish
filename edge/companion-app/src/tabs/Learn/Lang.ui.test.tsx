@@ -14,6 +14,10 @@ vi.mock("../../lib/tauri_learn", async (orig) => ({
   learnReviewNext: vi.fn(async () => ({ questions: [], stats: { total: 0, due_today: 0 }, previews: {} })),
   learnGraphView: vi.fn(async () => ({ points: 0, chains: 0, sources: [], running: null, last: null })),
 }));
+vi.mock("../../lib/tauri_meeting", async (orig) => ({
+  ...(await orig<typeof import("../../lib/tauri_meeting")>()),
+  meetingHqStatus: vi.fn(async () => ({ installed: { version: "1.0.0" }, pack_ready: null, installing: false, base_installed: true })),
+}));
 vi.mock("../../lib/speak", () => ({ speak: api.speak, speechAvailable: () => true, stopSpeaking: vi.fn() }));
 
 import LearnTab from "./LearnTab";
