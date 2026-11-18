@@ -179,22 +179,36 @@ def sources(res: dict[str, Any]) -> list[dict[str, str]]:
     return [{"kind": f["kind"], "title": f["title"], "where": f["where"]} for f in (res.get("found") or [])]
 
 
+async def _both(question: str, context: str, title: str, call_llm: LLM, llm_kw: dict[str, Any]) -> tuple[dict | None, dict]:
+    """本机资料和网上同时查; 哪边失败都不抛 (本机失败 → None, 网上失败 → 当没要联网)。"""
+    from . import local_lookup  # noqa: PLC0415
+
+    found, web = await asyncio.gather(local_lookup.lookup(question, context, call_llm, llm_kw),
+                                      lookup(question, title, call_llm, llm_kw), return_exceptions=True)
+    if isinstance(found, BaseException):
+        logger.info("查本机资料失败: %s", found)
+        found = None
+    if isinstance(web, BaseException):
+        logger.info("联网查失败: %s", web)
+        web = {"wanted": False, "found": [], "error": ""}
+    return found, web
+
+
 async def with_local(question: str, context: str, title: str, call_llm: LLM, llm_kw: dict[str, Any],
                      for_minutes: bool = False) -> tuple[str, list[dict[str, str]], dict[str, Any] | None]:
     """本机资料 (local_lookup) 和网上 (这里) 同时查 —— 让小鲶改纪要、会中问小鲶、群聊 @小鲶 共用。
     → (拼好给模型的一段, 出处 (网页在前), 联网情况 {query, error} / 没要联网 None)。哪边失败都不挡回答。"""
     from . import local_lookup  # noqa: PLC0415
 
-    found, web = await asyncio.gather(local_lookup.lookup(question, context, call_llm, llm_kw),
-                                      lookup(question, title, call_llm, llm_kw), return_exceptions=True)
-    block, srcs = "", []
-    if isinstance(found, BaseException):
-        logger.info("查本机资料失败: %s", found)
-    else:
-        block, srcs = local_lookup.prompt_block(found), local_lookup.sources(found)
-    if isinstance(web, BaseException):
-        logger.info("联网查失败: %s", web)
-        web = {"wanted": False, "found": [], "error": ""}
+    found, web = await _both(question, context, title, call_llm, llm_kw)
+    block, srcs = (local_lookup.prompt_block(found), local_lookup.sources(found)) if found is not None else ("", [])
     block += prompt_block(web, for_minutes)
     meta = {"query": web.get("query", ""), "error": web.get("error", "")} if web.get("wanted") else None
     return block, sources(web) + srcs, meta
+
+
+async def gather_items(question: str, context: str, title: str, call_llm: LLM,
+                       llm_kw: dict[str, Any]) -> list[dict[str, str]]:
+    """同上, 但给一条条 {kind, title, where, text} (网页在前) —— 学习 (learning.py) 要给资料编号、按编号引出处。"""
+    found, web = await _both(question, context, title, call_llm, llm_kw)
+    return list(web.get("found") or []) + list((found or {}).get("found") or [])

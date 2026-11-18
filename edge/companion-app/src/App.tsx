@@ -38,7 +38,8 @@ const DashboardTab = lazy(() => import("./tabs/Dashboard/DashboardTab"));
 const EmailTab = lazy(() => import("./tabs/Email/EmailTab"));
 const WikiTab = lazy(() => import("./tabs/Wiki/WikiTab"));
 const CollabTab = lazy(() => import("./tabs/Collab/CollabTab"));
-const MeetingTab = lazy(() => import("./tabs/Meeting/MeetingTab"));  // 10/1: 会议纪要  // P50 (9/10): 横向协同
+const MeetingTab = lazy(() => import("./tabs/Meeting/MeetingTab"));
+const LearnTab = lazy(() => import("./tabs/Learn/LearnTab"));  // 11/18: 小鲶学习  // 10/1: 会议纪要  // P50 (9/10): 横向协同
 
 export default function App() {
   const activeTab = useUIStore((s) => s.activeTab);
@@ -195,7 +196,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
   // 11/5: 「协同」整页固定 (协同事项 / 群聊都是), 只有里面的列表 / 消息区滚, 跟对话页一样锁住 main 的滚动
   const collabRooms = activeTab === "collab";
   // 11/12: 会议页左右两栏各自滚 (MeetingTab), 外面这层不再整页滚
-  const meetingCols = activeTab === "meeting";
+  const meetingCols = activeTab === "meeting" || activeTab === "learn";
   return (
     <div className="app-shell" data-rail-collapsed={railCollapsed || undefined}>
       <TabBar />
@@ -223,6 +224,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
             {activeTab === "wiki" && <WikiTab />}
             {activeTab === "collab" && <CollabTab />}
             {activeTab === "meeting" && <MeetingTab />}
+            {activeTab === "learn" && <LearnTab />}
           </Suspense>
         </main>
       </div>

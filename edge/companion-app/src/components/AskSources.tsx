@@ -39,7 +39,7 @@ export function AskSources({ sources, style, localIcon = "" }: { sources?: AskSo
             <span key={s.where}>
               {i > 0 && " · "}
               <a href={s.where} title={s.where} onClick={(e) => { e.preventDefault(); void openLink(s.where); }}
-                style={{ color: "var(--catfish-accent)" }}>《{s.title}》</a>
+                style={{ color: "var(--catfish-cyan-bright)" }}>《{s.title}》</a>
               <span> ({hostOf(s.where)})</span>
             </span>
           ))}

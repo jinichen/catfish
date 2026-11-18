@@ -26,6 +26,7 @@ pub mod auth;
 pub mod briefing_context; // BL-BRIEFING-DECISION (5/21 Phase 5): distilled_facts + recent sessions
 pub mod calendar; // BL-CALENDAR-INTEGRATION (5/20): macOS Calendar.app via osascript JXA
 pub mod chrome;
+pub mod learn_cmd; // 11/18: 小鲶学习 (tool-bridge learn/*)
 pub mod meeting_minutes_cmd; // 10/1: 说话人改名 + 纪要 (tool-bridge meeting/summarize)
 pub mod meeting_edit_cmd; // 11/12: 纪要 / 转写的修正和分享 (存回去、Word、发到群、改错字、常用热词)
 pub mod wiki_people; // 11/12: 知识库里的「人 → 邮箱」(写信面板填收件人 / 给候选)

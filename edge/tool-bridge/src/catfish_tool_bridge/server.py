@@ -97,6 +97,15 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _error(req_id, INVALID_PARAMS, str(e))
         except RuntimeError as e:
             return _error(req_id, INTERNAL_ERROR, str(e))
+    # 11/18 小鲶学习 (learning.py, docs/LEARNING-PLAN.md): 写入后立即返回, 模型在后台跑, 界面轮询 learn/get
+    if method.startswith("learn/"):
+        from . import learning  # noqa: PLC0415
+        try:
+            return _success(req_id, await learning.handle(method, params))
+        except (ValueError, OSError) as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
+        except RuntimeError as e:
+            return _error(req_id, INTERNAL_ERROR, str(e))
     # 11/17 让小鲶改纪要 (meeting_minutes_revise.py): 调大模型出一版提议, 不写文件; 员工点「采用」再走 minutes_save
     if method == "meeting/minutes_revise":
         from . import meeting_minutes_revise as mr  # noqa: PLC0415

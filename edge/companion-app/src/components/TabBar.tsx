@@ -15,6 +15,7 @@ import {
   GearSix,
   Handshake,
   Microphone,
+  GraduationCap,
   SquaresFour,
   SunHorizon,
 } from "@phosphor-icons/react";
@@ -46,6 +47,8 @@ const TABS: { id: TabId; label: string; icon: Icon }[] = [
   { id: "collab", label: "协同", icon: Handshake },
   // 10/1: 会议 —— 录会议 → 本机转写 → 纪要 → 写回 (docs/MEETING-MINUTES-PLAN.md)
   { id: "meeting", label: "会议", icon: Microphone },
+  // 11/18: 学习 —— 小鲶当教练: 摸底 → 路线图 → 一步一步讲 (docs/LEARNING-PLAN.md)
+  { id: "learn", label: "学习", icon: GraduationCap },
   // { id: "console", label: "控制台" },  // 5/16 砍
   // BL-CATFISH-WIKI-MODE P3.3 (6/4): 知识体系 tab — 跟其它 tab 纯文字对齐, 无 emoji
   // 6/9 鸿波: 知识体系 ↔ 仪表盘 互换. 知识体系日常翻看比仪表盘多, 放中段.
