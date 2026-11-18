@@ -16,7 +16,7 @@ import {
 } from "../../lib/tauri_meeting";
 import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import { emptyState, loadRevise, minutesSig, saveRevise, subscribeRevise, type ReviseState } from "./reviseStore";
-import { sourcesLine } from "../Collab/RoomAskXiaonian";
+import { AskSources } from "../../components/AskSources";
 import { diffItems, diffList, itemText, markdownHunks, reviseSuggestions, type DiffRow } from "./reviseDiff";
 
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
@@ -157,47 +157,11 @@ export function ReviseComposer({ api, minutes, names, disabled }: {
         <div style={{ fontSize: 13, lineHeight: 1.6 }}>
           <span style={muted}>你: {last.instruction}</span>
           <div>🐟 {last.reply}</div>
-          <ReviseSources sources={last.sources} />
+          <AskSources sources={last.sources} style={muted} localIcon="🔎 " />
         </div>
       )}
       {api.error && <ErrorLine>{api.error}</ErrorLine>}
     </div>
-  );
-}
-
-type Src = { kind: string; title: string; where: string };
-
-function hostOf(url: string): string {
-  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
-}
-
-/** 依据: 本机的 (知识库 / 文件 / 邮件) 一行; 上网查到的 (11/18) 列标题 + 网站, 点开用系统浏览器看原文。 */
-export function ReviseSources({ sources }: { sources?: Src[] }) {
-  const web = (sources ?? []).filter((s) => s.kind === "网页" && /^https?:\/\//.test(s.where));
-  const local = (sources ?? []).filter((s) => s.kind !== "网页");
-  const openLink = async (url: string) => {
-    try {
-      const { open } = await import("@tauri-apps/plugin-shell");
-      await open(url);
-    } catch { /* 打不开就算了 (不在 Tauri 里) */ }
-  };
-  return (
-    <>
-      {web.length > 0 && (
-        <div style={muted}>
-          🌐 网上查到的:{" "}
-          {web.map((s, i) => (
-            <span key={s.where}>
-              {i > 0 && " · "}
-              <a href={s.where} title={s.where} onClick={(e) => { e.preventDefault(); void openLink(s.where); }}
-                style={{ color: "var(--catfish-accent)" }}>《{s.title}》</a>
-              <span> ({hostOf(s.where)})</span>
-            </span>
-          ))}
-        </div>
-      )}
-      {sourcesLine(local) && <div style={muted}>🔎 {sourcesLine(local)}</div>}
-    </>
   );
 }
 

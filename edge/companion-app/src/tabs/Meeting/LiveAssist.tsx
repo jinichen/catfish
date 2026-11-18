@@ -16,7 +16,7 @@ import {
   meetingLiveNoteSet, meetingLiveNotes, meetingLiveRead, quoteLine,
   type LiveLine, type LiveNote, type LiveState, type NoteState,
 } from "../../lib/tauri_meeting_live";
-import { sourcesLine } from "../Collab/RoomAskXiaonian";
+import { AskSources } from "../../components/AskSources";
 import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 
 export const HINT_EVERY_MS = 3 * 60 * 1000;
@@ -76,7 +76,7 @@ function NoteCards({ api, after }: { api: NotesApi; after?: boolean }) {
                 </span>
               </div>
               <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{n.answer}</div>
-              {sourcesLine(n.sources) && <div style={muted}>{sourcesLine(n.sources)}</div>}
+              <AskSources sources={n.sources} style={muted} />
             </>
           ) : (
             <>

@@ -27,3 +27,19 @@ def _isolate_catfish_home(tmp_path_factory, monkeypatch):
     for name in _TOKEN_MODULES:
         mod = importlib.import_module(f"catfish_tool_bridge.{name}")
         monkeypatch.setattr(mod, "OAUTH_ID_TOKEN_PATH", fake_token)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_web_search(request, monkeypatch):
+    """11/18 web_lookup: 测试里默认不用联网 (不占假模型的回复)、不问中央、不真上网 (test_web_lookup 自己测这几步)。"""
+    if request.node.module.__name__.endswith("test_web_lookup"):
+        return
+    from catfish_tool_bridge import web_lookup
+
+    async def deny(*a, **k):
+        return False, "测试里不联网"
+    monkeypatch.setattr(web_lookup, "allowed", deny)
+
+    async def no_web(*a, **k):
+        return ""
+    monkeypatch.setattr(web_lookup, "plan", no_web)

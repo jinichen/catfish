@@ -191,12 +191,12 @@ async def assist(params: dict[str, Any]) -> dict[str, Any]:
     target = next((m for m in msgs if m.get("msg_id") == rid), None) if rid else None
     instruction = str(params.get("instruction") or "")
     llm_kw = dict(source="plugin:toolbridge-room-assist", gateway_url=gw, auth_token=token)
-    local, found = "", None
+    local, found, web = "", None, None
     if kind == "ask" and instruction.strip():
-        # 11/15: 先查本机资料 (知识库 / 文件 / 邮件), 不只看群聊记录
-        from . import local_lookup  # noqa: PLC0415
-        found = await local_lookup.lookup(instruction, _history_text(room, msgs[-30:], me), call_llm, {**llm_kw, "timeout_s": 60.0})
-        local = local_lookup.prompt_block(found)
+        # 11/15: 先查本机资料 (知识库 / 文件 / 邮件), 不只看群聊记录; 11/18 问公开资料时同时上网查 (web_lookup)
+        from . import web_lookup  # noqa: PLC0415
+        local, found, web = await web_lookup.with_local(instruction, _history_text(room, msgs[-30:], me), str(room.get("name") or ""),
+                                                        call_llm, {**llm_kw, "timeout_s": 60.0})
     out = await call_llm(assist_messages(room, msgs, me, kind, instruction, target, local),
                          temperature=0.3, max_tokens=1500, timeout_s=150.0, **llm_kw)
     text = re.sub(r"<think>.*?</think>", "", out or "", flags=re.S).strip()
@@ -204,8 +204,9 @@ async def assist(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("小鲶这次没写出来, 再试一次")
     out_doc: dict[str, Any] = {"ok": True, "text": text[:cr.TEXT_MAX], "kind": kind}
     if found is not None:
-        from .local_lookup import sources  # noqa: PLC0415
-        out_doc["sources"] = sources(found)
+        out_doc["sources"] = found
+        if web:
+            out_doc["web"] = web
     return out_doc
 
 

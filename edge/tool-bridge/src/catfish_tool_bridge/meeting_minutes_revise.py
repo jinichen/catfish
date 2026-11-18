@@ -15,7 +15,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -199,21 +198,9 @@ async def handle_revise(params: dict) -> dict:
     # 员工说「金智达是辅导机构」「说话人3 是王总」, 资料里有全称 / 职务就能对上。查不到不影响改。
     # 11/18 同一天「为什么不能联网检索」: 员工要官方要求 / 法规这类公开资料时上网查 (web_lookup, 权限跟主对话一样走中央),
     # 跟查本机资料同时跑。
-    from . import local_lookup, web_lookup  # noqa: PLC0415
-    sub_kw = {**llm_kw, "timeout_s": 60.0}
-    found, web = await asyncio.gather(local_lookup.lookup(instruction, text[:3000], call_llm, sub_kw),
-                                      web_lookup.lookup(instruction, str(meta.get("title") or ""), call_llm, sub_kw),
-                                      return_exceptions=True)
-    if isinstance(found, BaseException):
-        logger.info("让小鲶改: 查本机资料失败, 只按纪要和转写改: %s", found)
-        lookup_block, lookup_sources = "", []
-    else:
-        lookup_block, lookup_sources = local_lookup.prompt_block(found), local_lookup.sources(found)
-    if isinstance(web, BaseException):
-        logger.info("让小鲶改: 联网查失败: %s", web)
-        web = {"wanted": False, "found": [], "error": ""}
-    lookup_block += web_lookup.prompt_block(web)
-    lookup_sources = web_lookup.sources(web) + lookup_sources
+    from . import web_lookup  # noqa: PLC0415
+    lookup_block, lookup_sources, web = await web_lookup.with_local(
+        instruction, text[:3000], str(meta.get("title") or ""), call_llm, {**llm_kw, "timeout_s": 60.0}, for_minutes=True)
     reply, new_fields, new_md = await call_llm_json(
         build_messages(meta, names, fields, md if markdown_view else None, text, full, instruction, history, lookup_block),
         lambda raw: _parse(raw, markdown_view),
@@ -238,4 +225,4 @@ async def handle_revise(params: dict) -> dict:
             "changed_labels": ["整份改成按你说的结构排"] + (["待办"] if "action_items" in changed else []) if restructured
             else [FIELD_LABEL[k] for k in changed],
             "transcript_full": full, "sources": lookup_sources,
-            "web": {"query": web.get("query", ""), "error": web.get("error", "")} if web.get("wanted") else None}
+            "web": web}

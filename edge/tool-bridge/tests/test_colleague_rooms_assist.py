@@ -50,3 +50,40 @@ def test_other_kinds_unchanged_and_unknown_rejected():
 def test_ask_includes_local_materials():
     u = _user(rt.assist_messages(ROOM, MSGS, ME, "ask", "ITSS 一级现状", None, "\n我电脑上找到的资料: X\n"))
     assert "我电脑上找到的资料: X" in u and u.index("我电脑上找到的资料") < u.index("我的问题: ITSS 一级现状")
+
+
+def test_assist_ask_uses_local_and_web_material(monkeypatch):
+    """11/18: 群里「@小鲶」问公开资料时同时上网查; 本机资料照旧; 依据网页在前, 带联网情况。"""
+    import asyncio
+
+    from catfish_tool_bridge import gateway_llm, local_lookup, web_lookup
+
+    class Store:
+        def recent(self, rid, n):
+            return MSGS
+    monkeypatch.setattr(rt.cr, "store", Store())
+    monkeypatch.setattr(rt.forms_net, "me", lambda: ME)
+    monkeypatch.setattr(rt, "joined_room", lambda rid: ROOM)
+
+    async def local(question, context, call_llm, kw):
+        return {"queries": ["ITSS"], "block": "- [知识库] ITSS一级: 11/19 答辩",
+                "found": [{"kind": "知识库", "title": "ITSS一级", "where": "wiki/e.md", "text": "…"}]}
+
+    async def web(question, title, call_llm, kw):
+        assert title == "测试" and kw["source"] == "plugin:toolbridge-room-assist"
+        return {"wanted": True, "query": "ITSS 一级 评估要求", "error": "",
+                "found": [{"kind": "网页", "title": "ITSS 评估", "where": "https://www.itss.cn/a", "text": "一级要求"}]}
+    monkeypatch.setattr(local_lookup, "lookup", local)
+    monkeypatch.setattr(web_lookup, "lookup", web)
+    seen = []
+
+    async def llm(messages, **kw):
+        seen.append(messages)
+        return "答辩在 11/19, 官网一级要求是…"
+    monkeypatch.setattr(gateway_llm, "call_llm", llm)
+    out = asyncio.run(rt.assist({"auth_token": "t", "gateway_url": "http://gw", "room_id": "r1", "kind": "ask",
+                                 "instruction": "网上查下 ITSS 一级要求"}))
+    u = _user(seen[0])
+    assert "上网查到的公开资料" in u and "一级要求" in u and "ITSS一级: 11/19 答辩" in u
+    assert [s["kind"] for s in out["sources"]] == ["网页", "知识库"]
+    assert out["web"] == {"query": "ITSS 一级 评估要求", "error": ""}

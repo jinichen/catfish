@@ -108,7 +108,7 @@ class _Reg:
 
 
 OK = json.dumps({"success": True, "data": {"web": [
-    {"url": "https://www.isccc.gov.cn/a.pdf", "title": "信息安全服务资质认证实施规则", "description": "7.5 监督审核\n\n\n复核" + "字" * 3000},
+    {"url": "https://www.isccc.gov.cn/a.pdf", "title": "\n信息安全服务资质认证实施规则\n", "description": "7.5 监督审核\n\n\n复核" + "字" * 3000},
     {"url": "javascript:alert(1)", "title": "坏链接", "description": "x"},
 ]}}, ensure_ascii=False)
 FAIL = json.dumps({"success": False, "error": "Keyless Parallel search failed: SSLEOFError"})

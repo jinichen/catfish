@@ -171,15 +171,17 @@ async def handle_assist(params: dict) -> dict:
         if not q:
             raise ValueError("要问小鲶什么?")
         haystack = "\n".join(r["text"] for r in rows[-200:]) + "\n" + q
-        from . import local_lookup  # noqa: PLC0415 — 11/15 先查本机资料 (知识库 / 文件 / 邮件)
-        found = await local_lookup.lookup(q, "\n".join(render(rows[-20:])), call_llm, {**kw, "timeout_s": 60.0})
+        # 11/15 先查本机资料 (知识库 / 文件 / 邮件); 11/18 问的是公开资料 (官方要求、法规、标准) 时同时上网查 (web_lookup)
+        from . import web_lookup  # noqa: PLC0415
+        found_block, found_sources, web = await web_lookup.with_local(
+            q, "\n".join(render(rows[-20:])), str(meta.get("title") or ""), call_llm, {**kw, "timeout_s": 60.0})
         answer = re.sub(r"<think>.*?</think>", "", await call_llm(
-            ask_messages(meta, rows, q, _background(d, meta, haystack), local_lookup.prompt_block(found)),
+            ask_messages(meta, rows, q, _background(d, meta, haystack), found_block),
             temperature=0.3, max_tokens=1200, **kw), flags=re.S).strip()
         if not answer:
             raise ValueError("小鲶这次没答出来, 再问一次")
         note = {"id": _new_id(), "kind": "ask", "q": q[:500], "answer": answer[:4000], "state": "new",
-                "sources": local_lookup.sources(found),
+                "sources": found_sources, **({"web": web} if web else {}),
                 "at": float(rows[-1]["end"]) if rows else 0.0, "created": time.time()}
     elif kind == "hint":
         cursor = float(doc.get("hint_cursor") or 0.0)

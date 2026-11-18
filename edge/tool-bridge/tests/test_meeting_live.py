@@ -153,3 +153,33 @@ def test_two_tracks_labelled_and_auth_required(d):
     with pytest.raises(ValueError, match="不会这个"):
         asyncio.run(ml.handle_assist(_params(d, kind="chat")))
     assert ml.load_lines(d)[-1]["start"] == 200.0          # 半行不算
+
+
+def test_ask_public_info_also_searches_web(d, monkeypatch):
+    """11/18「会议期间支持在线检索吗」: 问公开资料 (官方要求 / 标准) 时同时上网查, 网页排在依据最前面。"""
+    from catfish_tool_bridge import web_lookup
+
+    async def web(question, title, call_llm, kw):
+        assert question == "官网上严重不符合项怎么处理?" and kw["auth_token"] == "t"
+        return {"wanted": True, "query": "CCRC 严重不符合项 处理", "error": "",
+                "found": [{"kind": "网页", "title": "认证实施规则", "where": "https://www.isccc.gov.cn/a.pdf", "text": "暂停证书"}]}
+    monkeypatch.setattr(web_lookup, "lookup", web)
+    calls = _fake(monkeypatch, ["规则里写的是暂停证书。"])
+    r = asyncio.run(ml.handle_assist(_params(d, kind="ask", question="官网上严重不符合项怎么处理?")))
+    u = calls[0][1]["content"]
+    assert "上网查到的公开资料" in u and "暂停证书" in u and "[知识库] ITSS一级" in u
+    assert r["note"]["sources"][0] == {"kind": "网页", "title": "认证实施规则", "where": "https://www.isccc.gov.cn/a.pdf"}
+    assert r["note"]["web"] == {"query": "CCRC 严重不符合项 处理", "error": ""}
+    assert ml.load_notes(d)["notes"][-1]["web"]["query"] == "CCRC 严重不符合项 处理"
+
+
+def test_ask_lookup_failures_do_not_block(d, monkeypatch):
+    from catfish_tool_bridge import local_lookup, web_lookup
+
+    async def boom(*a, **k):
+        raise RuntimeError("down")
+    monkeypatch.setattr(local_lookup, "lookup", boom)
+    monkeypatch.setattr(web_lookup, "lookup", boom)
+    _fake(monkeypatch, ["会上没说。"])
+    r = asyncio.run(ml.handle_assist(_params(d, kind="ask", question="多久交?")))
+    assert r["note"]["answer"] == "会上没说。" and r["note"]["sources"] == [] and "web" not in r["note"]
