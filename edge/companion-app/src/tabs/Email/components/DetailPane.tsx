@@ -537,7 +537,10 @@ function DetailPane({
             ↪️ 转发
           </button>
           </>)}
-          {/* 11/07 没报的信员工觉得是钓鱼: 「标为钓鱼」(按发件地址记), 跟删除一起靠右 */}
+          {/* 11/07 没报的信员工觉得是钓鱼: 「标为钓鱼」(按发件地址记), 跟删除一起靠右。
+              11/18 鸿波「确认删除按钮换行了」: 两个包成一组靠右 (要换行也一起换), 删除按钮宽度固定 ——
+              点一下变「确认删除」(3 秒内再点) 不再变宽把自己挤到下一行。 */}
+          <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           <MarkPhishingButton result={phishing} msg={msg} list={list} />
           {/* 5/18 BL-EMAIL-DELETE: 两步点击确认 (window.confirm 在 Tauri 不可靠).
               第一次点 → "🗑 再次点击确认" (3s 内有效), 第二次才真删. */}
@@ -555,6 +558,9 @@ function DetailPane({
               border: `1px solid ${confirmPending ? "rgb(220, 80, 60)" : deleteRed ? "rgba(220, 80, 60, 0.5)" : "var(--catfish-border)"}`,
               borderRadius: 4,
               padding: "8px 14px",
+              minWidth: 100,
+              whiteSpace: "nowrap",
+              textAlign: "center",
               fontSize: 13,
               fontWeight: confirmPending ? 600 : 400,
               cursor: deleting ? "wait" : "pointer",
@@ -571,9 +577,10 @@ function DetailPane({
             {deleting
               ? "删除中…"
               : confirmPending
-                ? "🗑 再次点击确认 (3s)"
+                ? "🗑 确认删除"
                 : "🗑 删除"}
           </button>
+          </span>
           {deleteError && (
             <div
               style={{
