@@ -198,4 +198,16 @@ on _pad4(n)
     end repeat
     return s
 end _pad4
+
+-- 11/18 真机 (鸿波「客户端里有的邮件鲶鱼里没有」): 「邮件」App 的 `messages of mb`
+-- 是**新的在前** (message 1 = 22:53 刚到的, 最后一封 = 6 月)。列表脚本原来按「新的在后」
+-- 取尾巴: 收件箱 507 封、取 500 封时最新 7 封被截掉; 平时增量取 30 封拿到的是最旧的 30 封。
+-- 不再假设顺序: 比一下首尾两封的时间。比不出来 (取不到时间、一样) 按真机看到的新的在前。
+on newestFirst(firstMsg, lastMsg)
+    set a to my msgDate(firstMsg)
+    set b to my msgDate(lastMsg)
+    if a is "" or b is "" then return true
+    if a < b then return false
+    return true
+end newestFirst
 """

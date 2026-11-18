@@ -367,7 +367,7 @@ def _list_run(bulk_out=None, bulk_error=None):
         calls.append(script)
         if "repeat with acc in every account" in script:
             return f"Google{FS}me@gmail.com{FS}1\x1e"
-        if "messages lo thru total of mb" in script:
+        if "messages lo thru hi of mb" in script:
             if bulk_error:
                 raise bulk_error
             return bulk_out
@@ -393,20 +393,20 @@ def test_list_fetches_in_bulk_and_asks_mail_for_accounts_once():
     assert [m.id for m in msgs] == ["apple_mail|Google|2753"]
     assert not msgs[0].is_read
     assert sum("repeat with acc in every account" in c for c in calls) == 1
-    assert not any("repeat with idx from total to 1" in c for c in calls)
+    assert not any("repeat with idx from idxFrom to idxTo" in c for c in calls)
 
 
 def test_list_falls_back_to_one_by_one_when_bulk_fails():
     calls, fake_run = _list_run(bulk_error=EmailAdapterError("LIST_CHANGED (8101)"))
     msgs = _list(fake_run)
     assert [m.subject for m in msgs] == ["逐封"]
-    assert any("repeat with idx from total to 1" in c for c in calls)
+    assert any("repeat with idx from idxFrom to idxTo" in c for c in calls)
 
 
 def test_unread_only_uses_the_one_by_one_script():
     calls, fake_run = _list_run(bulk_out="")
     _list(fake_run, unread_only=True)
-    assert not any("messages lo thru total of mb" in c for c in calls)
+    assert not any("messages lo thru hi of mb" in c for c in calls)
 
 
 def test_list_no_longer_reads_the_emlx_index_while_mail_is_running(monkeypatch, tmp_path):
@@ -544,3 +544,18 @@ def test_attachment_export_skips_empty_parts_so_the_script_refuses():
     m.add_attachment(b"", maintype="application", subtype="octet-stream", filename="空.docx")
     msg = email.message_from_bytes(m.as_bytes(), policy=email.policy.default)
     assert drafts._draft_attachment_files(msg) == ("", [])   # 清单为空 → 脚本按 0 < 1 拒发
+
+
+def test_列表不假设邮件App里新信在前还是在后():
+    """11/18 真机: Mail 的 `messages of mb` 是新的在前 (message 1 = 刚到的)。原来按「新的在后」
+    取尾巴, 收件箱 507 封取 500 时最新 7 封被截掉, 客户端里有、鲶鱼里没有。两份脚本都要先比首尾时间。"""
+    from catfish_email.adapters import apple_mail_as_handlers as h
+
+    assert "on newestFirst(firstMsg, lastMsg)" in h.AS_DATES
+    bulk = scripts._AS_LIST_MESSAGES_BULK
+    assert "my newestFirst(message 1 of mb, message total of mb)" in bulk
+    assert "set lo to 1" in bulk and "messages lo thru hi of mb" in bulk
+    assert "lo thru total" not in bulk.split("tell application")[1]
+    one = scripts._AS_LIST_MESSAGES
+    assert "my newestFirst(item 1 of msgs, item total of msgs)" in one
+    assert "repeat with idx from idxFrom to idxTo by idxStep" in one

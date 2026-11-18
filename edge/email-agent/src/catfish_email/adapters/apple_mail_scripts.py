@@ -149,9 +149,19 @@ tell application "Mail"
     set total to count of msgs
     set out to ""
     set i to 0
-    -- newest last in Mail's order: walk backwards to get the newest limitN.
+    if total is 0 then return ""
+    -- 11/18: 先看「邮件」App 这个文件夹是新的在前还是在后 (newestFirst), 从新的那头走, 取最新 limitN 封。
     -- One unreadable message (e.g. no date received) must not fail the whole folder.
-    repeat with idx from total to 1 by -1
+    if my newestFirst(item 1 of msgs, item total of msgs) then
+        set idxFrom to 1
+        set idxTo to total
+        set idxStep to 1
+    else
+        set idxFrom to total
+        set idxTo to 1
+        set idxStep to -1
+    end if
+    repeat with idx from idxFrom to idxTo by idxStep
         if i >= limitN then exit repeat
         try
             set m to item idx of msgs
@@ -206,26 +216,34 @@ tell application "Mail"
     set mb to my resolveInbox(acc, folderName)
     set total to count of messages of mb
     if total is 0 then return ""
-    set lo to total - limitN + 1
-    if lo < 1 then set lo to 1
-    set idList to my asList(id of messages lo thru total of mb)
-    set readList to my asList(read status of messages lo thru total of mb)
-    set subjList to my asList(subject of messages lo thru total of mb)
-    set sndrList to my asList(sender of messages lo thru total of mb)
-    set recvList to my asList(date received of messages lo thru total of mb)
+    set newFirst to my newestFirst(message 1 of mb, message total of mb)
+    if newFirst then
+        set lo to 1
+        set hi to limitN
+        if hi > total then set hi to total
+    else
+        set hi to total
+        set lo to total - limitN + 1
+        if lo < 1 then set lo to 1
+    end if
+    set idList to my asList(id of messages lo thru hi of mb)
+    set readList to my asList(read status of messages lo thru hi of mb)
+    set subjList to my asList(subject of messages lo thru hi of mb)
+    set sndrList to my asList(sender of messages lo thru hi of mb)
+    set recvList to my asList(date received of messages lo thru hi of mb)
     set sentList to {}
     try
-        set sentList to my asList(date sent of messages lo thru total of mb)
+        set sentList to my asList(date sent of messages lo thru hi of mb)
     end try
     set midList to {}
     try
-        set midList to my asList(message id of messages lo thru total of mb)
+        set midList to my asList(message id of messages lo thru hi of mb)
     end try
     set hdrList to {}
     try
-        set hdrList to my asList(all headers of messages lo thru total of mb)
+        set hdrList to my asList(all headers of messages lo thru hi of mb)
     end try
-    set idCheck to my asList(id of messages lo thru total of mb)
+    set idCheck to my asList(id of messages lo thru hi of mb)
 end tell
 
 set n to count of idList
@@ -235,7 +253,17 @@ if idCheck is not idList then error "LIST_CHANGED" number 8101
 -- 每次都失败、回落逐封取 —— 列表 11.6 s 白跑 + 逐封 52 s。直接逐个比, 同样的校验。
 if (count of readList) is not n or (count of subjList) is not n or (count of sndrList) is not n or (count of recvList) is not n then error "LIST_CHANGED" number 8101
 set recs to {}
-repeat with j from n to 1 by -1
+-- 输出一律新的在前
+if newFirst then
+    set jFrom to 1
+    set jTo to n
+    set jStep to 1
+else
+    set jFrom to n
+    set jTo to 1
+    set jStep to -1
+end if
+repeat with j from jFrom to jTo by jStep
     set d to item j of recvList
     if d is missing value and (count of sentList) is n then set d to item j of sentList
     set dt to ""
