@@ -113,6 +113,8 @@ export interface CreateDraftArgs {
   keepAttachments?: string[];
   /** 11/12: 附件合计上限 (MB), 员工在「邮件 → 设置」里改 */
   maxAttachMb?: number;
+  /** 11/18: 转发 —— 原邮件 id; 后台把原文接在正文 (附言) 后面、原附件一并带上 */
+  forward?: string;
 }
 /** 10/29: 写邮件「添加附件」选中的文件 */
 export interface PickedAttachment {
@@ -135,6 +137,7 @@ export const emailCreateDraft = (args: CreateDraftArgs) =>
     attachments: args.attachments ?? null,
     keepAttachments: args.keepAttachments ?? null,
     maxAttachMb: args.maxAttachMb ?? null,
+    forward: args.forward ?? null,
   });
 /** id → "急" | "中" | "低" map, scheduler 后台评级缓存. */
 /** 9/27: 邮件 id 改名表 {旧 id: 新 id} (IMAP id 里的 UIDVALIDITY 从 0 改成真值)。 */

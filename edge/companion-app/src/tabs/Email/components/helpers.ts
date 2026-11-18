@@ -27,6 +27,12 @@ export function _buildReplySubject(subject: string | undefined | null): string {
   return s.startsWith("Re:") ? s : `Re: ${s}`;
 }
 
+/** 11/18: 转发主题 —— 「转发: X」; 已经是转发 (转发: / Fw: / Fwd:) 的不重复加。 */
+export function _buildForwardSubject(subject: string | undefined | null): string {
+  const s = (subject || "").trim();
+  return /^(转发|fw|fwd)\s*[:：]/i.test(s) ? s : `转发: ${s}`;
+}
+
 /** P3.5.158 Phase 1 (7/2 鸿波): 生回复引用段. 抽自 DetailPane.handleOpenCompose.
  *  body_text 空时引用段仍生 (只留 header + 空 quoted), 让员工看到"这是回复给谁的".
  */

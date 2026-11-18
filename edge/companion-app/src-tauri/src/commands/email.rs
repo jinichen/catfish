@@ -559,6 +559,9 @@ pub async fn email_create_draft(
     keep_attachments: Option<Vec<String>>,
     // 11/12: 附件合计上限 (MB), 员工在「邮件 → 设置」里改; None = CLI 默认 25
     max_attach_mb: Option<u32>,
+    // 11/18 鸿波「邮件少了转发功能」: 转发哪封 (原邮件 id) —— CLI 把原文 (发件人 / 时间 / 正文, 能保留排版就保留) 接在附言后面,
+    // 原附件一并带上 (catfish-email draft --forward, 11/4 起小鲶对话里一直在用, 界面上缺按钮)
+    forward: Option<String>,
 ) -> Result<String, String> {
     let bin = catfish_paths::catfish_email_bin().ok_or_else(|| {
         "catfish-email CLI 没装".to_string()
@@ -606,6 +609,9 @@ pub async fn email_create_draft(
     }
     if let Some(mb) = max_attach_mb {
         args.push("--max-attach-mb".to_string()); args.push(mb.clamp(5, 200).to_string());
+    }
+    if let Some(f) = forward.filter(|s| !s.is_empty()) {
+        args.push("--forward".to_string()); args.push(f);
     }
 
     let out = email_command(&bin)

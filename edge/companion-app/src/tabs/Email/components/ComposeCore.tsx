@@ -106,6 +106,8 @@ export interface ComposeCoreProps {
   /** 走真账号. 回复场景传 msg.account, 新建场景 parent 决定 (default account) */
   account?: string;
 
+  /** 11/18 转发: 原邮件 id + 它的附件 (给员工看会带上哪些)。正文框里只写附言, 原文由后台接在后面 */
+  forwardOf?: { id: string; attachments: Array<{ filename: string; size_bytes: number }> } | null;
   /** 拟稿真原邮件 context. null = 新建场景 → 拟稿按钮禁用 */
   originalMessage?: ComposeOriginalMessage | null;
   /** Inbox + Sent 的邮件摘要，仅用于按 RFC 头挑同一线程的近期邮件。 */
@@ -131,6 +133,7 @@ export default function ComposeCore({
   initialBody = "",
   inReplyToMsgId = null,
   replacesDraftId = null,
+  forwardOf = null,
   existingAttachments = [],
   initialAttachments = [],
   account,
@@ -162,6 +165,7 @@ export default function ComposeCore({
     attachments: addedAttachments.map((a) => a.path),
     keepAttachments: replacesDraftId ? keptAttachments.map((a) => a.filename) : [],
     maxAttachMb: attachLimitMb,
+    forward: forwardOf?.id || undefined,
   };
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
@@ -627,7 +631,7 @@ export default function ComposeCore({
       <textarea
         value={composeBody}
         onChange={(e) => setComposeBody(e.target.value)}
-        placeholder="正文..."
+        placeholder={forwardOf ? "附言 (可选), 例: 张工, 这封请看一下附件里的方案" : "正文..."}
         style={{
           flex: 1,
           minHeight: 200,
@@ -643,6 +647,14 @@ export default function ComposeCore({
         }}
       />
 
+      {forwardOf && (
+        <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", lineHeight: 1.6 }} aria-label="转发说明">
+          ↪️ 原邮件的正文 (发件人、时间、原排版) 会接在你写的附言后面一起转发
+          {forwardOf.attachments.length > 0
+            ? `, 原来的 ${forwardOf.attachments.length} 个附件也一起带上: ${forwardOf.attachments.map((a) => a.filename).join("、")}`
+            : "。"}
+        </div>
+      )}
       <ComposeAttachments
         added={addedAttachments}
         kept={keptAttachments}

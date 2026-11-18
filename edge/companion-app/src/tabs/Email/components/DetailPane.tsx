@@ -17,7 +17,7 @@ import {
   type PhishingScanResult,          // P3.3.58 段 2C
   type PoliticalScanResult,         // P3.3.53.2
 } from "../../../lib/tauri";
-import { _extractSenderName, _replyAddress, _buildReplySubject, _buildQuotedBody } from "./helpers";
+import { _extractSenderName, _replyAddress, _buildReplySubject, _buildQuotedBody, _buildForwardSubject } from "./helpers";
 import { useAgentStore } from "../../../store/agent";
 // P3.5.58 (6/22 鸿波 catch "有回复了为啥还要让小鲶处理 是不是重复了"):
 // RFC 822 thread chain 算法 + 已回复 badge
@@ -220,10 +220,14 @@ function DetailPane({
   // P3.5.158 Phase 3 (7/2): Compose 相关 state 全部搬 ComposeCore. DetailPane 只
   // 留 composing 控 open, ComposeCore 通过 resetKey={msg.id} 触发 state 清.
   const [composing, setComposing] = useState(false);
+  // 11/18 鸿波「邮件少了转发功能」: 同一个写信面板, 回复 / 转发两种开法
+  const [composeMode, setComposeMode] = useState<"reply" | "forward">("reply");
+  const forwarding = !isDraft && composeMode === "forward";
 
   // 选别的邮件时关 compose
   useEffect(() => {
     setComposing(false);
+    setComposeMode("reply");
   }, [msg.id]);
 
   // P3.5.38.3 (6/18 鸿波 catch '还是无效, 仔细分析'):
@@ -282,7 +286,15 @@ function DetailPane({
    *  compose panel 让员工编辑. 这样:
    *    - 取消不留 orphan draft
    *    - 编辑后再 send 不会跟 Mail.app 那侧的草稿不一致 */
+  const handleOpenForward = () => {
+    setDraftResult(null);
+    setDraftError(null);
+    setComposeMode("forward");
+    setComposing(true);
+  };
+
   const handleOpenCompose = () => {
+    setComposeMode("reply");
     // P3.5.158 Phase 3 (7/2 鸿波): Compose 逻辑抽到 ComposeCore. handleOpenCompose
     // 只负责 open panel, 初始值通过 ComposeCore initial* props 直接从 msg 派生
     // (每次 render 都算, ComposeCore resetKey={msg.id} 触发 state 清).
@@ -505,6 +517,25 @@ function DetailPane({
           >
             ✏️ 回复
           </button>
+          <button
+            type="button"
+            onClick={handleOpenForward}
+            disabled={composing}
+            style={{
+              background: "var(--catfish-bg)",
+              color: "var(--catfish-text)",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 4,
+              padding: "8px 16px",
+              fontSize: 13,
+              cursor: composing ? "default" : "pointer",
+              opacity: composing ? 0.4 : 1,
+              fontFamily: "inherit",
+            }}
+            title="转发给别人: 原文和附件一起带上, 你可以写几句附言 (人工确认才发)"
+          >
+            ↪️ 转发
+          </button>
           </>)}
           {/* 11/07 没报的信员工觉得是钓鱼: 「标为钓鱼」(按发件地址记), 跟删除一起靠右 */}
           <MarkPhishingButton result={phishing} msg={msg} list={list} />
@@ -594,7 +625,7 @@ function DetailPane({
           // 9/27: 每次打开/换信都重建组件, 输入框直接用本次的初始值 —— 不依赖
           // ComposeCore 内部"resetKey 变了再 setState"的时序 (那条路上出现过改草稿
           // 却填着自己地址的情况)。
-          key={`${msg.id}|${isDraft ? "edit" : "reply"}|${composing ? "open" : "closed"}`}
+          key={`${msg.id}|${isDraft ? "edit" : composeMode}|${composing ? "open" : "closed"}`}
           isOpen={composing}
           onClose={() => setComposing(false)}
           // 9/26: 草稿箱里的一封 → 这个面板是「改这封草稿」, 不是「回复它」:
@@ -605,21 +636,24 @@ function DetailPane({
             else if (isDraft) onDeleted();
           }}
           onSendSuccess={isDraft ? () => onDeleted() : handleComposeSendSuccess}
-          initialTo={isDraft ? (msg.recipients ?? []).join(", ") : _replyAddress(msg.sender)}
+          initialTo={isDraft ? (msg.recipients ?? []).join(", ") : forwarding ? "" : _replyAddress(msg.sender)}
           initialCc={isDraft ? (msg.cc ?? []).join(", ") : ""}
-          initialSubject={isDraft ? msg.subject || "" : _buildReplySubject(msg.subject)}
-          initialBody={isDraft ? msg.body_text || "" : _buildQuotedBody({
+          initialSubject={isDraft ? msg.subject || "" : forwarding ? _buildForwardSubject(msg.subject) : _buildReplySubject(msg.subject)}
+          // 转发: 正文框只写附言, 原文 (保留排版) 和附件由后台接上 (catfish-email draft --forward)
+          initialBody={isDraft ? msg.body_text || "" : forwarding ? "" : _buildQuotedBody({
             sender: msg.sender,
             date: msg.date,
             subject: msg.subject || "",
             body_text: msg.body_text,
           })}
-          inReplyToMsgId={isDraft ? null : msg.id}
+          inReplyToMsgId={isDraft || forwarding ? null : msg.id}
+          forwardOf={forwarding ? { id: msg.id, attachments: (msg.attachments ?? []).map((a) => ({ filename: a.filename, size_bytes: a.size_bytes })) } : null}
           replacesDraftId={isDraft ? msg.id : null}
           // 10/29: 改草稿时把旧草稿的附件带过去 (否则存完新的、旧的去掉, 附件就丢了)
           existingAttachments={isDraft ? (msg.attachments ?? []).map((a) => ({ filename: a.filename, size_bytes: a.size_bytes })) : []}
           account={msg.account}
-          originalMessage={isDraft ? null : {
+          // 转发不用「让小鲶拟稿」(那是按回复写的); 附言自己写两句就行
+          originalMessage={isDraft || forwarding ? null : {
             id: msg.id,
             sender: msg.sender,
             subject: msg.subject || "",
@@ -635,7 +669,7 @@ function DetailPane({
           agentPersonality={agentPersonality}
           // 9/26: 每次打开都按当前这封重新填 —— 只按 msg.id 重置时, 面板里可能留着
           // 上一次 (另一种模式 / 读取完成前) 的收件人, 员工看到改草稿却填着自己的地址。
-          resetKey={`${msg.id}|${isDraft ? "edit" : "reply"}|${composing ? "open" : "closed"}`}
+          resetKey={`${msg.id}|${isDraft ? "edit" : composeMode}|${composing ? "open" : "closed"}`}
         />
       ) : msg.body_html ? (
         <>
