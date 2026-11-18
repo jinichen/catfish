@@ -559,3 +559,14 @@ def test_列表不假设邮件App里新信在前还是在后():
     one = scripts._AS_LIST_MESSAGES
     assert "my newestFirst(item 1 of msgs, item total of msgs)" in one
     assert "repeat with idx from idxFrom to idxTo by idxStep" in one
+
+
+def test_IMAP_取最新一批前先按UID排序():
+    """11/18 鸿波问「那 IMAP 的怎么处理」: 同步那条早就先排序再切尾, 搜索 / 直连列表两处直接 uids[-200:]。
+    服务器回的 SEARCH 结果乱序时取到的就不是最新的。"""
+    from catfish_email.adapters.imap_mail import newest_uids
+
+    uids = [b"900", b"12", b"1000", b"7", b"999"]
+    assert newest_uids(uids, 2) == [b"999", b"1000"]
+    assert newest_uids(uids, 10) == [b"7", b"12", b"900", b"999", b"1000"]
+    assert newest_uids(uids, 0) == []

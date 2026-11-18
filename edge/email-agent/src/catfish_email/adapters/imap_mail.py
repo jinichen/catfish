@@ -60,6 +60,7 @@ from urllib.parse import quote, unquote
 
 from .. import rfc822_util as rfc822
 # 9/18 拆分: 文件夹名的编解码和角色识别跟 IMAP 协议无关, 单独一个文件
+from .imap_chunked import newest_uids  # noqa: F401 — 也从这里导出
 from .imap_folders import (  # noqa: F401  utf7_encode 是给外部用的
     FOLDER_ALIASES,
     folder_matches,
@@ -293,7 +294,7 @@ class ImapAdapter(EmailAdapter):
             if not uids:
                 continue
             found.extend(
-                self._fetch_uids(conn, raw, role, uidvalidity, uids[-LIST_FETCH_CAP:], True)
+                self._fetch_uids(conn, raw, role, uidvalidity, newest_uids(uids, LIST_FETCH_CAP), True)
             )
         found.sort(key=lambda r: rfc822.date_iso(r.message), reverse=True)
         return [self._to_message(r, full=False) for r in found[: max(limit, 0)]]
@@ -572,7 +573,7 @@ class ImapAdapter(EmailAdapter):
             typ, data = "NO", None
         uids = data[0].split() if typ == "OK" and data and data[0] else []
         if uids:
-            return uids[-1].decode("ascii")
+            return max(uids, key=int).decode("ascii")
         # 9/26 真机: 电信邮箱的 HEADER 搜索对 Message-ID 返回空 —— 草稿其实存进去了。
         return imap_drafts.uid_by_recent_headers(conn, msg_id)
 
@@ -637,9 +638,9 @@ class ImapAdapter(EmailAdapter):
         uids = data[0].split()
         if not uids:
             return []
-        # 只要最新的一批 —— UID 递增, 所以取尾部
+        # 只要最新的一批 —— 按 UID 数值排序后取尾部 (服务器给的顺序不算数)
         return self._fetch_uids(
-            conn, folder_raw, role, uidvalidity, uids[-LIST_FETCH_CAP:], headers_only
+            conn, folder_raw, role, uidvalidity, newest_uids(uids, LIST_FETCH_CAP), headers_only
         )
 
     def _fetch_uids(

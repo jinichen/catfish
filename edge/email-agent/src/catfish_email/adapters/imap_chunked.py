@@ -126,3 +126,9 @@ def fetch_raw_many(conn: imaplib.IMAP4_SSL, uids: list[bytes]) -> dict[str, byte
         batch_bytes += size
     flush()
     return out
+
+
+def newest_uids(uids: list[bytes], n: int) -> list[bytes]:
+    """最新的 n 个 UID。RFC 3501 不保证 SEARCH 结果有序 —— 先按数值排再切尾, 不能直接 uids[-n:]
+    (11/18: imap_sync 9/21 就这么改了, imap_mail 的搜索 / 直连列表两处漏了)。"""
+    return sorted(uids, key=int)[-n:] if n > 0 else []
