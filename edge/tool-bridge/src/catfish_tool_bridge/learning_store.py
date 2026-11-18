@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-PHASES = ("probe", "plan_review", "teach", "done")
+PHASES = ("probe", "plan_review", "teach", "done", "practice")
 MODES = ("quick", "deep")
 MAX_GOAL = 500
 
@@ -120,16 +120,25 @@ def delete(home: str | Path, sid: str) -> None:
 def public_view(meta: dict[str, Any], evs: list[dict[str, Any]], running: bool) -> dict[str, Any]:
     """给界面的: 没答的题剥掉标准答案和解析; 资料只给出处列表。"""
     pending = (meta.get("pending") or {}).get("qid")
+    problem = (meta.get("problem") or {}).get("pid")
     shown = []
     for ev in evs:
         if ev.get("kind") == "question" and ev.get("qid") == pending:
             q = {k: v for k, v in (ev.get("q") or {}).items() if k not in ("answer", "explanation")}
             ev = {**ev, "q": q}
+        if ev.get("kind") == "problem":
+            from .learning_practice import _ok  # noqa: PLC0415
+            if not _ok(ev.get("p")):
+                continue   # 残的一行不给界面 (界面按完整的题画)
+            if ev.get("pid") == problem:   # 练习题做完 (结束) 前不给看标准解法
+                ev = {**ev, "p": {k: v for k, v in ev["p"].items() if k != "solution"}}
         shown.append(ev)
     m = {k: v for k, v in meta.items() if k not in ("materials", "node_materials")}
     m["sources"] = (meta.get("materials") or {}).get("sources") or []
     last = evs[-1] if evs else None
     # 没在跑、没出错、最后一条是员工的 → 上次那一步没接上 (tool-bridge 重启过之类), 界面给「重试」
+    from .learning_practice import summary  # noqa: PLC0415
+    m["practice"] = summary(evs)
     m["stalled"] = bool(not running and not meta.get("last_error") and last and last.get("role") == "learner"
                         and meta.get("phase") != "done")
     return {"session": m, "events": shown, "running": running}

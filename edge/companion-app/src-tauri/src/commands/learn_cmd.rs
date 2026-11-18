@@ -73,3 +73,65 @@ pub async fn learn_retry(id: String) -> Result<Value, String> {
 pub async fn learn_delete(id: String) -> Result<Value, String> {
     call("learn/delete", json!({ "id": id }), false).await
 }
+
+// ── 第 2 步 (11/18): 练习 / 复习卡 / 复习 ──────────────────────────
+
+#[tauri::command]
+pub async fn learn_practice(id: String, next: Option<bool>) -> Result<Value, String> {
+    let method = if next.unwrap_or(false) { "learn/next" } else { "learn/practice" };
+    call(method, json!({ "id": id }), true).await
+}
+
+#[tauri::command]
+pub async fn learn_attempt(id: String, text: String, thinking: Option<String>) -> Result<Value, String> {
+    call("learn/attempt", json!({ "id": id, "text": text, "thinking": thinking.unwrap_or_default() }), true).await
+}
+
+/// action: hint (要提示) / give_up (不做了) / teach (回去接着学) / cards (做成复习卡)
+#[tauri::command]
+pub async fn learn_action(id: String, action: String) -> Result<Value, String> {
+    let method = match action.as_str() {
+        "hint" => "learn/hint",
+        "give_up" => "learn/give_up",
+        "teach" => "learn/teach",
+        "cards" => "learn/cards",
+        _ => return Err(format!("不认识的操作: {action}")),
+    };
+    call(method, json!({ "id": id }), action != "give_up").await
+}
+
+#[tauri::command]
+pub async fn learn_review_next(n: Option<u32>) -> Result<Value, String> {
+    call("learn/review_next", json!({ "n": n.unwrap_or(20) }), false).await
+}
+
+#[tauri::command]
+pub async fn learn_review_answer(qid: i64, user_answer: Option<String>, rating: Option<String>) -> Result<Value, String> {
+    call(
+        "learn/review_answer",
+        json!({ "qid": qid, "user_answer": user_answer.unwrap_or_default(), "rating": rating.unwrap_or_default() }),
+        false,
+    )
+    .await
+}
+
+/// 会议纪要「记住这几条」→ 复习卡 (tool-bridge meeting/minutes_cards, 调一次大模型, 同步等结果)。
+#[tauri::command]
+pub async fn meeting_minutes_cards(id: String) -> Result<Value, String> {
+    let home = store::home()?;
+    let token = oauth::ensure_fresh_access_token()
+        .await
+        .ok_or("没登录 (拿不到访问令牌), 登录后再做复习卡")?;
+    let params = json!({
+        "meeting_id": id,
+        "catfish_home": home.join(".catfish").display().to_string(),
+        "auth_token": token,
+        "gateway_url": endpoints::endpoints().gateway_base(),
+    });
+    tool_bridge_rpc::call_with_timeout("meeting/minutes_cards", params, CARDS_TIMEOUT)
+        .await
+        .map_err(|e| e.split_once("]: ").map(|(_, m)| m.to_string()).unwrap_or(e))
+}
+
+/// 做卡最多重交 3 次, 每次几十秒
+const CARDS_TIMEOUT: Duration = Duration::from_secs(600);

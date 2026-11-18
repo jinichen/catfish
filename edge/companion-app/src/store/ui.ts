@@ -66,6 +66,9 @@ interface UIState {
   /** 11/09 提醒条「去群里看」: 切到协同 → 群聊并打开这个群 (RoomsPanel 取走) */
   pendingRoomFocus: string | null;
   openRoom: (roomId: string) => void;
+  /** 11/18 早安「今天要复习 N 道」: 切到学习页并打开复习 (LearnTab 取走) */
+  pendingLearnReview: boolean;
+  openLearnReview: () => void;
   consumeTaskFocus: () => { taskId: string; role: "owner" | "recipient" } | null;
   setActiveTab: (tab: TabId) => void;
   toggleDarkMode: () => void;
@@ -170,6 +173,8 @@ export const useUIStore = create<UIState>((set, get) => ({
   openColleagueTask: (taskId, role) => set({ activeTab: "collab", collabView: "work", pendingTaskFocus: { taskId, role } }),
   pendingRoomFocus: null,
   openRoom: (roomId) => set({ activeTab: "collab", collabView: "rooms", pendingRoomFocus: roomId }),
+  pendingLearnReview: false,
+  openLearnReview: () => set({ activeTab: "learn", pendingLearnReview: true }),
   consumeTaskFocus: () => {
     const f = get().pendingTaskFocus;
     if (f) set({ pendingTaskFocus: null });

@@ -289,6 +289,9 @@ def render_transcript(evs: list[dict], limit: int = TRANSCRIPT_CHARS) -> str:
             lines.append("小鲶" + ("改了路线图" if ev.get("revised") else "给了路线图") + (f": {ev.get('approach')}" if ev.get("approach") else ""))
         elif k == "finish":
             lines.append(f"小鲶总结: {ev.get('summary', '')}")
+        elif k in ("problem", "attempt", "hint_request", "hint", "give_up", "conclude"):
+            from .learning_practice import render_lines  # noqa: PLC0415
+            lines.extend(render_lines(ev))
     text = "\n".join(lines)
     if len(text) > limit:
         # 留开头 (目标) 和后面最近的; 中间省略。长会话压缩在第 2 步做成摘要
@@ -323,7 +326,7 @@ def _materials_text(items: list[dict]) -> str:
 def build_messages(meta: dict, evs: list[dict], phase: str, materials: list[dict]) -> list[dict]:
     mode = P.TEACH_DEEP if meta.get("mode") == "deep" else P.TEACH_QUICK
     role, fmt = {"probe": (P.PROBE, P.FORMAT_PROBE), "plan": (P.PLAN, P.FORMAT_PLAN),
-                 "teach": (P.TEACH + "\n" + mode, P.FORMAT_TEACH)}[phase]
+                 "teach": (P.TEACH + "\n" + mode, P.FORMAT_TEACH), "practice": (P.PRACTICE, P.FORMAT_PRACTICE)}[phase]
     system = "\n\n".join([P.BASE, role, P.LEARNER_SIGNALS, P.QUESTION_CRAFT, fmt])
     a = meta.get("assessment")
     user = (f"员工想学: {meta['goal']}\n"
@@ -455,6 +458,10 @@ async def run_step(home: str, sid: str, llm_kw: dict) -> None:
     store.save(d, meta)
     evs = store.events(d)
     phase = meta["phase"]
+    if phase == "practice":
+        from . import learning_practice  # noqa: PLC0415
+        await learning_practice.step(d, meta, evs, llm_kw)
+        return
     if phase == "probe":
         mats = await _materials(d, meta, None, llm_kw)
 
@@ -533,9 +540,21 @@ async def run_step(home: str, sid: str, llm_kw: dict) -> None:
         store.append(d, {"role": "tutor", "kind": "finish", "summary": str((fin or {}).get("summary") or "")[:3000]})
         meta["phase"] = "done"
         meta["pending"] = None
+        store.save(d, meta)
+        await _auto_cards(home, sid, llm_kw)
+        meta = store.load(d)
     else:
         _post_question(d, meta, out["_q"])
     store.save(d, meta)
+
+
+async def _auto_cards(home: str, sid: str, llm_kw: dict) -> None:
+    """学完自动做复习卡 (第 2 步); 做不成不影响这一步, 员工可以在界面上点「做成复习卡」再来。"""
+    from . import learning_cards  # noqa: PLC0415
+    try:
+        await learning_cards.session_cards(home, sid, llm_kw)
+    except Exception as e:  # noqa: BLE001
+        logger.info("learning: %s 自动做复习卡失败: %s", sid, e)
 
 
 async def _plan_step(d: Path, meta: dict, evs: list[dict], mats: list[dict], llm_kw: dict, revised: bool) -> None:
@@ -570,7 +589,7 @@ def _view(home: str, sid: str) -> dict:
     return store.public_view(store.load(d), store.events(d), sid in _RUNNING)
 
 
-def _kick(home: str, sid: str, llm_kw: dict) -> None:
+def _kick(home: str, sid: str, llm_kw: dict, runner=None) -> None:
     if not llm_kw.get("auth_token"):
         raise RuntimeError("没登录 (拿不到访问令牌), 登录后再学")
     if not llm_kw.get("gateway_url"):
@@ -581,7 +600,7 @@ def _kick(home: str, sid: str, llm_kw: dict) -> None:
 
     async def go() -> None:
         try:
-            await run_step(home, sid, llm_kw)
+            await (runner or run_step)(home, sid, llm_kw)
         except Exception as e:  # noqa: BLE001 —— 任何失败都记下来给界面, 员工的输入已经存了
             logger.warning("learning: %s 这一步失败: %s", sid, e)
             try:
@@ -607,6 +626,9 @@ async def handle(method: str, params: dict) -> dict:
     home, llm_kw = _ctx(params)
     if method == "learn/list":
         return {"sessions": store.list_all(home)}
+    if method.startswith("learn/review_"):
+        from . import learning_cards  # noqa: PLC0415
+        return learning_cards.review(method, params, home)
     if method == "learn/create":
         meta = store.create(home, str(params.get("goal") or ""), str(params.get("mode") or "quick"))
         _kick(home, meta["id"], llm_kw)
@@ -683,6 +705,64 @@ async def handle(method: str, params: dict) -> dict:
         store.append(d, {"role": "learner", "kind": "say", "text": text})
         store.save(d, meta)
         _kick(home, sid, llm_kw)
+        return _view(home, sid)
+    if method in ("learn/practice", "learn/next"):
+        if not meta.get("plan"):
+            raise ValueError("先学完摸底、有了路线图再练")
+        from . import learning_practice as lp  # noqa: PLC0415
+        if lp.active(meta):
+            raise ValueError("这道题还没做完 (可以交答案、要提示或者点「不做了」)")
+        if method == "learn/practice" and meta["phase"] != "practice":
+            meta["practice_from"] = meta["phase"]
+            meta["pending"] = None
+            store.append(d, {"role": "learner", "kind": "say", "text": "开始练习"})
+        meta["phase"] = "practice"
+        store.save(d, meta)
+        _kick(home, sid, llm_kw)
+        return _view(home, sid)
+    if method in ("learn/attempt", "learn/hint", "learn/give_up"):
+        from . import learning_practice as lp  # noqa: PLC0415
+        pid = lp.active(meta)
+        if meta["phase"] != "practice" or not pid:
+            raise ValueError("现在没有在做的练习题")
+        if method == "learn/give_up":
+            lp.give_up(d, meta)
+            return _view(home, sid)
+        if method == "learn/hint":
+            if lp.last_rung(store.events(d), pid) >= len(lp.RUNGS):
+                raise ValueError("提示已经给到最后一级了, 可以点「不做了」看标准解法")
+            store.append(d, {"role": "learner", "kind": "hint_request", "pid": pid})
+        else:
+            text = str(params.get("text") or "").strip()[:4000]
+            if not text:
+                raise ValueError("写一下你的答案 (卡住了可以要提示)")
+            ev: dict[str, Any] = {"role": "learner", "kind": "attempt", "pid": pid, "text": text}
+            thinking = str(params.get("thinking") or "").strip()[:3000]
+            if thinking:
+                ev["thinking"] = thinking
+            store.append(d, ev)
+        _kick(home, sid, llm_kw)
+        return _view(home, sid)
+    if method == "learn/teach":
+        if meta["phase"] != "practice":
+            raise ValueError("现在不在练习")
+        from . import learning_practice as lp  # noqa: PLC0415
+        if lp.active(meta):
+            lp.give_up(d, meta)
+            meta = store.load(d)
+        meta["phase"] = "teach" if meta.get("practice_from") != "done" else "done"
+        store.append(d, {"role": "learner", "kind": "say", "text": "回去接着学"})
+        store.save(d, meta)
+        if meta["phase"] == "done":
+            return _view(home, sid)
+        _kick(home, sid, llm_kw)
+        return _view(home, sid)
+    if method == "learn/cards":
+        from . import learning_cards  # noqa: PLC0415
+
+        async def cards(h: str, s_: str, kw: dict) -> None:
+            await learning_cards.session_cards(h, s_, kw)
+        _kick(home, sid, llm_kw, runner=cards)
         return _view(home, sid)
     if method == "learn/retry":
         if meta.get("pending"):

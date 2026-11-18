@@ -22,6 +22,7 @@
 import { useEffect, useState } from "react";
 
 import { Markdown } from "../../lib/markdown";
+import { meetingMinutesCards } from "../../lib/tauri_learn";
 import { fetchCatalog, toolBridgeCallTool } from "../../lib/tauri_services";
 import {
   DEFAULT_TEMPLATE_ID, meetingMinutes, meetingMinutesGenerate, meetingMinutesOpenFile, meetingTemplatesList, referencesNote,
@@ -48,6 +49,20 @@ export default function MinutesView({ meta, names = {} }: { meta: MeetingMeta; n
   const [generating, setGenerating] = useState(false);
   const [checked, setChecked] = useState<Record<number, boolean>>({});
   const [note, setNote] = useState<string | null>(null);
+  // 11/18「记住这几条」: 纪要里的决议 / 待办 / 摘要做成复习卡 (学习页「复习」里按遗忘规律复习; docs/LEARNING-PLAN.md §5)
+  const [carding, setCarding] = useState(false);
+  const makeCards = async () => {
+    setCarding(true);
+    setError(null);
+    try {
+      const r = await meetingMinutesCards(meta.id);
+      setNote(r.added ? `做了 ${r.added} 张复习卡, 明天开始在「学习 → 复习」里复习` : "这些要点已经有复习卡了");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCarding(false);
+    }
+  };
   const [error, setError] = useState<string | null>(null);
   const [templates, setTemplates] = useState<MinutesTemplate[]>([]);
   const [templateId, setTemplateId] = useState(DEFAULT_TEMPLATE_ID);
@@ -300,6 +315,7 @@ export default function MinutesView({ meta, names = {} }: { meta: MeetingMeta; n
             </Btn>
           )}
           <Btn kind="ghost" onClick={() => void saveWiki()}>存进知识库</Btn>
+          <Btn kind="ghost" disabled={carding} onClick={() => void makeCards()}>{carding ? "小鲶在做复习卡…" : "🔁 记住这几条"}</Btn>
           <Btn kind="ghost" onClick={() => { setNote(null); setEditing(true); }}>编辑</Btn>
           <MinutesShare meta={meta} markdown={minutes.markdown} onNote={(t) => { setError(null); setNote(t); }} onError={setError} />
           {note && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ {note}</span>}

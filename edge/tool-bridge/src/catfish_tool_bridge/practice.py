@@ -8,7 +8,12 @@
 
 数据全在员工本机 `~/.catfish/practice.db`, 不出这台电脑。
 
-# 复习怎么排 (跟 DeepTutor 一样, SM-2 风格的冷启动规则, 不训练个人遗忘曲线)
+# 复习怎么排
+
+11/18 起换成 FSRS (fsrs.py, Anki 新版同款; 学习方案第 2 步): 每张卡记难度 / 稳定性, 排在「想得起来的概率掉到 90%」那天。
+老库第一次打开时, 按 review_events 把每道错题的作答记录用 FSRS 重放一遍, 接着排 (_migrate_fsrs)。
+学习 (learning.py) 学完自动做的复习卡、会议纪要「记住这几条」做的卡: 入库就进复习 (第二天到期), 不用先答错。
+interval / ease 两列照旧写 (老版本 Companion 读数)。下面是原来 SM-2 的规则 (11/18 前), 留作历史:
 
     反馈        下次
     again       约 1 天后, 记忆系数降 0.2           (客观题答错只能是 again)
@@ -43,7 +48,6 @@ RATINGS = ("again", "hard", "good", "easy")
 DAY = 86400.0
 DEFAULT_EASE = 2.5
 MIN_EASE = 1.3
-MAX_INTERVAL = 365.0
 MAX_IMPORT = 500
 
 _QTYPE_ALIASES = {
@@ -90,6 +94,15 @@ def db_path() -> Path:
     return home / "practice.db"
 
 
+_ADD_COLUMNS = (
+    ("questions", "point", "TEXT NOT NULL DEFAULT ''"),      # 这张卡练的是哪条要点 (学习 / 纪要做的卡)
+    ("questions", "origin", "TEXT NOT NULL DEFAULT ''"),     # learn:<学习编号> / meeting:<会议编号>
+    ("review_state", "stability", "REAL"),
+    ("review_state", "difficulty", "REAL"),
+    ("review_state", "state", "TEXT"),                       # NULL = 老 SM-2 行, 还没迁; new / review / relearning
+)
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
     p = path or db_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -97,7 +110,32 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript(_SCHEMA)
+    for table, col, decl in _ADD_COLUMNS:
+        cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    _migrate_fsrs(con)
     return con
+
+
+def _migrate_fsrs(con: sqlite3.Connection) -> None:
+    """老 SM-2 复习行 (state 为空) → 按作答记录用 FSRS 重放一遍。没有记录的按原来的间隔估一个稳定性。"""
+    from . import fsrs  # noqa: PLC0415
+    rows = con.execute("SELECT * FROM review_state WHERE state IS NULL").fetchall()
+    for row in rows:
+        evs = con.execute("SELECT ts, rating FROM review_events WHERE question_id = ? AND ts >= ? ORDER BY ts",
+                          (row["question_id"], row["first_wrong"] - 1)).fetchall()
+        st: dict | None = None
+        for ev in evs:
+            if ev["rating"] in fsrs.RATINGS:
+                st = fsrs.review(st, ev["rating"], ev["ts"])
+        if st is None:
+            st = {"stability": max(0.5, float(row["interval"])), "difficulty": 5.0, "state": "review", "due": row["due"]}
+        con.execute("UPDATE review_state SET stability = ?, difficulty = ?, state = ?, due = ? WHERE question_id = ?",
+                    (st["stability"], st["difficulty"], st["state"], max(st["due"], row["due"]) if evs else row["due"],
+                     row["question_id"]))
+    if rows:
+        con.commit()
 
 
 # ── 题 ────────────────────────────────────────────────────
@@ -266,26 +304,6 @@ def grade(qtype: str, answer: str, user_answer: Any) -> bool | None:
     return got == answer
 
 
-def schedule(state: dict[str, Any] | None, rating: str, now: float) -> dict[str, Any]:
-    """一次反馈 → 新的复习进度 (纯函数)。state 为 None = 刚成错题。"""
-    s = dict(state or {"interval": 0.0, "ease": DEFAULT_EASE, "reps": 0, "lapses": 0, "first_wrong": now})
-    iv, ease, reps = float(s["interval"]), float(s["ease"]), int(s["reps"])
-    if rating == "again":
-        iv, ease, reps = 1.0, max(MIN_EASE, ease - 0.2), 0
-        s["lapses"] = int(s["lapses"]) + (1 if state else 0)
-    elif rating == "hard":
-        iv, ease, reps = max(1.0, iv * 1.2), max(MIN_EASE, ease - 0.15), reps + 1
-    elif rating == "good":
-        iv, reps = (3.0 if reps == 0 else iv * ease), reps + 1
-    elif rating == "easy":
-        iv, ease, reps = (4.0 if reps == 0 else iv * ease * 1.3), ease + 0.15, reps + 1
-    else:
-        raise ValueError(f"rating 只能是 {RATINGS}")
-    iv = min(MAX_INTERVAL, iv)
-    s.update(interval=round(iv, 3), ease=round(ease, 3), reps=reps, due=now + iv * DAY, last_review=now)
-    return s
-
-
 def _public(row: sqlite3.Row, with_answer: bool = False) -> dict[str, Any]:
     q = {"id": row["id"], "type": row["qtype"], "question": row["stem"],
          "options": json.loads(row["options"]), "tags": json.loads(row["tags"])}
@@ -316,6 +334,64 @@ def next_questions(con: sqlite3.Connection, n: int = 5, mode: str = "review", ta
     return [_public(r) for r in rows]
 
 
+def _fsrs_step(state: dict[str, Any] | None, rating: str, now: float) -> dict[str, Any]:
+    """FSRS 排一次; 间隔跟界面按钮上写的一致 (fsrs.ordered_interval)。ease 列照旧写 (老版本 Companion 读)。"""
+    from . import fsrs  # noqa: PLC0415
+    card = None
+    if state and state.get("state") not in (None, "new"):
+        card = {k: state.get(k) for k in ("stability", "difficulty", "reps", "lapses", "last_review")}
+    elif state:
+        card = {"reps": state.get("reps"), "lapses": state.get("lapses")}
+    st = fsrs.review(card, rating, now)
+    if rating != "again":
+        st["interval"] = fsrs.ordered_interval(card, rating, now)
+        st["due"] = now + st["interval"] * DAY
+    st["ease"] = round(max(MIN_EASE, 3.0 - st["difficulty"] / 5), 3)
+    return st
+
+
+def review_preview(con: sqlite3.Connection, qid: int, now: float | None = None) -> dict[str, str]:
+    """四个按钮各排到哪天 (「10 分钟」「4 天」…)。"""
+    from . import fsrs  # noqa: PLC0415
+    now = now or time.time()
+    row = con.execute("SELECT * FROM review_state WHERE question_id = ?", (int(qid),)).fetchone()
+    card = None
+    if row and row["state"] not in (None, "new"):
+        card = {k: row[k] for k in ("stability", "difficulty", "reps", "lapses", "last_review")}
+    return fsrs.preview(card, now)
+
+
+def add_cards(con: sqlite3.Connection, cards: list[dict[str, Any]], origin: str, tags: list[str],
+              now: float | None = None) -> dict[str, Any]:
+    """学习 / 纪要做的复习卡 {point, question, answer}: 当简答题入库, 直接进复习 (明天到期)。同一题干不重复入库。"""
+    now = now or time.time()
+    added, skipped = [], 0
+    for c in cards[:MAX_IMPORT]:
+        q, a = str(c.get("question") or "").strip(), str(c.get("answer") or "").strip()
+        if not q or not a:
+            skipped += 1
+            continue
+        key = json.dumps(["card", q], ensure_ascii=False)
+        if con.execute("SELECT 1 FROM questions WHERE dedup_key = ? OR (stem = ? AND origin != '')", (key, q)).fetchone():
+            skipped += 1
+            continue
+        cur = con.execute(
+            "INSERT INTO questions (qtype, stem, options, answer, explanation, tags, source, dedup_key, created_at, point, origin)"
+            " VALUES ('short_answer', ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?)",
+            (q[:1000], a[:2000], str(c.get("point") or "")[:500], json.dumps(tags[:10], ensure_ascii=False),
+             str(c.get("source") or origin)[:200], key, now, str(c.get("point") or "")[:500], origin[:200]))
+        qid = cur.lastrowid
+        con.execute("INSERT INTO review_state (question_id, due, interval, ease, reps, lapses, first_wrong, last_review, state)"
+                    " VALUES (?, ?, 0, ?, 0, 0, ?, NULL, 'new')", (qid, _start_of_tomorrow(now), DEFAULT_EASE, now))
+        added.append(qid)
+    con.commit()
+    return {"added": len(added), "skipped": skipped, "ids": added}
+
+
+def _start_of_tomorrow(now: float) -> float:
+    return _end_of_today(now) + 1
+
+
 def answer(con: sqlite3.Connection, qid: int, user_answer: Any = None, rating: str = "",
            now: float | None = None) -> dict[str, Any]:
     """作答: 客观题这里判 (答错只能 again); 主观题要带员工自评 rating。返回对错 + 参考答案 + 解析 + 下次复习时间。"""
@@ -334,17 +410,20 @@ def answer(con: sqlite3.Connection, qid: int, user_answer: Any = None, rating: s
                 "hint": "主观题: 把参考答案给员工看, 问他自己觉得答得怎样 (again/hard/good/easy) 再调一次 answer"}
     state_row = con.execute("SELECT * FROM review_state WHERE question_id = ?", (row["id"],)).fetchone()
     in_review = state_row is not None
-    if not in_review and rating == "again":
-        st = schedule(None, "again", now)
-        con.execute("INSERT INTO review_state (question_id, due, interval, ease, reps, lapses, first_wrong, last_review)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (row["id"], st["due"], st["interval"], st["ease"], st["reps"], st["lapses"], now, now))
-        con.execute("UPDATE questions SET mastered = 0 WHERE id = ?", (row["id"],))
-    elif in_review:
-        st = schedule(dict(state_row), rating, now)
-        con.execute("UPDATE review_state SET due = ?, interval = ?, ease = ?, reps = ?, lapses = ?, last_review = ?"
-                    " WHERE question_id = ?",
-                    (st["due"], st["interval"], st["ease"], st["reps"], st["lapses"], now, row["id"]))
+    if in_review or rating == "again":
+        st = _fsrs_step(dict(state_row) if in_review else None, rating, now)
+        if not in_review:   # 刚答错进错题: 跟原来一样明天复习 (复习时再忘才是 10 分钟后再来)
+            st["due"], st["interval"] = _start_of_tomorrow(now), 1.0
+        if in_review:
+            con.execute("UPDATE review_state SET due = ?, interval = ?, ease = ?, reps = ?, lapses = ?, last_review = ?,"
+                        " stability = ?, difficulty = ?, state = ? WHERE question_id = ?",
+                        (st["due"], st["interval"], st["ease"], st["reps"], st["lapses"], now, st["stability"],
+                         st["difficulty"], st["state"], row["id"]))
+        else:
+            con.execute("INSERT INTO review_state (question_id, due, interval, ease, reps, lapses, first_wrong, last_review,"
+                        " stability, difficulty, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (row["id"], st["due"], st["interval"], st["ease"], st["reps"], st["lapses"], now, now,
+                         st["stability"], st["difficulty"], st["state"]))
         if rating == "again":
             con.execute("UPDATE questions SET mastered = 0 WHERE id = ?", (row["id"],))
     else:
@@ -355,7 +434,7 @@ def answer(con: sqlite3.Connection, qid: int, user_answer: Any = None, rating: s
     con.commit()
     out = {**_public(row, with_answer=True), "correct": correct, "rating": rating}
     if st:
-        out["next_review"] = time.strftime("%Y-%m-%d", time.localtime(st["due"]))
+        out["next_review"] = time.strftime("%Y-%m-%d %H:%M" if st["interval"] < 1 else "%Y-%m-%d", time.localtime(st["due"]))
         out["interval_days"] = st["interval"]
     return out
 

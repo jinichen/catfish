@@ -50,23 +50,6 @@ def test_不合法的题说清楚_不影响别的题(con):
     assert "不在选项" in r["errors"][1]["error"]
 
 
-def test_排期_跟DeepTutor同一套规则():
-    s = P.schedule(None, "again", NOW)
-    assert (s["interval"], s["reps"]) == (1.0, 0) and s["due"] == NOW + DAY
-    s = P.schedule(s, "good", NOW)
-    assert s["interval"] == 3.0                    # 忘过之后第一次记住: 3 天
-    s2 = P.schedule(s, "good", NOW)
-    assert s2["interval"] == pytest.approx(3.0 * s["ease"])
-    h = P.schedule(s, "hard", NOW)
-    assert h["interval"] == pytest.approx(3.6) and h["ease"] < s["ease"]
-    e = P.schedule(s, "easy", NOW)
-    assert e["interval"] > s2["interval"] and e["ease"] > s["ease"]
-    big = P.schedule({**s, "interval": 300.0, "reps": 5}, "easy", NOW)
-    assert big["interval"] == 365.0               # 最长一年
-    lapse = P.schedule(s2, "again", NOW)
-    assert lapse["lapses"] == 1 and lapse["interval"] == 1.0
-
-
 def test_客观题判分_答错进错题_次日复习(con):
     P.add_questions(con, QS, now=NOW)
     qid = con.execute("SELECT id FROM questions WHERE qtype='single_choice'").fetchone()[0]
@@ -77,7 +60,7 @@ def test_客观题判分_答错进错题_次日复习(con):
     due = P.next_questions(con, mode="review", now=NOW + DAY)
     assert [q["id"] for q in due] == [qid] and "answer" not in due[0]  # 出题时不带答案
     r2 = P.answer(con, qid, "a", now=NOW + DAY)                         # 大小写不计
-    assert r2["correct"] is True and r2["interval_days"] == 3.0
+    assert r2["correct"] is True and r2["interval_days"] >= 1 and "next_review" in r2   # 11/18 起 FSRS 排
     assert P.stats(con, now=NOW + DAY)["due_today"] == 0
 
 

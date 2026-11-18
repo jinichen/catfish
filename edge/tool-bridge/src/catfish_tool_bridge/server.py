@@ -97,6 +97,15 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
             return _error(req_id, INVALID_PARAMS, str(e))
         except RuntimeError as e:
             return _error(req_id, INTERNAL_ERROR, str(e))
+    # 11/18 会议纪要「记住这几条」→ 复习卡 (learning_cards.py), 调一次大模型
+    if method == "meeting/minutes_cards":
+        from . import learning_cards  # noqa: PLC0415
+        try:
+            return _success(req_id, await learning_cards.meeting_cards(params))
+        except (ValueError, OSError) as e:
+            return _error(req_id, INVALID_PARAMS, str(e))
+        except RuntimeError as e:
+            return _error(req_id, INTERNAL_ERROR, str(e))
     # 11/18 小鲶学习 (learning.py, docs/LEARNING-PLAN.md): 写入后立即返回, 模型在后台跑, 界面轮询 learn/get
     if method.startswith("learn/"):
         from . import learning  # noqa: PLC0415

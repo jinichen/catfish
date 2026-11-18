@@ -9,6 +9,9 @@ import { Markdown } from "../../lib/markdown";
 import type { LearnAnswer, LearnEvent, LearnQuestion } from "../../lib/tauri_learn";
 import { inputStyle } from "../Collab/roomLinkUi";
 
+/** 题目里单个换行照原样换行 —— 模型常把 a) b) c) 选项用单个换行分开写在题干里, Markdown 会把它们挤成一段 (11/18 渲染时看到) */
+export const hardBreaks = (t: string) => t.replace(/([^\n])\n(?!\n)/g, "$1  \n");
+
 type AnswerEv = Extract<LearnEvent, { kind: "answer" }>;
 type GradeEv = Extract<LearnEvent, { kind: "grade" }>;
 
@@ -54,7 +57,7 @@ export function OpenQuestion({ qid, q, disabled, onSubmit }: {
   return (
     <div style={{ ...box, borderColor: "var(--catfish-cyan)" }} aria-label="当前的题">
       <span style={muted}>{ROLE_LABEL[q.role]}{q.multi ? " · 多选" : ""}</span>
-      <Markdown text={q.question} />
+      <Markdown text={hardBreaks(q.question)} />
       {(q.options ?? []).map((o) => (
         <label key={o.value} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", fontSize: 13 }}>
           <input type={q.multi ? "checkbox" : "radio"} name={qid} checked={d.picked.includes(o.value)} disabled={disabled}
@@ -94,7 +97,7 @@ export function AnsweredQuestion({ q, answer, grade }: { q: LearnQuestion; answe
   return (
     <div style={box}>
       <span style={muted}>{ROLE_LABEL[q.role]}{answer?.skipped ? " · 没答" : ""}</span>
-      <Markdown text={q.question} />
+      <Markdown text={hardBreaks(q.question)} />
       {(q.options ?? []).map((o) => {
         const picked = answer?.picked?.includes(o.value);
         const right = correct.has(o.value);

@@ -4,13 +4,16 @@
  */
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
-import { learnCreate, learnList, PHASE_LABEL, type LearnMode, type LearnSummary } from "../../lib/tauri_learn";
+import { learnCreate, learnList, learnReviewNext, PHASE_LABEL, type LearnMode, type LearnSummary } from "../../lib/tauri_learn";
+import { useUIStore } from "../../store/ui";
 import { cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import { COL_CARD } from "../Meeting/meetingHelpers";
 import LearnSession from "./LearnSession";
+import ReviewPanel from "./ReviewPanel";
 import { primaryBtn } from "./QuestionCard";
 
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
+const REVIEW = "__review__";
 const EXAMPLES = ["准备 CCRC 应急处理二级的答辩", "弄懂 ITSS 二级要提交哪些材料、为什么", "公司的差旅报销规定"];
 
 function NewLearning({ onCreated }: { onCreated: (id: string) => void }) {
@@ -67,12 +70,23 @@ export default function LearnTab() {
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [due, setDue] = useState<{ due: number; total: number } | null>(null);
+  const pendingReview = useUIStore((s) => s.pendingLearnReview);
+  const refreshDue = useCallback(() => {
+    learnReviewNext(1).then((r) => setDue({ due: r.stats.due_today, total: r.stats.total })).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    if (!pendingReview) return;
+    useUIStore.setState({ pendingLearnReview: false });
+    setSelected(REVIEW);
+  }, [pendingReview]);
   const refresh = useCallback(async (selectId?: string | null) => {
+    refreshDue();
     try {
       const l = await learnList();
       setList(l);
       setError(null);
-      setSelected((cur) => (selectId !== undefined ? selectId : cur && l.some((x) => x.id === cur) ? cur : l[0]?.id ?? null));
+      setSelected((cur) => (selectId !== undefined ? selectId : cur === REVIEW || (cur && l.some((x) => x.id === cur)) ? cur : l[0]?.id ?? null));
     } catch (e) {
       setError(String(e));
     }
@@ -85,6 +99,12 @@ export default function LearnTab() {
       <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 340px) minmax(0, 1fr)", gap: "var(--space-4)", height: "100%" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", minHeight: 0, overflowY: "auto", paddingBottom: "var(--space-4)" }}>
           <NewLearning onCreated={(id) => void refresh(id)} />
+          <button type="button" onClick={() => setSelected(REVIEW)} aria-label="去复习"
+            style={{ ...cardStyle, ...COL_CARD, cursor: "pointer", textAlign: "left", fontFamily: "inherit", color: "var(--catfish-text)",
+              borderColor: selected === REVIEW ? "var(--catfish-cyan)" : "var(--catfish-border)", gap: 4 }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>🔁 复习</div>
+            <div style={muted}>{due === null ? "…" : due.due ? `今天要复习 ${due.due} 条` : due.total ? "今天没有要复习的" : "还没有复习卡 (学完会自动做)"}</div>
+          </button>
           <div style={{ ...cardStyle, ...COL_CARD, gap: "var(--space-1)" }}>
             <div style={{ fontWeight: 600, fontSize: 13 }}>我的学习</div>
             {list.length === 0 && <div style={muted}>还没有</div>}
@@ -101,7 +121,8 @@ export default function LearnTab() {
           </div>
         </div>
         <div style={{ minHeight: 0, overflowY: "auto", paddingBottom: "var(--space-4)" }}>
-          {selected ? <LearnSession key={selected} id={selected} onChanged={changed} />
+          {selected === REVIEW ? <ReviewPanel onChanged={refreshDue} />
+            : selected ? <LearnSession key={selected} id={selected} onChanged={changed} />
             : <div style={{ ...cardStyle, ...muted }}>左边写一句想学会什么, 小鲶先问几道题摸摸底, 再给你排一条学习路线。</div>}
         </div>
       </div>

@@ -20,6 +20,11 @@ vi.mock("../../lib/tauri_meeting", async (orig) => ({
   meetingMinutesRevise: api.revise,
   meetingMinutesSave: api.save,
 }));
+const cards = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/tauri_learn", async (orig) => ({
+  ...(await orig<typeof import("../../lib/tauri_learn")>()),
+  meetingMinutesCards: cards,
+}));
 vi.mock("../../lib/tauri_services", () => ({
   toolBridgeCallTool: vi.fn(async () => ({ ok: true, result: { ok: true } })),
   fetchCatalog: vi.fn(async () => ({ models: [{ id: "catfish-public-qwen-flash", display_name: "qwen3.8-flash（公有云）" }] })),
@@ -295,3 +300,17 @@ describe("让小鲶改: 切走再回来不丢 (11/18)", () => {
   });
 });
 
+
+
+describe("记住这几条 (11/18)", () => {
+  it("纪要做成复习卡, 告诉员工去哪复习; 都有了也说清楚", async () => {
+    api.minutes = { json: { ...base, decisions: ["一个月内交整改方案"] }, markdown: "# 周会", path: "/x" };
+    cards.mockResolvedValueOnce({ added: 3, skipped: 0 }).mockResolvedValueOnce({ added: 0, skipped: 3 });
+    await mount();
+    await act(async () => { fireEvent.click(screen.getByText("🔁 记住这几条")); });
+    expect(cards).toHaveBeenCalledWith("mtg_1");
+    expect(screen.getByText(/做了 3 张复习卡, 明天开始在「学习 → 复习」里复习/)).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByText("🔁 记住这几条")); });
+    expect(screen.getByText(/这些要点已经有复习卡了/)).toBeTruthy();
+  });
+});

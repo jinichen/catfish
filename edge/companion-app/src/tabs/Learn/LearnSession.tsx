@@ -7,11 +7,12 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { AskSources } from "../../components/AskSources";
 import { Markdown } from "../../lib/markdown";
 import {
-  learnAnswer, learnDelete, learnGet, learnRetry, learnSay, PHASE_LABEL,
+  learnAction, learnAnswer, learnAttempt, learnDelete, learnGet, learnPractice, learnRetry, learnSay, PHASE_LABEL,
   type LearnAnswer, type LearnEvent, type LearnView,
 } from "../../lib/tauri_learn";
 import { cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import PlanMap from "./PlanMap";
+import { AttemptBox, PracticeEvent, PracticeSummaryLine, ProblemView } from "./PracticeParts";
 import { AnsweredQuestion, ghostBtn, OpenQuestion, primaryBtn } from "./QuestionCard";
 
 const POLL_MS = 1500;
@@ -67,8 +68,15 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
     putSay("");
     void act(() => learnSay(id, t, start));
   };
+  // 删除点两下: Tauri WebView 里 window.confirm() 静默返回 null (CronJobsCard 7/6 记过), 跟会议删除同一个做法
+  const [confirmDel, setConfirmDel] = useState(false);
+  useEffect(() => {
+    if (!confirmDel) return;
+    const t = window.setTimeout(() => setConfirmDel(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [confirmDel]);
   const remove = async () => {
-    if (!window.confirm("删掉这个学习? 讲解、做过的题都会删掉, 找不回来。")) return;
+    if (!confirmDel) { setConfirmDel(true); return; }
     try {
       await learnDelete(id);
       onChanged(true);
@@ -84,6 +92,11 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
   const grades = new Map(evs.filter((e): e is Ev<"grade"> => e.kind === "grade").map((e) => [e.qid, e]));
   const lastPlan = [...evs].reverse().find((e) => e.kind === "plan")?.id;
   const busy = running || sending;
+  const taught = !!s.plan && s.phase !== "probe" && evs.some((e) => e.kind === "say" && e.role === "tutor");
+  const concludes = new Map(evs.filter((e): e is Ev<"conclude"> => e.kind === "conclude").map((e) => [e.pid, e]));
+  const titles = new Map((s.plan?.nodes ?? []).map((n) => [n.id, n.title]));
+  const activePid = s.problem?.pid ?? null;
+  const hintsUsed = activePid ? evs.filter((e) => e.kind === "hint" && e.pid === activePid).length : 0;
 
   return (
     <div style={{ ...cardStyle, height: "auto", gap: "var(--space-3)" }}>
@@ -92,8 +105,24 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
           <div style={{ fontSize: 16, fontWeight: 600 }}>{s.goal}</div>
           <div style={muted}>{PHASE_LABEL[s.phase]} · {s.mode === "deep" ? "深入" : "快速"}
             {s.plan ? ` · 路线图 ${s.visited?.length ?? 0}/${s.plan.nodes.length}` : ""}</div>
+          <PracticeSummaryLine p={s.practice} />
         </div>
-        <button type="button" style={ghostBtn} onClick={() => void remove()} disabled={running}>删除</button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {s.plan && s.phase !== "practice" && s.phase !== "probe" && s.phase !== "plan_review" && (
+            <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnPractice(id))}>✍️ 去练习</button>
+          )}
+          {s.phase === "practice" && (
+            <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnAction(id, "teach"))}>回去接着学</button>
+          )}
+          {taught && (
+            <button type="button" style={ghostBtn} disabled={busy} title="把讲过的要点做成复习卡, 明天开始按遗忘规律复习"
+              onClick={() => void act(() => learnAction(id, "cards"))}>🔁 做成复习卡{s.cards ? ` (已有 ${s.cards})` : ""}</button>
+          )}
+          <button type="button" style={{ ...ghostBtn, ...(confirmDel ? { color: "var(--status-err)", borderColor: "var(--status-err)" } : null) }}
+            title="讲解、做过的题都会删掉 (已经做成的复习卡留着)" onClick={() => void remove()} disabled={running}>
+            {confirmDel ? "再点一次确认删除" : "删除"}
+          </button>
+        </div>
       </div>
       {s.plan && (
         <details open style={{ fontSize: 13 }}>
@@ -153,10 +182,26 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
                   <div style={muted}>还想接着学, 在下面说就行。</div>
                 </div>
               );
+            case "problem":
+              return <ProblemView key={ev.id} ev={ev} conclude={concludes.get(ev.pid)} titles={titles} />;
+            case "attempt": case "hint_request": case "hint": case "give_up": case "cards":
+              return <PracticeEvent key={ev.id} ev={ev} />;
             default:
               return null;
           }
         })}
+        {s.phase === "practice" && activePid && (
+          <AttemptBox key={activePid} pid={activePid} disabled={busy} hintsUsed={hintsUsed}
+            onAttempt={(t, th) => void act(() => learnAttempt(id, t, th || undefined))}
+            onHint={() => void act(() => learnAction(id, "hint"))}
+            onGiveUp={() => void act(() => learnAction(id, "give_up"))} />
+        )}
+        {s.phase === "practice" && !activePid && !busy && !s.last_error && !s.stalled && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button type="button" style={primaryBtn(false)} onClick={() => void act(() => learnPractice(id, true))}>下一题</button>
+            <span style={muted}>做完一题先停一下, 想清楚了再来下一题</span>
+          </div>
+        )}
         {(() => {
           const pend = s.pending && evs.find((e): e is Ev<"question"> => e.kind === "question" && e.qid === s.pending?.qid);
           return pend ? (
