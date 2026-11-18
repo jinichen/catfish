@@ -150,3 +150,18 @@ pub async fn learn_graph(action: String, params: Option<Value>) -> Result<Value,
     };
     call(method, params.unwrap_or_else(|| json!({})), action == "import").await
 }
+
+// ── 第 4 步 (11/18): 答辩陪练 ──────────────────────────────────
+
+/// action: start (开始 / 接着) / answer ({text, secs}) / skip / next
+#[tauri::command]
+pub async fn learn_drill(id: String, action: String, text: Option<String>, secs: Option<f64>) -> Result<Value, String> {
+    let method = match action.as_str() {
+        "start" => "learn/drill",
+        "answer" => "learn/drill_answer",
+        "skip" => "learn/drill_skip",
+        "next" => "learn/drill_next",
+        _ => return Err(format!("不认识的操作: {action}")),
+    };
+    call(method, json!({ "id": id, "text": text.unwrap_or_default(), "secs": secs }), action == "start" || action == "answer").await
+}

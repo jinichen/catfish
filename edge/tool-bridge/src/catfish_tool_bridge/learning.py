@@ -269,6 +269,10 @@ async def run_step(home: str, sid: str, llm_kw: dict) -> None:
         from . import learning_practice  # noqa: PLC0415
         await learning_practice.step(d, meta, evs, llm_kw)
         return
+    if phase == "drill":
+        from . import learning_drill  # noqa: PLC0415
+        await learning_drill.step(d, meta, evs, llm_kw)
+        return
     if phase == "probe":
         mats = await _materials(d, meta, None, llm_kw)
 
@@ -519,6 +523,8 @@ async def handle(method: str, params: dict) -> dict:
         _kick(home, sid, llm_kw)
         return _view(home, sid)
     if method == "learn/say":
+        if meta["phase"] == "drill":
+            raise ValueError("答辩陪练时直接回答评审的问题 (可以🎤口头回答); 想跟小鲶学, 先点「回去接着学」")
         text = str(params.get("text") or "").strip()[:3000]
         start = bool(params.get("start"))
         if start:
@@ -574,18 +580,58 @@ async def handle(method: str, params: dict) -> dict:
         _kick(home, sid, llm_kw)
         return _view(home, sid)
     if method == "learn/teach":
-        if meta["phase"] != "practice":
-            raise ValueError("现在不在练习")
+        if meta["phase"] not in ("practice", "drill"):
+            raise ValueError("现在不在练习 / 答辩陪练")
         from . import learning_practice as lp  # noqa: PLC0415
-        if lp.active(meta):
+        if meta["phase"] == "practice" and lp.active(meta):
             lp.give_up(d, meta)
             meta = store.load(d)
-        meta["phase"] = "teach" if meta.get("practice_from") != "done" else "done"
+        came = meta.get("practice_from") if meta["phase"] == "practice" else meta.get("drill_from")
+        if not meta.get("plan"):   # 直接开的答辩陪练没有路线图: 回去从摸底开始学
+            meta["phase"] = "probe"
+        else:
+            meta["phase"] = "done" if came == "done" else "teach"
         store.append(d, {"role": "learner", "kind": "say", "text": "回去接着学"})
         store.save(d, meta)
         if meta["phase"] == "done":
             return _view(home, sid)
         _kick(home, sid, llm_kw)
+        return _view(home, sid)
+    if method.startswith("learn/drill"):
+        from . import learning_drill as dr  # noqa: PLC0415
+        if method == "learn/drill":
+            if meta["phase"] != "drill":
+                meta["drill_from"] = meta["phase"]
+                meta["phase"] = "drill"
+                meta["pending"] = None
+                store.append(d, {"role": "learner", "kind": "say", "text": "开始答辩陪练"})
+                store.save(d, meta)
+            if (meta.get("drill") or {}).get("questions") and not meta["drill"].get("done"):
+                return _view(home, sid)   # 题库已经有了, 接着答
+            if (meta.get("drill") or {}).get("done"):
+                meta["drill"] = None      # 上一轮问完了: 再来一轮, 重新出题
+                store.save(d, meta)
+            _kick(home, sid, llm_kw)
+            return _view(home, sid)
+        if meta["phase"] != "drill" or not (meta.get("drill") or {}).get("questions"):
+            raise ValueError("现在不在答辩陪练")
+        if method == "learn/drill_answer":
+            dr.answer(d, meta, str(params.get("text") or ""), params.get("secs"))
+            _kick(home, sid, llm_kw)
+        elif method == "learn/drill_skip":
+            dr.skip(d, meta)
+        elif method == "learn/drill_next":
+            res = dr.next_question(d, meta)
+            if res and res["cards"]:
+                from . import learning_cards, practice  # noqa: PLC0415
+                con = learning_cards._practice_con(home)
+                try:
+                    practice.add_cards(con, [{**c, "source": f"答辩陪练: {meta['goal'][:60]}"} for c in res["cards"]],
+                                       f"learn:{sid}", [meta["goal"][:20]])
+                finally:
+                    con.close()
+        else:
+            raise ValueError(f"不认识的操作: {method}")
         return _view(home, sid)
     if method == "learn/ingest":
         async def ing(h: str, s_: str, kw: dict) -> None:

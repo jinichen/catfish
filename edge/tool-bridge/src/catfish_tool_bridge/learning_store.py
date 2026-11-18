@@ -20,8 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-PHASES = ("probe", "plan_review", "teach", "done", "practice")
-MODES = ("quick", "deep")
+PHASES = ("probe", "plan_review", "teach", "done", "practice", "drill")
+MODES = ("quick", "deep", "defense")
 MAX_GOAL = 500
 
 
@@ -58,7 +58,7 @@ def create(home: str | Path, goal: str, mode: str) -> dict[str, Any]:
     d = root(home) / sid
     d.mkdir(parents=True)
     now = time.time()
-    meta = {"id": sid, "goal": goal, "mode": mode, "phase": "probe", "created": now, "updated": now,
+    meta = {"id": sid, "goal": goal, "mode": mode, "phase": "drill" if mode == "defense" else "probe", "created": now, "updated": now,
             "plan": None, "assessment": None, "pending": None, "last_error": None, "materials": None, "node_materials": {}}
     _write_json(d / "session.json", meta)
     (d / "events.jsonl").write_text("", encoding="utf-8")
@@ -133,7 +133,10 @@ def public_view(meta: dict[str, Any], evs: list[dict[str, Any]], running: bool) 
             if ev.get("pid") == problem:   # 练习题做完 (结束) 前不给看标准解法
                 ev = {**ev, "p": {k: v for k, v in ev["p"].items() if k != "solution"}}
         shown.append(ev)
-    m = {k: v for k, v in meta.items() if k not in ("materials", "node_materials")}
+    m = {k: v for k, v in meta.items() if k not in ("materials", "node_materials", "drill")}
+    if meta.get("drill"):   # 答辩题库的评分点不给界面 (点评时随 drill_eval 一起出来)
+        dr = meta["drill"]
+        m["drill"] = {"idx": dr.get("idx", 0), "total": len(dr.get("questions") or []), "done": bool(dr.get("done"))}
     m["sources"] = (meta.get("materials") or {}).get("sources") or []
     last = evs[-1] if evs else None
     # 没在跑、没出错、最后一条是员工的 → 上次那一步没接上 (tool-bridge 重启过之类), 界面给「重试」

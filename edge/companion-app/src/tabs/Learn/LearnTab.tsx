@@ -57,9 +57,10 @@ function NewLearning({ onCreated }: { onCreated: (id: string) => void }) {
       <div style={{ display: "flex", gap: 6 }}>
         {modeBtn("quick", "快速", "讲得短、多检查, 适合记规定、准备答辩")}
         {modeBtn("deep", "深入", "每步先让你猜再讲, 讲清为什么, 适合真正弄懂")}
+        {modeBtn("defense", "答辩陪练", "小鲶扮评审老师按资料出题, 你口头回答, 逐条对照评分点")}
       </div>
       <button type="button" style={primaryBtn(busy || !goal.trim())} disabled={busy || !goal.trim()} onClick={() => void start()}>
-        开始 (小鲶先问几道题摸摸底)
+        {mode === "defense" ? "开始 (小鲶先出一套评审会问的题)" : "开始 (小鲶先问几道题摸摸底)"}
       </button>
       <span style={muted}>小鲶会查你的知识库、本机文件、邮件, 需要时上网查官方文件; 学习记录只存在这台电脑上。</span>
       {error && <ErrorLine>{error}</ErrorLine>}

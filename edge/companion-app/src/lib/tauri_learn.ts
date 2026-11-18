@@ -2,8 +2,8 @@
  *  写操作立即返回 (模型在后台跑), 界面在 running 时每 1.5 秒拉一次 learnGet。 */
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 
-export type LearnMode = "quick" | "deep";
-export type LearnPhase = "probe" | "plan_review" | "teach" | "done" | "practice";
+export type LearnMode = "quick" | "deep" | "defense";
+export type LearnPhase = "probe" | "plan_review" | "teach" | "done" | "practice" | "drill";
 
 export interface PlanNode { id: string; title: string }
 export interface Plan { nodes: PlanNode[]; edges: [string, string][] }
@@ -42,6 +42,12 @@ export type LearnEvent = { id: string; at: number; role: "tutor" | "learner" } &
       miss: string | null; retest: boolean }
   | { kind: "cards"; added: number; skipped: number }
   | { kind: "graph"; added: number; linked: number; chains: number }
+  | { kind: "examiner_q"; qi: number; text: string; followup?: boolean; total?: number }
+  | { kind: "oral_answer"; qi: number; text: string; secs?: number; skipped?: boolean }
+  | { kind: "drill_eval"; qi: number; covered: number[]; missed: number[]; wrong: { said: string; fix: string }[]; feedback: string;
+      points: string[]; followup: string | null }
+  | { kind: "drill_summary"; score: number; total: number; cards: number;
+      items: { qi: number; question: string; covered: number; total: number; missed: string[] }[] }
 );
 
 export type PracticeMode = "recall" | "discrimination" | "composition";
@@ -66,6 +72,8 @@ export interface LearnSession {
   practice?: PracticeSummary;
   /** 这个学习做了多少张复习卡 */
   cards?: number;
+  /** 答辩陪练: 第几题 / 共几题 / 问完没有 (评分点不给界面) */
+  drill?: { idx: number; total: number; done: boolean } | null;
 }
 
 export interface LearnView { session: LearnSession; events: LearnEvent[]; running: boolean }
@@ -92,7 +100,7 @@ export const learnRetry = (id: string) => rawInvoke<LearnView>("learn_retry", { 
 export const learnDelete = (id: string) => rawInvoke<{ ok: boolean }>("learn_delete", { id });
 
 export const PHASE_LABEL: Record<LearnPhase, string> = {
-  probe: "摸底中", plan_review: "看路线图", teach: "讲解中", done: "学完了", practice: "练习中",
+  probe: "摸底中", plan_review: "看路线图", teach: "讲解中", done: "学完了", practice: "练习中", drill: "答辩陪练",
 };
 
 // ── 第 2 步 (11/18): 练习 / 复习卡 / 复习 ──
@@ -136,3 +144,11 @@ export const learnGraphImport = (stageId: string, name: string) =>
   rawInvoke<GraphView & { chars: number; parts: number }>("learn_graph", { action: "import", params: { stage_id: stageId, name } });
 export const learnGraphDelete = (source: string) => rawInvoke<GraphView>("learn_graph", { action: "delete", params: { source } });
 export const GRAPH_ACCEPT = ".docx,.pdf,.txt,.md,.pptx,.xlsx";
+
+// ── 第 4 步 (11/18): 答辩陪练 ──
+export const learnDrill = (id: string, action: "start" | "answer" | "skip" | "next", text?: string, secs?: number) =>
+  rawInvoke<LearnView>("learn_drill", { id, action, text, secs });
+/** 🎤 语音输入 (跟聊天框同一套: 本机录音 + 会议组件的 FunASR 转写, 冷启动十几秒) */
+export const speechStart = () => rawInvoke<void>("speech_start_recording");
+export const speechStopAndTranscribe = () => rawInvoke<string>("speech_stop_and_transcribe");
+export const speechCancel = () => rawInvoke<void>("speech_cancel_recording");

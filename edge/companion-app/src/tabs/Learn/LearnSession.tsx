@@ -7,11 +7,12 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { AskSources } from "../../components/AskSources";
 import { Markdown } from "../../lib/markdown";
 import {
-  learnAction, learnAnswer, learnAttempt, learnDelete, learnGet, learnPractice, learnRetry, learnSay, PHASE_LABEL,
+  learnAction, learnAnswer, learnAttempt, learnDelete, learnDrill, learnGet, learnPractice, learnRetry, learnSay, PHASE_LABEL,
   type LearnAnswer, type LearnEvent, type LearnView,
 } from "../../lib/tauri_learn";
 import { cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import PlanMap from "./PlanMap";
+import { DrillAnswerBox, DrillEval, DrillSummary, ExaminerQuestion, OralAnswer, useVoiceOn } from "./DrillParts";
 import { AttemptBox, PracticeEvent, PracticeSummaryLine, ProblemView } from "./PracticeParts";
 import { AnsweredQuestion, ghostBtn, OpenQuestion, primaryBtn } from "./QuestionCard";
 
@@ -27,6 +28,7 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
   const [error, setError] = useState<string | null>(null);
   const [say, setSay] = useState(() => sayDrafts.get(id) ?? "");
   const [sending, setSending] = useState(false);
+  const [voiceOn, setVoiceOn] = useVoiceOn();
   const bottom = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -97,13 +99,16 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
   const titles = new Map((s.plan?.nodes ?? []).map((n) => [n.id, n.title]));
   const activePid = s.problem?.pid ?? null;
   const hintsUsed = activePid ? evs.filter((e) => e.kind === "hint" && e.pid === activePid).length : 0;
+  const drillEvs = evs.filter((e) => e.kind === "examiner_q" || e.kind === "oral_answer" || e.kind === "drill_eval" || e.kind === "drill_summary");
+  const drillLast = drillEvs[drillEvs.length - 1];
+  const lastAskId = [...evs].reverse().find((e) => e.kind === "examiner_q")?.id;
 
   return (
     <div style={{ ...cardStyle, height: "auto", gap: "var(--space-3)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
         <div>
           <div style={{ fontSize: 16, fontWeight: 600 }}>{s.goal}</div>
-          <div style={muted}>{PHASE_LABEL[s.phase]} · {s.mode === "deep" ? "深入" : "快速"}
+          <div style={muted}>{PHASE_LABEL[s.phase]} · {s.mode === "deep" ? "深入" : s.mode === "defense" ? "答辩陪练" : "快速"}
             {s.plan ? ` · 路线图 ${s.visited?.length ?? 0}/${s.plan.nodes.length}` : ""}</div>
           <PracticeSummaryLine p={s.practice} />
         </div>
@@ -111,8 +116,14 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
           {s.plan && s.phase !== "practice" && s.phase !== "probe" && s.phase !== "plan_review" && (
             <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnPractice(id))}>✍️ 去练习</button>
           )}
-          {s.phase === "practice" && (
+          {s.phase === "practice" || s.phase === "drill" ? (
             <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnAction(id, "teach"))}>回去接着学</button>
+          ) : s.phase !== "probe" && s.phase !== "plan_review" ? (
+            <button type="button" style={ghostBtn} disabled={busy} title="小鲶扮评审老师, 按资料出一套现场会问的题, 你口头回答, 逐条对照评分点"
+              onClick={() => void act(() => learnDrill(id, "start"))}>🎤 答辩陪练</button>
+          ) : null}
+          {s.phase === "drill" && (s.drill?.done ?? false) && (
+            <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnDrill(id, "start"))}>🎤 再来一轮</button>
           )}
           {taught && (
             <button type="button" style={ghostBtn} disabled={busy} title="把讲过的要点做成复习卡, 明天开始按遗忘规律复习"
@@ -190,10 +201,30 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
               return <ProblemView key={ev.id} ev={ev} conclude={concludes.get(ev.pid)} titles={titles} />;
             case "attempt": case "hint_request": case "hint": case "give_up": case "cards": case "graph":
               return <PracticeEvent key={ev.id} ev={ev} />;
+            case "examiner_q":
+              return <ExaminerQuestion key={ev.id} ev={ev} autoSpeak={voiceOn && s.phase === "drill" && ev.id === lastAskId && drillLast?.id === ev.id} />;
+            case "oral_answer":
+              return <OralAnswer key={ev.id} ev={ev} />;
+            case "drill_eval":
+              return <DrillEval key={ev.id} ev={ev} />;
+            case "drill_summary":
+              return <DrillSummary key={ev.id} ev={ev} />;
             default:
               return null;
           }
         })}
+        {s.phase === "drill" && drillLast?.kind === "examiner_q" && (
+          <DrillAnswerBox disabled={busy} onAnswer={(t, sec) => void act(() => learnDrill(id, "answer", t, sec))}
+            onSkip={() => void act(() => learnDrill(id, "skip"))} />
+        )}
+        {s.phase === "drill" && drillLast?.kind === "drill_eval" && !busy && !s.last_error && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button type="button" style={primaryBtn(false)} onClick={() => void act(() => learnDrill(id, "next"))}>
+              {s.drill && s.drill.idx + 1 >= s.drill.total ? "看总结" : "下一题"}
+            </button>
+            <span style={muted}>看完点评再继续</span>
+          </div>
+        )}
         {s.phase === "practice" && activePid && (
           <AttemptBox key={activePid} pid={activePid} disabled={busy} hintsUsed={hintsUsed}
             onAttempt={(t, th) => void act(() => learnAttempt(id, t, th || undefined))}
@@ -230,6 +261,12 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
         <div ref={bottom} />
       </div>
 
+      {s.phase === "drill" ? (
+        <label style={{ ...muted, display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={voiceOn} onChange={(e) => setVoiceOn(e.target.checked)} />
+          🔊 评审提问读出来 (用电脑自带的语音, 不联网)
+        </label>
+      ) : (
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
         <textarea aria-label="跟小鲶说" rows={2} value={say} disabled={busy} onChange={(e) => putSay(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); sendSay(); } }}
@@ -237,6 +274,7 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
           style={{ ...inputStyle, resize: "vertical", flex: 1 }} />
         <button type="button" style={primaryBtn(busy || !say.trim())} disabled={busy || !say.trim()} onClick={() => sendSay()}>发送</button>
       </div>
+      )}
     </div>
   );
 }
