@@ -246,6 +246,24 @@ describe("让小鲶改: 切走再回来不丢 (11/18)", () => {
     expect(screen.getByText("🐟 负责人换成王总了。")).toBeTruthy();
   });
 
+  it("上网查过 (11/18): 网页单独列出来 (标题 + 网站), 本机资料照旧一行", async () => {
+    api.minutes = minutes;
+    api.revise.mockResolvedValueOnce({
+      ...proposal,
+      sources: [{ kind: "网页", title: "信息安全服务资质认证实施规则", where: "https://www.isccc.gov.cn/a.pdf" },
+        ...proposal.sources],
+    });
+    await mount();
+    const box = screen.getByLabelText("让小鲶改纪要");
+    fireEvent.change(box, { target: { value: "去官网查下整改要求" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    const link = screen.getByText("《信息安全服务资质认证实施规则》");
+    expect(link.getAttribute("href")).toBe("https://www.isccc.gov.cn/a.pdf");
+    expect(screen.getByText(/isccc\.gov\.cn/)).toBeTruthy();
+    expect(screen.getByText(/依据 \(你电脑上的\): 知识库「王总」/)).toBeTruthy();
+    expect(screen.queryByText(/文件「信息安全服务资质认证实施规则」|网页「/)).toBeNull();
+  });
+
   it("小鲶还在改时切走: 结果回来存下, 切回来就在", async () => {
     api.minutes = minutes;
     let finish: (v: unknown) => void = () => undefined;
@@ -254,7 +272,7 @@ describe("让小鲶改: 切走再回来不丢 (11/18)", () => {
     const box = screen.getByLabelText("让小鲶改纪要");
     fireEvent.change(box, { target: { value: "说话人2 是王总" } });
     await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
-    expect(screen.getByText(/小鲶在查资料、对照转写改/)).toBeTruthy();
+    expect(screen.getByText(/小鲶在查资料.*对照转写改/)).toBeTruthy();
     cleanup();
     await act(async () => { finish(proposal); });   // 页面不在的时候结果回来了
     await mount();

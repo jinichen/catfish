@@ -314,6 +314,8 @@ export interface MinutesRevision {
   shrink?: { before: number; after: number } | null;
   /** 11/18 改之前先查的本机资料 (知识库 / 文件 / 邮件) 出处 */
   sources?: { kind: string; title: string; where: string }[];
+  /** 11/18: 这次要上网查公开资料时的搜索词 / 没查成的原因 (没要联网是 null) */
+  web?: { query: string; error: string } | null;
 }
 export const meetingMinutesRevise = (
   id: string, instruction: string, base: { fields: MinutesFields; markdown: string | null } | null, history: string[],

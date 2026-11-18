@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from catfish_tool_bridge import gateway_llm, local_lookup
+from catfish_tool_bridge import gateway_llm, local_lookup, web_lookup
 from catfish_tool_bridge import meeting_minutes_revise as mr
 
 
@@ -17,6 +17,10 @@ def _no_local_lookup(monkeypatch):
     async def none(question, context, call_llm, kw):
         return {"queries": ["x"], "found": [], "block": ""}
     monkeypatch.setattr(local_lookup, "lookup", none)
+
+    async def no_web(instruction, title, call_llm, kw):
+        return {"wanted": False, "query": "", "found": [], "error": ""}
+    monkeypatch.setattr(web_lookup, "lookup", no_web)
 
 MID = "mtg_20261116-143600_cc01"
 DOC = {"version": 1, "meeting_id": MID, "summary": "讨论 CCRC 整改。", "decisions": ["一个月内提交新项目"],
@@ -185,3 +189,45 @@ def test_lookup_failure_does_not_block_revise(tmp_path, monkeypatch):
     _fake(monkeypatch, {**DOC, "reply": "没改"})
     r = asyncio.run(mr.handle_revise(_p(tmp_path, instruction="精简摘要")))
     assert r["reply"] == "没改" and r["sources"] == []
+
+
+def test_revise_uses_web_material_when_asked(tmp_path, monkeypatch):
+    """11/18「为什么不能联网检索」: 要官方要求时上网查, 查到的进提示词 (只当材料、注明出处), 网页排在出处最前面。"""
+    _meeting(tmp_path)
+
+    async def web(instruction, title, call_llm, kw):
+        assert title == "CCRC整改会议" and kw["auth_token"] == "t"
+        return {"wanted": True, "query": "CCRC 信息安全服务资质 整改要求", "error": "",
+                "found": [{"kind": "网页", "title": "信息安全服务资质认证实施规则", "where": "https://www.isccc.gov.cn/a.pdf",
+                           "text": "7.5 监督审核 …"}]}
+    monkeypatch.setattr(web_lookup, "lookup", web)
+    seen = _fake(monkeypatch, {**DOC, "reply": "补了官方要求"})
+    r = asyncio.run(mr.handle_revise(_p(tmp_path, instruction="去权威网站看下 CCRC 的整改要求")))
+    prompt = seen[0][1]["content"]
+    assert "上网查到的公开资料" in prompt and "7.5 监督审核" in prompt and "注明出处" in prompt
+    assert "不要说自己不能联网" in seen[0][0]["content"]
+    assert r["sources"][0] == {"kind": "网页", "title": "信息安全服务资质认证实施规则", "where": "https://www.isccc.gov.cn/a.pdf"}
+    assert r["web"] == {"query": "CCRC 信息安全服务资质 整改要求", "error": ""}
+
+
+def test_revise_web_not_allowed_is_told_not_invented(tmp_path, monkeypatch):
+    _meeting(tmp_path)
+
+    async def web(*a, **k):
+        return {"wanted": True, "query": "CCRC 整改要求", "found": [], "error": "你的账号没开「网页搜索」"}
+    monkeypatch.setattr(web_lookup, "lookup", web)
+    seen = _fake(monkeypatch, {**DOC, "reply": "没法查"})
+    r = asyncio.run(mr.handle_revise(_p(tmp_path, instruction="上网查下 CCRC 整改要求")))
+    assert "你的账号没开「网页搜索」" in seen[0][1]["content"] and "不要凭印象编" in seen[0][1]["content"]
+    assert r["web"]["error"].startswith("你的账号没开")
+
+
+def test_revise_web_crash_does_not_block(tmp_path, monkeypatch):
+    _meeting(tmp_path)
+
+    async def boom(*a, **k):
+        raise RuntimeError("x")
+    monkeypatch.setattr(web_lookup, "lookup", boom)
+    _fake(monkeypatch, {**DOC, "reply": "没改"})
+    r = asyncio.run(mr.handle_revise(_p(tmp_path, instruction="精简摘要")))
+    assert r["reply"] == "没改" and r["web"] is None
