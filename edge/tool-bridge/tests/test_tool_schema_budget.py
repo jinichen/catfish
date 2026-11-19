@@ -14,7 +14,8 @@ import json
 from catfish_tool_bridge.catfish_tool_schemas import CATFISH_NATIVE_TOOLS
 
 #: 10/22 精简后约 6 万字 (含 input_schema)。留一点余量给新工具; 要突破先想想能不能写短。
-TOTAL_CHAR_BUDGET = 66_000
+#: 11/19 +200: 采购比价 (procure_*) 合进 catfish_customer —— 省了一格 tool cap (网关只剩 1 格), 说明和参数已压到最短。
+TOTAL_CHAR_BUDGET = 66_200
 #: 单个工具说明上限 (字符, 含 ASCII)。最复杂的几个 (workflow / customer / user_profile_propose) 在 470 以内。
 PER_TOOL_DESCRIPTION_LIMIT = 520
 

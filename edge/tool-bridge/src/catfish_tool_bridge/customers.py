@@ -531,10 +531,13 @@ def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if action == "weekly":
             from . import sales_weekly  # noqa: PLC0415
             return sales_weekly.action_weekly(args)
+        if action.startswith("procure_"):  # 11/19 采购比价 (procure.py), 合进这个工具省一格 tool cap
+            from . import procure  # noqa: PLC0415
+            return procure.dispatch(action, args)
         handler = {"upsert": action_upsert, "log": action_log, "done": action_done,
                    "get": action_get, "list": action_list}.get(action)
         if handler is None:
-            raise ValueError("action 只能是 upsert / log / done / get / list / radar / template / price / quote / quotes / weekly")
+            raise ValueError("action 只能是 upsert / log / done / get / list / radar / template / price / quote / quotes / weekly / procure_compare / procure_deal / procure_history / procure_import")
         return handler(args)
     except (ValueError, LookupError, RuntimeError) as e:
         return {"ok": False, "error": str(e)}

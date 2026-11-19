@@ -152,6 +152,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("experts"), Required, "专家"),
     (Exact("expert-packs"), Required, "专家包"),
     (Exact("sales"), Required, "销售跟进"),
+    (Exact("procure"), Required, "采购比价 (历史成交价、比价记录)"),
     (Exact("sales_template.json"), Required, "销售模板"),
     (Exact("meeting-templates"), Required, "会议模板"),
     (Exact("meetings"), Required, "会议记录"),
