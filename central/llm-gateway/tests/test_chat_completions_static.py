@@ -73,7 +73,7 @@ def test_is_internal_call_assigned_before_first_use():
     source = APP_PY.read_text(encoding="utf-8")
     tree = ast.parse(source)
 
-    func = _find_function(tree, "chat_completions")
+    func = _find_function(tree, "handle_chat")  # 11/19 流水线抽成 handle_chat, chat_completions 只转交
     assert func is not None, "chat_completions 函数找不到 (重命名了?)"
 
     events = _collect_var_events(func, "is_internal_call")
@@ -109,7 +109,7 @@ def test_is_internal_call_has_early_assignment():
     source = APP_PY.read_text(encoding="utf-8")
     tree = ast.parse(source)
 
-    func = _find_function(tree, "chat_completions")
+    func = _find_function(tree, "handle_chat")  # 11/19 流水线抽成 handle_chat, chat_completions 只转交
     assert func is not None
 
     func_start = func.lineno

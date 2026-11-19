@@ -173,8 +173,10 @@ def test_get_model_endpoint_resolves_the_sentinel():
 
 
 def test_chat_completions_endpoint_resolves_the_sentinel():
-    src = inspect.getsource(app_module.chat_completions)
-    assert "_resolve_auto_sentinel" in src
+    # 11/19: 流水线抽成 handle_chat (/v1/chat/completions 和 Anthropic 格式的 /v1/messages 共用),
+    # chat_completions 只剩一行转交 —— 要守的是「走 handle_chat, 且 handle_chat 解析 sentinel」
+    assert "handle_chat(" in inspect.getsource(app_module.chat_completions)
+    assert "_resolve_auto_sentinel" in inspect.getsource(app_module.handle_chat)
 
 
 def test_sentinel_literal_appears_only_in_the_constant():

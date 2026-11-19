@@ -265,6 +265,8 @@ register_audit_routes(app)
 register_quota_routes(app)
 register_misc_routes(app)
 register_media_routes(app)  # 11/17: 出图 / 出视频 (media_routes.py)
+from .anthropic_routes import register_anthropic_routes  # noqa: E402
+register_anthropic_routes(app)  # 11/19: Anthropic 格式 /v1/messages (Claude Code 等直连中央)
 register_component_admin_routes(app)  # 10/3: 管理员在门户上传 / 下架组件包
 
 app.add_middleware(
@@ -464,7 +466,12 @@ async def chat_completions(
     request: Request,
     user: User = Depends(get_current_user),
 ):
-    body = await request.json()
+    return await handle_chat(request, user, await request.json())
+
+
+async def handle_chat(request: Request, user: User, body: dict):
+    """对话的整条流水线 (认模型 / 注入 / 配额 / 调上游)。11/19 抽出来给 Anthropic 格式的
+    /v1/messages (anthropic_routes.py) 复用: 它把请求翻成 OpenAI 格式后走同一条, 配额审计一致。"""
     model_name = body.get("model")
     if not model_name:
         raise HTTPException(status_code=400, detail="model parameter required")

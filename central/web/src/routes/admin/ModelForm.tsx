@@ -13,6 +13,7 @@ import { useState } from "react";
 import { BTN, BTN_PRIMARY } from "../../components/DataTable";
 import { MODEL_PALETTE, matchPalette } from "../../lib/modelPalette";
 import { describeKey, type Provider } from "../../lib/provider_config";
+import { API_FORMAT_HINT, API_FORMATS, apiFormatOf, formatMismatch, withApiFormat, type ApiFormat } from "../../lib/apiFormat"; // 11/19
 import {
   chainHopIssue,
   isMediaMode,
@@ -231,9 +232,16 @@ export function ModelForm({
             </select>
           </Field>
 
+          <Field label="接口格式" hint={formatMismatch(model.upstream.model, selected?.api_base ?? model.upstream.api_base) ?? API_FORMAT_HINT}>
+            <select style={INPUT} value={apiFormatOf(model.upstream.model)}
+              onChange={(e) => setUp({ model: withApiFormat(model.upstream.model, e.target.value as ApiFormat) })}>
+              {API_FORMATS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+          </Field>
+
           <Field
             label="上游模型"
-            hint="必须带 provider 前缀。不带的话 LiteLLM 不知道走哪家。"
+            hint="前缀跟着「接口格式」走 (openai/ 或 anthropic/); 其它家写它的前缀, 如 gemini/。"
           >
             <input
               style={MONO}

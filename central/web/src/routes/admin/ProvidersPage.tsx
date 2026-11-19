@@ -491,7 +491,7 @@ function ProviderForm({
 
         <Field
           label="API 地址"
-          hint="OpenAI 兼容的自建端点才需要填；用官方 SDK 的（如 Gemini）留空。内网地址可以写成 ${变量名} 交给 .env 管 —— 那样它不进数据库、不进备份、也不会出现在截图里。"
+          hint="OpenAI 兼容或 Anthropic 兼容的端点要填（Anthropic 兼容只填到兼容路径为止，如 …/apps/anthropic；同一家两种格式地址不同，各建一个供应商）；用官方 SDK 的（如 Gemini）留空。内网地址可以写成 ${变量名} 交给 .env 管 —— 那样它不进数据库、不进备份、也不会出现在截图里。"
         >
           <input
             style={MONO}

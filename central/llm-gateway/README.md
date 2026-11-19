@@ -76,6 +76,26 @@ tool_loop:
 
 ---
 
+## Anthropic 格式 (11/19)
+
+两个方向都支持:
+
+**接上游 (网关 → 模型)**: 「上游模型」前缀写 `anthropic/<模型名>` 就按 Anthropic 格式 (`/v1/messages`) 发。
+管理控制台模型表单里是「接口格式」一项。地址归供应商: 只填到兼容路径为止, `/v1/messages` 网关自己补;
+同一家两种格式地址不同, 各建一个供应商。实测 (百炼 Token Plan `…/apps/anthropic`, qwen3.8-flash): 问答 / 工具调用 / 流式带用量 / 看图都通。
+
+**对外 (客户端 → 网关)**: `POST /v1/messages` 和 `POST /v1/messages/count_tokens`。请求翻成 OpenAI 格式后走跟
+`/v1/chat/completions` 同一条流水线 (权限 / 配额 / 审计 / fallback 一致), 结果翻回 Anthropic 格式 (流式也是)。
+钥匙用 `Authorization: Bearer …` 或 `x-api-key`。模型名用中央的 (或 `catfish-auto`), Anthropic 自己的模型名不认。
+模型的思考过程不转出去 (Anthropic 的 thinking 块要签名)。Claude Code 接法:
+
+```bash
+export ANTHROPIC_BASE_URL=https://<中央地址>
+export ANTHROPIC_AUTH_TOKEN=<网关钥匙>
+export ANTHROPIC_MODEL=catfish-auto
+export ANTHROPIC_SMALL_FAST_MODEL=catfish-auto
+```
+
 ## Docker 方式
 
 ```bash
