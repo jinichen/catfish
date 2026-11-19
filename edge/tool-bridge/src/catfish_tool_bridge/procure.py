@@ -9,6 +9,7 @@
   procure_deal     记成交: 员工说定了才记 (历史价从这里来)
   procure_history  查某品名的历史成交
   procure_import   导入现成的采购台账 Excel 当历史价
+  procure_monthly  月度汇总: 这个月比了几次、按比价成交几笔、省了多少 (procure_monthly.py)
 
 口径: 一律换成「含税、每 目标单位」的单价比。不含税的按 tax_rate (默认 13%) 换成含税;
 单位认 吨 / 千克 / 克 (及常见写法), 认不出又跟目标单位不同的**不参与排名**, 原样列出并标明。
@@ -130,7 +131,40 @@ def freight_add(text: str, target_unit: str) -> float | None:
     return None
 
 
+# 11/19 小鲶自己搭工作流时, 「交给小鲶判断」那步常按中文字段名交回报价 (供应商 / 单价 / 含税与否 …),
+# 比价积木照样要认, 不然工作流跑到比价这步就挂 (真模型搭「每周比价」时实撞)
+_ALIAS = {
+    "supplier": ("供应商", "供应商名称", "厂家", "供货商"), "price": ("单价", "价格", "报价", "含税单价"),
+    "unit": ("单位", "计价单位"), "tax_included": ("含税", "含税与否", "是否含税"), "spec": ("规格", "型号"),
+    "delivery": ("交货期", "交期", "交货"), "payment": ("付款", "付款条件", "付款方式", "账期"),
+    "freight": ("运费",), "valid_until": ("有效期", "有效期至", "报价有效期"), "source": ("来源", "出处", "邮件主题"),
+    "note": ("备注", "说明"),
+}
+
+
+def _alias(q: dict[str, Any]) -> dict[str, Any]:
+    out = dict(q)
+    for key, names in _ALIAS.items():
+        if out.get(key) in (None, ""):
+            for n in names:
+                if q.get(n) not in (None, ""):
+                    out[key] = q[n]
+                    break
+    t = out.get("tax_included")
+    if isinstance(t, str):  # 「含税」「不含税」「是」「否」「未注明」
+        t = t.strip()
+        out["tax_included"] = None if not t or "未" in t or "不详" in t else not ("不含" in t or t in ("否", "no", "false"))
+    if isinstance(out.get("price"), str):  # 「6380 元/吨」: 取数字, 单位没给就从这里拿
+        m = re.search(r"(\d+(?:\.\d+)?)", out["price"].replace(",", ""))
+        if m:
+            if not out.get("unit") and "/" in out["price"]:
+                out["unit"] = out["price"].split("/", 1)[1]
+            out["price"] = float(m.group(1))
+    return out
+
+
 def _norm_quote(q: dict[str, Any], target_unit: str, default_tax: float) -> dict[str, Any]:
+    q = _alias(q)
     sup = str(q.get("supplier") or "").strip()
     if not sup:
         raise ValueError("每条报价要有 supplier (供应商)")
@@ -176,7 +210,7 @@ def compare(args: dict[str, Any]) -> dict[str, Any]:
     quotes = args.get("quotes") or []
     if not isinstance(quotes, list) or len(quotes) < 2:
         raise ValueError("至少要两家报价才能比; 只有一家可以用 procure_history 对照历史价")
-    target = norm_unit(args.get("unit") or (quotes[0] or {}).get("unit") or "吨")
+    target = norm_unit(args.get("unit") or _alias(quotes[0] or {}).get("unit") or "吨")
     tax = _num(args["tax_rate"], "税率") if args.get("tax_rate") not in (None, "") else DEFAULT_TAX
     qty = _num(args["qty"], "数量") if args.get("qty") not in (None, "") else None
     rows = [_norm_quote(q, target, tax) for q in quotes]
@@ -200,6 +234,7 @@ def compare(args: dict[str, Any]) -> dict[str, Any]:
         "best": {"supplier": best["supplier"], "price_tax": best["price_tax"], "landed": best["landed"]},
         "highest": {"supplier": ranked[-1]["supplier"], "price_tax": ranked[-1]["price_tax"], "landed": ranked[-1]["landed"]},
         "spread": round(ranked[-1]["landed"] - best["landed"], 2),
+        "avg_landed": round(statistics.mean(r["landed"] for r in ranked), 2),
         "history": {k: hist[k] for k in ("avg", "min", "count", "days")},
         "last_deal": ({k: hist["last"][k] for k in ("date", "supplier", "price_conv")} if hist["last"] else None),
     }
@@ -264,7 +299,10 @@ def dispatch(action: str, args: dict[str, Any]) -> dict[str, Any]:
         return deal(args)
     if action == "procure_history":
         return history(args)
+    if action == "procure_monthly":
+        from . import procure_monthly  # noqa: PLC0415
+        return procure_monthly.monthly(args)
     if action == "procure_import":
         from . import procure_import  # noqa: PLC0415
         return procure_import.import_ledger(str(args.get("path") or ""))
-    raise ValueError("采购动作只有 procure_compare / procure_deal / procure_history / procure_import")
+    raise ValueError("采购动作只有 procure_compare / procure_deal / procure_history / procure_monthly / procure_import")

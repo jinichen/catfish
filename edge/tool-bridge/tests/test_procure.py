@@ -136,3 +136,85 @@ def test_运费另计按到厂价排名():
                                          ("不含运费, 加收 0.05 元/公斤", 50.0), ("不含运费", None), ("", None)])
 def test_运费写法(text, expect):
     assert procure.freight_add(text, "吨") == expect
+
+
+# ── 月度汇总 (procure_monthly) ─────────────────────────────
+
+def _fake_compare_at(r, when):
+    """把刚做的那次比价挪到指定日期 (测试里模拟「月初比的价」)。"""
+    log = procure._load("compares.json")
+    for rec in log:
+        if rec["path"] == r["path"]:
+            rec["at"] = when + "T09:00:00"
+    procure._save("compares.json", log)
+
+
+def test_月报_只算对得上比价的成交_三个口径分开():
+    qs = [{"supplier": "甲", "price": 6300, "unit": "吨"}, {"supplier": "乙", "price": 6400, "unit": "吨"},
+          {"supplier": "丙", "price": 6500, "unit": "吨"}]
+    assert c(action="procure_deal", item="硅锰合金", supplier="甲", price=6350, date="2026-10-20", confirmed=True)["ok"]
+    r1 = c(action="procure_compare", item="硅锰合金", quotes=qs, qty=100)
+    _fake_compare_at(r1, "2026-11-03")
+    # 比完按最低价 (甲) 成交 100 吨; 均价 6400, 最高 6500, 上次 6350
+    assert c(action="procure_deal", item="硅锰合金", supplier="甲", price=6300, qty=100, date="2026-11-05", confirmed=True)["ok"]
+    # 另一次比价没记成交
+    r2 = c(action="procure_compare", item="冶金石灰", quotes=[{"supplier": "A", "price": 520, "unit": "吨"}, {"supplier": "B", "price": 540, "unit": "吨"}])
+    _fake_compare_at(r2, "2026-11-10")
+    # 没比价直接记的成交: 不算钱; 没填数量的: 只计笔数
+    assert c(action="procure_deal", item="废钢", supplier="X", price=2500, qty=500, date="2026-11-12", confirmed=True)["ok"]
+    m = c(action="procure_monthly", date="2026-11")
+    assert m["ok"], m
+    s = m["summary"]
+    assert s["month"] == "2026-11" and s["compares"] == 2 and s["deals"] == 2 and s["deals_linked"] == 1 and s["picked_best"] == 1
+    assert s["saved_vs_avg"] == 10000.0 and s["saved_vs_highest"] == 20000.0 and s["vs_last_total"] == 5000.0
+    assert [u["item"] for u in m["compares_without_deal"]] == ["冶金石灰"]
+    assert "主口径" in m["note"] and "补记" in m["note"]
+    from openpyxl import load_workbook
+    text = "\n".join(str(v) for row in load_workbook(m["path"])["月报"].iter_rows(values_only=True) for v in row if v is not None)
+    assert "采购比价月报 · 2026-11" in text and "比报价均价省 (主口径)" in text and "10,000.00 元" in text and "比了没记成交" in text
+
+
+def test_月报_成交单位跟比价不同也换算_超过30天对不上():
+    qs = [{"supplier": "甲", "price": 6.3, "unit": "元/kg"}, {"supplier": "乙", "price": 6.5, "unit": "元/kg"}]
+    r = c(action="procure_compare", item="硅锰合金", quotes=qs)
+    _fake_compare_at(r, "2026-11-01")
+    # 比价按千克, 成交按吨记: 6300 元/吨 × 2 吨 = 2000 千克; 均价 6.4 → 省 0.1 × 2000 = 200
+    assert c(action="procure_deal", item="硅锰合金", supplier="甲", price=6300, unit="吨", qty=2, date="2026-11-02", confirmed=True)["ok"]
+    assert c(action="procure_monthly", date="2026-11-30")["summary"]["saved_vs_avg"] == 200.0
+    r2 = c(action="procure_compare", item="废钢", quotes=[{"supplier": "A", "price": 2400}, {"supplier": "B", "price": 2500}])
+    _fake_compare_at(r2, "2026-09-20")
+    assert c(action="procure_deal", item="废钢", supplier="A", price=2400, qty=10, date="2026-11-03", confirmed=True)["ok"]
+    rows = {d["item"]: d for d in c(action="procure_monthly", date="2026-11")["deals"]}
+    assert rows["废钢"]["linked"] is False, "比价在 30 天以前, 不算这次比价的功劳"
+
+
+def test_月报_导入的台账不算这个月的功劳(tmp_path):
+    wb = Workbook()
+    wb.active.append(["日期", "供应商", "品名", "含税单价", "数量"])
+    wb.active.append(["2026-11-08", "甲", "硅锰合金", 6000, 100])
+    p = tmp_path / "t.xlsx"
+    wb.save(p)
+    assert c(action="procure_import", path=str(p))["added"] == 1
+    s = c(action="procure_monthly", date="2026-11")["summary"]
+    assert s["deals"] == 0 and s["saved_vs_avg"] == 0
+
+
+def test_工作流积木_比价和月报():
+    from catfish_tool_bridge.workflow_catalog import ACTIONS
+    a = ACTIONS["procure_compare"]
+    assert a.level == "local" and a.required == ("item", "quotes")
+    r = a.run({"item": "石灰", "quotes": [{"supplier": "A", "price": 520}, {"supplier": "B", "price": 500}]})
+    assert r["ok"] and r["summary"]["best"]["supplier"] == "B"
+    assert ACTIONS["procure_monthly"].run({})["ok"]
+
+
+def test_中文字段名的报价也认():
+    """小鲶自己搭的工作流里, 「交给小鲶判断」常按中文字段交回报价 (11/19 真模型实撞)。"""
+    qs = [{"供应商": "甲", "单价": "6380 元/吨", "含税与否": "含税", "交货期": "7天"},
+          {"供应商": "乙", "单价": 5.55, "单位": "元/kg", "含税与否": "不含税", "运费": "另计约60元/吨"},
+          {"供应商": "丙", "单价": 6450, "单位": "吨", "含税与否": "未注明"}]
+    r = c(action="procure_compare", item="硅锰合金", quotes=qs)
+    assert r["ok"], r
+    got = {x["supplier"]: (x["price_tax"], x["landed"]) for x in r["ranked"]}
+    assert got == {"甲": (6380, 6380), "乙": (6271.5, 6331.5), "丙": (6450, 6450)}
+    assert "没写含不含税" in "；".join(next(x for x in r["ranked"] if x["supplier"] == "丙")["alerts"])

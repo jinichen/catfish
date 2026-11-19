@@ -54,6 +54,14 @@ def _wechat_push(args: dict[str, Any]) -> dict[str, Any]:
     return {"ok": bool(ok), "error": None if ok else (st.get("error") or "推送失败")}
 
 
+def _customer(action: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """catfish_customer 的某个动作当积木 (11/19 采购比价 / 月报)。"""
+    def call(args: dict[str, Any]) -> dict[str, Any]:
+        from .catfish_tools import dispatch_native  # noqa: PLC0415
+        return dispatch_native("catfish_customer", {**args, "action": action})
+    return call
+
+
 def _export_docx(args: dict[str, Any]) -> dict[str, Any]:
     from . import docx_export  # noqa: PLC0415
     return docx_export.export(args)
@@ -106,6 +114,10 @@ ACTIONS: dict[str, Action] = {a.name: a for a in [
     _A("form_create", "建一张收集表", LOCAL, "写", ("title", "fields", "deadline", "note", "recipients", "template_path"),
        ("form",), ("title", "fields"), _form("create")),
     _A("form_export", "导出收集表汇总", LOCAL, "写", ("form_id",), ("path", "rows"), ("form_id",), _form("export")),
+    # 11/19 采购比价: 前一步「交给小鲶判断」把报价抽成 quotes 列表, 这块算账出比价表; 月报按月汇总省了多少
+    _A("procure_compare", "采购比价 (出比价表)", LOCAL, "写", ("item", "quotes", "qty", "unit"), ("path", "summary", "ranked"),
+       ("item", "quotes"), _customer("procure_compare")),
+    _A("procure_monthly", "采购比价月报", LOCAL, "写", ("date",), ("path", "summary"), (), _customer("procure_monthly")),
     # ── 发 (对外, 跑到之前停下给员工看) ──
     _A("form_send", "发收集表给同事", OUTWARD, "发", ("form_id",), ("sent", "failed"), ("form_id",), _form("send")),
     _A("form_remind", "催同事填表", OUTWARD, "发", ("form_id", "text"), ("reminded",), ("form_id",), _form("remind")),
@@ -117,7 +129,8 @@ ACTIONS: dict[str, Action] = {a.name: a for a in [
 
 #: 教学时要录的原生工具名 (catfish_ 前缀) → 积木名。trace_recorder 用。
 NATIVE_TO_ACTION: dict[str, str] = {
-    f"catfish_{a.name}": a.name for a in ACTIONS.values() if not a.name.startswith(("form_", "wechat_push", "export_docx"))
+    # form_ / procure_ 是 catfish_form / catfish_customer 的动作, 没有同名的独立工具
+    f"catfish_{a.name}": a.name for a in ACTIONS.values() if not a.name.startswith(("form_", "procure_", "wechat_push", "export_docx"))
 }
 
 

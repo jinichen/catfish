@@ -91,3 +91,60 @@ def write_compare(item: str, unit: str, qty: float | None, rows: list[dict[str, 
         hs.cell(2, 1, "没有历史成交记录 (可以在设置里导入采购台账, 或成交后让小鲶记一笔)")
     wb.save(path)
     return path
+
+
+def write_monthly(summary: dict[str, Any], rows: list[dict[str, Any]], unlinked: list[dict[str, Any]]) -> Path:
+    """采购比价月报: ~/.catfish/outputs/<日期>/采购比价月报-<YYYY-MM>.xlsx"""
+    from openpyxl import Workbook  # noqa: PLC0415
+    from openpyxl.styles import Font, PatternFill  # noqa: PLC0415
+
+    path = advisor_io.today_outputs_dir() / f"采购比价月报-{summary['month']}.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "月报"
+    ws["A1"] = f"采购比价月报 · {summary['month']}"
+    ws["A1"].font = Font(size=15, bold=True)
+    lines = [
+        ("本月比价", f"{summary['compares']} 次"),
+        ("按比价成交", f"{summary['deals_linked']} 笔 (其中选了最低价 {summary['picked_best']} 笔); 本月共记成交 {summary['deals']} 笔"),
+        ("比报价均价省 (主口径)", f"{summary['saved_vs_avg']:,.2f} 元"),
+        ("比最高报价省 (上限, 仅参考)", f"{summary['saved_vs_highest']:,.2f} 元"),
+        ("比上次成交价 (行情涨跌)", f"{'低' if summary['vs_last_total'] >= 0 else '高'} {abs(summary['vs_last_total']):,.2f} 元"),
+    ]
+    if summary["deals_without_qty"]:
+        lines.append(("没填数量", f"{summary['deals_without_qty']} 笔只计笔数, 没算进金额"))
+    if unlinked:
+        lines.append(("比了没记成交", f"{len(unlinked)} 次, 补记后才算钱 (见下方)"))
+    r = 3
+    for k, v in lines:
+        ws.cell(r, 1, k).font = Font(bold=True)
+        ws.cell(r, 2, v)
+        r += 1
+    ws.column_dimensions["A"].width = 26
+    ws.column_dimensions["B"].width = 18
+    r += 1
+    head = ["成交日", "品名", "供应商", "成交价", "单位", "数量", "对应比价", "几家", "报价均价", "最高报价", "比均价省", "比最高省", "比上次成交", "选了最低价?"]
+    fill = PatternFill("solid", fgColor="DDEBF7")
+    for i, h in enumerate(head, 1):
+        c = ws.cell(r, i, h)
+        c.font, c.fill = Font(bold=True), fill
+    for x in rows:
+        r += 1
+        vals = [x["date"], x["item"], x["supplier"], x["price"], x.get("unit"), x.get("qty"),
+                x.get("compare_at") or "没对上比价", x.get("quotes"), x.get("avg_quote"), x.get("highest_quote"),
+                x.get("vs_avg"), x.get("vs_highest"), x.get("vs_last"),
+                ("是" if x.get("picked_best") else "否") if x["linked"] else ""]
+        for i, v in enumerate(vals, 1):
+            c = ws.cell(r, i, v)
+            if i in (4, 9, 10, 11, 12, 13) and isinstance(v, (int, float)):
+                c.number_format = "#,##0.00"
+    if unlinked:
+        r += 2
+        ws.cell(r, 1, "比了没记成交 (定了跟谁买就让小鲶记一笔)").font = Font(bold=True)
+        for u in unlinked:
+            r += 1
+            ws.cell(r, 1, u["at"])
+            ws.cell(r, 2, u["item"])
+            ws.cell(r, 3, f"当时最低: {u['best']}")
+    wb.save(path)
+    return path

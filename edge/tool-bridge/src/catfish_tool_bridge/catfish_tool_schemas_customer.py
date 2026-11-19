@@ -14,18 +14,18 @@ CUSTOMER_TOOLS: List[Dict[str, Any]] = [
             "客户档案 + 跟进雷达 + 采购比价。\n"
             "处理完客户邮件 / 微信 / 会议立刻 log 要点 (一条一事, ≤160 字原话)。"
             "who=客户 kind=问题; who=我方 kind=承诺 (带 due) / 报价; 其余 kind=信息。承诺兑现后 done。\n"
-            "红线: 新建客户 / 改阶段先不带 confirmed, 念 proposal, 员工同意才 confirmed=true; 认不出客户就问; 不替员工发消息。\n"
+            "红线: 新建客户 / 改阶段先不带 confirmed, 念 proposal, 同意才 confirmed=true; 认不出客户就问; 不替员工发消息。\n"
             "upsert · get · list · radar · template · price · quote 出报价单 (价格表没有的先问, 不编价) · quotes · weekly。\n"
-            "采购: 比供应商报价时先读报价邮件 / 附件, 每家抽 supplier/price/unit/含税否/交货/付款/运费/有效期/来源 "
-            "(没写留空), 调 procure_compare (item+quotes+qty)。procure_deal 记成交 (员工说定了才 confirmed) · "
-            "procure_history · procure_import (台账 xlsx path)。不替员工拍板、不联系供应商。"
+            "采购: 比报价先读邮件 / 附件, 每家抽 供应商/价/单位/含税否/交货/付款/运费/有效期/来源 "
+            "(没写留空), 调 procure_compare (item+quotes+qty)。procure_deal 记成交 (说定了才 confirmed) · "
+            "procure_history · procure_monthly 月报 (date) · procure_import (台账 path)。不拍板、不联系供应商。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["upsert", "log", "done", "get", "list", "radar", "template",
                                                       "price", "quote", "quotes", "weekly",
-                                                      "procure_compare", "procure_deal", "procure_history", "procure_import"]},
+                                                      "procure_compare", "procure_deal", "procure_history", "procure_import", "procure_monthly"]},
                 "name": {"type": "string", "description": "upsert: 客户公司全名"},
                 "customer": {"type": "string", "description": "log/done/get: 客户名 (或用 email / wechat 定位)"},
                 "email": {"type": "string", "description": "按联系人邮箱 / 公司域名定位客户"},
