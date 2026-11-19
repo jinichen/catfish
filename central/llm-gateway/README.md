@@ -89,9 +89,14 @@ tool_loop:
 钥匙用 `Authorization: Bearer …` 或 `x-api-key`。模型名用中央的 (或 `catfish-auto`), Anthropic 自己的模型名不认。
 模型的思考过程不转出去 (Anthropic 的 thinking 块要签名)。Claude Code 接法:
 
+个人长期钥匙 (11/19): 员工在鲶鱼桌面端「设置 → 服务 / 配额 → Claude Code 钥匙」自己生成 (不自动发),
+只显示一次; 按本人算权限 / 配额 / 审计, 但一律按普通员工 (不带管理权限、不能再生成钥匙);
+权限不烤进钥匙, 网关每分钟向身份服务核一次 (改部门 / 锁人 / 吊销一分钟内生效)。见 auth/personal_keys.py、
+identity api_keys.py。
+
 ```bash
 export ANTHROPIC_BASE_URL=https://<中央地址>
-export ANTHROPIC_AUTH_TOKEN=<网关钥匙>
+export ANTHROPIC_AUTH_TOKEN=<个人长期钥匙 cfk_…>
 export ANTHROPIC_MODEL=catfish-auto
 export ANTHROPIC_SMALL_FAST_MODEL=catfish-auto
 ```

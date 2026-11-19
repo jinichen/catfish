@@ -66,6 +66,7 @@ const PATH_PURPOSE: [string, string][] = [
   ["/v1/wiki/", "部门知识"],
   ["/api/proactive/", "主动提醒"],
   ["/api/egress/anchor", "报指纹 (防篡改)"],
+  ["/api/me/api-keys", "Claude Code 钥匙 (生成 / 吊销)"], // 11/19
   ["/api/show", "查询模型信息"],
   ["/api/room-link/mailbox", "同事协作 · 邮筒"],
   // 11/07: 登记 / 查同事的加密公钥 (只有公钥), 原来显示成「网页请求」

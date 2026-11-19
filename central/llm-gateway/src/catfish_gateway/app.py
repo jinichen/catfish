@@ -267,6 +267,8 @@ register_misc_routes(app)
 register_media_routes(app)  # 11/17: 出图 / 出视频 (media_routes.py)
 from .anthropic_routes import register_anthropic_routes  # noqa: E402
 register_anthropic_routes(app)  # 11/19: Anthropic 格式 /v1/messages (Claude Code 等直连中央)
+from .api_keys_routes import register_api_keys_routes  # noqa: E402
+register_api_keys_routes(app)  # 11/19: 员工个人长期钥匙 /api/me/api-keys
 register_component_admin_routes(app)  # 10/3: 管理员在门户上传 / 下架组件包
 
 app.add_middleware(

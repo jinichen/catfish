@@ -38,6 +38,7 @@
 import ServicesCard from "./ServicesCard";
 import LocalSearchScopeCard from "./LocalSearchScopeCard"; // P3.5.126 (6/26 鸿波 catch): local_search 索引目录 UI
 import QuotaCard from "./QuotaCard";
+import ApiKeysCard from "./ApiKeysCard";
 // P3.5.59 (6/22 鸿波 catch "无法知道性能状态"): 综合 LLM + tool perf 一站式
 import PerfCard from "./components/PerfCard";
 // BL-SESSION-CLEANUP-KILL (5/16 鸿波 '没意义砍了吧'): SessionCleanupCard 砍.
@@ -353,7 +354,7 @@ export default function DashboardTab() {
         id="services"
         title="⚙️ 服务 / 配额"
         defaultCollapsed
-        count={5}
+        count={6}
       >
         <SectionTabs
           storageKey="services"
@@ -361,6 +362,7 @@ export default function DashboardTab() {
           tabs={[
             { key: "status", label: "🌐 服务状态", render: () => <ServicesCard /> },
             { key: "quota", label: "📊 我的配额", render: () => <QuotaCard /> },
+            { key: "api-keys", label: "🔑 Claude Code 钥匙", render: () => <ApiKeysCard /> }, // 11/19
             { key: "catalog", label: "🧩 可用模型", render: () => <CatalogCard /> },
             // P3.5.59 (6/22 鸿波 catch "无法知道性能状态"): 综合 LLM perf
             // (gateway audit) + tool dispatch perf (tool-bridge audit) 一站式.

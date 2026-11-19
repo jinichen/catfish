@@ -126,6 +126,7 @@ def create_app(
     code_store: CodeStore | None = None,
     client_registry: ClientRegistry | None = None,
     refresh_token_store: RefreshTokenStore | None = None,
+    api_key_store=None,
 ) -> FastAPI:
     """组装 fastapi app + 所有依赖.
 
@@ -266,6 +267,10 @@ def create_app(
     from .admin_router import make_admin_router  # noqa: PLC0415
     app.include_router(make_admin_router(registry))
     logger.info("admin_router: /admin/users CRUD 已挂载")
+    # 11/19: 员工个人长期钥匙 (Claude Code 等直连中央用), 只走网关反代
+    from .api_keys import ApiKeyStore  # noqa: PLC0415
+    from .routes_api_keys import make_api_keys_router  # noqa: PLC0415
+    app.include_router(make_api_keys_router(registry, api_key_store if api_key_store is not None else ApiKeyStore()))
 
     @app.get("/healthz")
     async def healthz() -> dict:

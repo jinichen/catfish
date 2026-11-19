@@ -303,6 +303,15 @@ async def get_current_user(
             detail="Authorization must be a Bearer token",
         )
 
+    # 11/19: 员工个人长期钥匙 (cfk_…), 问身份服务换成 User, 见 personal_keys.py
+    from . import personal_keys  # noqa: PLC0415
+    _tok = authorization[7:].strip()
+    if personal_keys.is_personal_key(_tok):
+        key_user = await personal_keys.user_from_key(_tok)
+        if key_user is None:
+            raise HTTPException(status_code=401, detail="长期钥匙无效或已吊销")
+        return key_user
+
     user = _get_provider().verify_bearer(authorization)
     if user is None:
         # BL-DEBUG-401 (5/24): 升级版 — decode JWT claims, 打 iss/aud/exp/iat
@@ -358,4 +367,11 @@ async def get_current_user_optional(
     用在匿名浏览场景 (例: 员工启动 Companion 时拉 catalog 看有哪些模型,
     还没填 token).
     """
+    from . import personal_keys  # noqa: PLC0415 — 11/19 长期钥匙也认 (Claude Code 会拉模型列表)
+    _tok = (authorization or "")[7:].strip() if (authorization or "").lower().startswith("bearer ") else ""
+    if _tok and personal_keys.is_personal_key(_tok):
+        try:
+            return await personal_keys.user_from_key(_tok)
+        except HTTPException:
+            return None
     return _get_provider().verify_bearer(authorization)

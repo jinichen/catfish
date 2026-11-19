@@ -30,6 +30,10 @@ describe("来源标签 → 中文用途", () => {
     for (const [k, v] of pairs) expect(SOURCE_PURPOSE[k], k).toBe(v);
   });
 
+  it("Claude Code 钥匙的生成 / 吊销有中文名", () => {
+    expect(egressPurpose("http://10.0.0.5:8999/api/me/api-keys/abc")).toBe("Claude Code 钥匙 (生成 / 吊销)");
+  });
+
   it("已经是中文 / 网址路径的照旧", () => {
     expect(displayPurpose("学习 · 练习", "127.0.0.1")).toBe("学习 · 练习");
     expect(displayPurpose("/api/room-link/keys", "127.0.0.1")).toBe("同事协作 · 加密公钥");
