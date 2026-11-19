@@ -166,7 +166,8 @@ SKILL_TOOLS: List[Dict[str, Any]] = [
         "description": (
             "把员工反复做的流程**提案**成新 skill, 不直接装. "
             "调用时机: 你观察到同类任务 ≥3 次 (triggered_by='auto'), 或员工明确说'存成 skill / 做成 skill' (triggered_by='user_request'). "
-            "不调: 只做过 1-2 次; 健康/财务/感情/政治/宗教类永不提案; 员工已拒绝过同类. "
+            "不调: 只做过 1-2 次; 个人健康/私人财务/感情/政治/宗教类永不提案; 员工已拒绝过同类. "
+            "对话里做通后员工说'固化 / 存成技能'也可用这个 (user_request): 自动带上本次最后跑通、存了文件的代码当程序, 路径和日期变参数. "
             "调用后问员工'要不要存成 skill?', 员工同意再调 catfish_install_proposal. "
             "改已有 skill 用 catfish_propose_skill_revision."
         ),

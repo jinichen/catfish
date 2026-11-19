@@ -61,6 +61,9 @@ const BAKED_JOURNAL_GUARD: &str =
 // 11/17: 小鲶出图 / 出视频 —— image_generate / video_generate 的「鲶鱼中央」供应商
 const BAKED_MEDIA_GEN: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/media_gen.py");
+// 11/19: 「固化成技能」带上这次对话里跑通的代码 —— 把会话号塞给 catfish_propose_skill
+const BAKED_SKILL_SESSION: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/skill_session.py");
 const BAKED_WEIXIN_RESEND: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/weixin_resend.py");
 // 10/24 数据外发记录: hermes 出口挂钩, 带内容 / 发第三方的请求记进 outbound_log.db
@@ -201,6 +204,7 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("card_channel_guard.py", BAKED_CARD_CHANNEL_GUARD),
     ("journal_guard.py", BAKED_JOURNAL_GUARD),
     ("media_gen.py", BAKED_MEDIA_GEN),
+    ("skill_session.py", BAKED_SKILL_SESSION),
     ("weixin_resend.py", BAKED_WEIXIN_RESEND),
     ("egress_log.py", BAKED_EGRESS_LOG),
     ("central_tls.py", BAKED_CENTRAL_TLS),

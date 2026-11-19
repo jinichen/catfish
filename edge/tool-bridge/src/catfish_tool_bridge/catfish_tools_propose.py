@@ -212,6 +212,20 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
             ),
         }
 
+    # 11/19 对话里跑通的代码一起带上 (skill_from_code.py): hermes 插件钩子注入当前会话号
+    frozen, code_note = None, ""
+    session_id = str(args.get("_session_id") or "").strip()
+    if session_id and kind == "procedural":
+        from . import skill_from_code  # noqa: PLC0415
+        fc = skill_from_code.from_session(session_id)
+        if fc.get("ok"):
+            frozen = {"code": fc["code"], "subs": fc["subs"]}
+            code_note = (f"已带上这次对话里最后跑通、存了文件的那段代码 ({fc['lines']} 行) 当技能程序, "
+                         f"以后换参数直接跑, 不用再写代码。参数: "
+                         + ", ".join(f"{x['param']} (固化时 = {x['original']})" for x in fc["subs"]))
+        else:
+            code_note = f"没带上程序: {fc.get('reason')}。装上后这个技能只是一份做法说明, 每次由小鲶照着做。"
+
     # 写 jsonl
     proposal_id = f"prop_{int(now_ts)}_{name}"
     # BL-MM9-fix (5/9): 字段对齐 learning.rs 期待的 schema (namespace/name 拆开)
@@ -231,6 +245,7 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
         "action_steps": action_steps,
         "evidence_count": evidence_count,
         "triggered_by": triggered_by,     # 'auto' | 'user_request' 留 audit
+        "frozen_code": frozen,            # 11/19: {code, subs} 或 None
         "status": "proposed",
         "ts": now_ts,
         "ts_iso": _unix_to_iso(now_ts),
@@ -246,7 +261,9 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
         "proposal_id": proposal_id,
         "name": name,
         "total_proposals": total_proposed,
+        "code": code_note,
         "summary": (
+            (f"{code_note} 把这句话和下面的提案一起念给员工。" if code_note else "") +
             f"已记下提案 '{name}' (基于 {evidence_count} 次员工行为). "
             f"现在跟员工说: '我注意到你最近 {evidence_count} 次 {reason[:50]}, "
             f"要不我把这个流程存成 skill, 下次你说一句就触发? 你说装我就装.' "
@@ -346,9 +363,17 @@ def install_proposal(args: Dict[str, Any]) -> Dict[str, Any]:
         (skill_dir / "SKILL.md").write_text(
             render_skill_md(manifest), encoding="utf-8",
         )
-        (skill_dir / "script.py").write_text(
-            render_script_py(manifest), encoding="utf-8",
-        )
+        frozen = proposal.get("frozen_code") or None
+        if frozen:  # 11/19: 对话里跑通的代码原样存进技能 (skill_from_code.py)
+            from . import skill_from_code  # noqa: PLC0415
+            from .skill_format import _name_to_render_function  # noqa: PLC0415
+            script = skill_from_code.render_script(_name_to_render_function(skill_name), skill_name,
+                                                   frozen["code"], frozen["subs"])
+            md = render_skill_md(manifest).rstrip() + "\n\n" + skill_from_code.params_doc(frozen["subs"]) + "\n"
+            (skill_dir / "SKILL.md").write_text(md, encoding="utf-8")
+        else:
+            script = render_script_py(manifest)
+        (skill_dir / "script.py").write_text(script, encoding="utf-8")
     except OSError as e:
         return {"ok": False, "error": f"写 SKILL.md / script.py 失败: {e}"}
 

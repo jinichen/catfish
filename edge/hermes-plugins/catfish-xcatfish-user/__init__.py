@@ -190,6 +190,20 @@ def register(ctx) -> None:
                 "memory 写入回落 prompt 自查模式)", e,
             )
 
+        # 11/19: 「固化成技能」要带上这次对话里跑通的代码 —— 把会话号塞给 catfish_propose_skill。见 skill_session.py。
+        try:
+            from pathlib import Path as _PathS
+            import importlib.util as _iuS
+            _specS = _iuS.spec_from_file_location(
+                "_catfish_xcatfish_user_skill_session", _PathS(__file__).parent / "skill_session.py",
+            )
+            _skill_session = _iuS.module_from_spec(_specS)
+            _specS.loader.exec_module(_skill_session)
+            ctx.register_hook("pre_tool_call", _skill_session.skill_session_hook)
+            logger.info("catfish-xcatfish-user: skill_session pre_tool_call hook registered ✓")
+        except Exception as e:
+            logger.warning("catfish-xcatfish-user skill_session register fail: %s (固化技能不带代码)", e)
+
         # 11/17: 小鲶出图 / 出视频 —— 给 hermes 自带的 image_generate / video_generate 注册「鲶鱼中央」供应商,
         # 转给中央网关 (模型、单价都是中央「模型」页的配置)。见 media_gen.py。每份插件都注册 (按 profile 生效),
         # 同名重复注册 hermes 按替换处理。
