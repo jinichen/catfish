@@ -142,7 +142,14 @@ pub fn meeting_asr_install(app: tauri::AppHandle) -> Result<(), String> {
             let _ = emit_app.emit("meeting_asr_progress", json!({ "step": step, "done": false }));
         });
         match &r {
-            Ok(i) => log::info!("[meeting-asr] 装好 {} → {}", i.version, i.python.display()),
+            Ok(i) => {
+                log::info!("[meeting-asr] 装好 {} → {}", i.version, i.python.display());
+                // 11/19: 装好就清安装包 (含旧版本), 不然 ~/.catfish/runtime 越积越大
+                if let Ok(rt) = comp::runtime_dir() {
+                    let freed = comp::prune_installed_packs(&rt, asr::COMPONENT_NAME, &i.version);
+                    log::info!("[meeting-asr] 清掉安装包 {} MB", freed / 1_048_576);
+                }
+            }
             Err(e) => log::warn!("[meeting-asr] 安装失败: {e}"),
         }
         let _ = app.emit(

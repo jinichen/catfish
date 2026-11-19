@@ -323,3 +323,78 @@ mod error_chain_tests {
         assert!(msg.len() > e.to_string().len(), "要带上底层原因: {msg}");
     }
 }
+
+/// 11/19 鸿波「前几次清完都有 100G, 现在只有 45G, 空间怎么没的」: 组件装好后安装包一直留在 ~/.catfish/runtime,
+/// 升级后旧版本的包也不删 —— 他这台会议组件 1.0.0 / 1.1.0 + 高精度 1.0.0 三个包 7.9 GB, 而装好的东西在别处。
+/// 装成功后调: 删掉这个组件**不新于**刚装版本的包 (本平台 + any), 连同 .verified / .part。
+/// 比刚装新的包 (已下载、还没装) 留着。要重装会重新下载。返回删掉的字节数。
+pub fn prune_installed_packs(runtime: &Path, component: &str, installed_version: &str) -> u64 {
+    let key = |v: &str| -> Vec<u32> { v.split('.').map(|x| x.parse().unwrap_or(0)).collect() };
+    let cur = key(installed_version);
+    let prefix = format!("{component}-");
+    let suffixes = [format!("-{}.tar.gz", current_platform()), format!("-{ANY_PLATFORM}.tar.gz")];
+    let Ok(entries) = std::fs::read_dir(runtime) else { return 0 };
+    let mut freed = 0;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(rest) = name.strip_prefix(&prefix) else { continue };
+        // 「meeting-asr-」也是「meeting-asr-hq-」的前缀: 版本号必须紧跟在组件名后面 (数字开头)
+        if !rest.starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
+        }
+        let Some(version) = suffixes.iter().find_map(|s| rest.strip_suffix(s.as_str())) else { continue };
+        if key(version) > cur {
+            continue;
+        }
+        for f in [name.clone(), format!("{name}.verified"), format!("{name}.part")] {
+            let p = runtime.join(&f);
+            if let Ok(meta) = std::fs::metadata(&p) {
+                if std::fs::remove_file(&p).is_ok() {
+                    freed += meta.len();
+                }
+            }
+        }
+    }
+    freed
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+
+    #[test]
+    fn prune_removes_installed_and_older_keeps_newer_and_other_components() {
+        let d = tempfile::tempdir().unwrap();
+        let plat = current_platform();
+        let touch = |n: &str| std::fs::write(d.path().join(n), b"x").unwrap();
+        for n in [
+            format!("meeting-asr-1.0.0-{plat}.tar.gz"),
+            format!("meeting-asr-1.0.0-{plat}.tar.gz.verified"),
+            format!("meeting-asr-1.1.0-{plat}.tar.gz"),
+            format!("meeting-asr-1.1.0-{plat}.tar.gz.verified"),
+            format!("meeting-asr-1.2.0-{plat}.tar.gz"),          // 比装的新: 留
+            format!("meeting-asr-hq-1.0.0-{plat}.tar.gz"),       // 别的组件 (前缀撞): 留
+            "meeting-asr-1.0.0-other-platform.tar.gz".to_string(), // 别的平台: 留
+        ] {
+            touch(&n);
+        }
+        let freed = prune_installed_packs(d.path(), "meeting-asr", "1.1.0");
+        assert_eq!(freed, 4);
+        let mut left: Vec<String> = std::fs::read_dir(d.path()).unwrap().flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        assert_eq!(left, vec![
+            "meeting-asr-1.0.0-other-platform.tar.gz".to_string(),
+            format!("meeting-asr-1.2.0-{plat}.tar.gz"),
+            format!("meeting-asr-hq-1.0.0-{plat}.tar.gz"),
+        ]);
+    }
+
+    #[test]
+    fn prune_handles_any_platform_and_missing_dir() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("embed-model-1.0.0-any.tar.gz"), b"xx").unwrap();
+        assert_eq!(prune_installed_packs(d.path(), "embed-model", "1.0.0"), 2);
+        assert_eq!(prune_installed_packs(&d.path().join("nope"), "embed-model", "1.0.0"), 0);
+    }
+}

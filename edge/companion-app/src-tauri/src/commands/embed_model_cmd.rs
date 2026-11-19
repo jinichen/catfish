@@ -92,7 +92,14 @@ pub fn embed_model_install(app: tauri::AppHandle) -> Result<(), String> {
             let _ = emit_app.emit("embed_model_progress", json!({ "step": step, "done": false }));
         });
         match &r {
-            Ok(i) => log::info!("[embed-model] 装好 {:?} → {}", i.version, i.model_path.display()),
+            Ok(i) => {
+                log::info!("[embed-model] 装好 {:?} → {}", i.version, i.model_path.display());
+                // 11/19: 装好就清安装包 (含旧版本)
+                if let (Ok(rt), Some(v)) = (comp::runtime_dir(), i.version.as_deref()) {
+                    let freed = comp::prune_installed_packs(&rt, em::COMPONENT_NAME, v);
+                    log::info!("[embed-model] 清掉安装包 {} MB", freed / 1_048_576);
+                }
+            }
             Err(e) => log::warn!("[embed-model] 安装失败: {e}"),
         }
         let _ = app.emit("embed_model_progress", json!({ "step": "finished", "done": true, "error": r.err() }));
