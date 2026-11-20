@@ -113,7 +113,35 @@ def _patch_p12_update_system_prompt_safe() -> None:
 
     Fix: wrap `call 前 _insert_session_row(session_id, "unknown")` `保证 row 存`真.
     幂等 — INSERT OR IGNORE `真``真`已 在 row `noop`真.
+
+    11/20 hermes v0.23.3: 会话库搬进 persistence/, `SessionDB.update_system_prompt` 没了 (原来这里
+    直接 `SessionDB.update_system_prompt` 取属性 → AttributeError → 整个插件 delayed install 失败,
+    后面所有补丁都没装)。新版对话循环调的是 `store.sessions.update_system_prompt` =
+    `SQLiteSessionRepository.update_system_prompt`, SQL 还是裸 UPDATE, 竞态还在 → 补丁挂到那上面。
+    两个位置都找不到就跳过并记日志, 绝不拖垮整个插件。
     """
+    try:
+        from persistence.sqlite.conversation.sessions import SQLiteSessionRepository  # noqa: PLC0415
+        from persistence.sqlite.conversation._store.sessions import _insert_session_row  # noqa: PLC0415
+    except ImportError:
+        SQLiteSessionRepository = None  # noqa: N806 — hermes ≤ 0.23.2
+    if SQLiteSessionRepository is not None and hasattr(SQLiteSessionRepository, "update_system_prompt"):
+        _orig_repo = SQLiteSessionRepository.update_system_prompt
+        if getattr(_orig_repo, "_catfish_p12_patched", False):
+            return
+
+        def patched_repo(self, session_id, system_prompt):
+            try:
+                _insert_session_row(self._store.holder(), session_id, "unknown")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("P12 _insert_session_row 异常 (ignored): %s", e)
+            return _orig_repo(self, session_id, system_prompt)
+
+        patched_repo._catfish_p12_patched = True  # type: ignore[attr-defined]
+        SQLiteSessionRepository.update_system_prompt = patched_repo
+        logger.info("P12 SQLiteSessionRepository.update_system_prompt + INSERT OR IGNORE patched")
+        return
+
     try:
         # `真``真`实际 class name 是 SessionDB (audit hermes_state.py:354), 不是 HermesState`**真
         from hermes_state import SessionDB
@@ -121,7 +149,10 @@ def _patch_p12_update_system_prompt_safe() -> None:
         logger.warning("P12: hermes_state.SessionDB import 失败 (%s), skip patch", e)
         return
 
-    _orig = SessionDB.update_system_prompt
+    _orig = getattr(SessionDB, "update_system_prompt", None)
+    if _orig is None:
+        logger.warning("P12: 找不到 update_system_prompt (hermes 又搬了?), skip patch")
+        return
 
     def patched(self, session_id: str, system_prompt: str) -> None:
         # `保证 session row 存` — `INSERT OR IGNORE 幂等`真.

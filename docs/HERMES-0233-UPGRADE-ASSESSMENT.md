@@ -47,3 +47,13 @@
 4. 本机网关换新版跑一天, 看 `delayed install ✓`、出卡、会中小鲶、群聊 @小鲶、缓存保活日志。
 
 工作量: 代码改动小 (两处补丁); 主要是重打包和 e2e, 约半天到一天。
+
+## 升级记录 (2026-11-20, Companion 1.2.235)
+
+- 钉 v0.23.3 (`caafe538`): `.hermes-git-tag` / `.hermes-git-commit` / `.hermes-target-version`。
+- **P12** (`plugin_misc.py`): 有 `persistence` 就挂 `SQLiteSessionRepository.update_system_prompt` (新版对话循环调的就是它,
+  SQL 仍是裸 UPDATE), 先 `_insert_session_row(..., "unknown")`; 老版本照旧挂 `SessionDB`; 两处都找不到只记日志跳过, 不再拖垮整个 install。
+- **P40** (`plugin_session.py`): 有 `persistence` 就挂 `SQLiteMessageRepository.append` (新版 SessionDB.append_message 也转调它),
+  判重改成只读直接查库 (会话来源 + 附表 + 最后一条有效消息); 老版本照旧挂 `SessionDB.append_message`。覆盖面跟 0.23.2 一致。
+- 新测试 `tests/test_p12_p40_on_real_store.py` (真 Hermes 会话库): 两版都 3/3; 反向验证 —— 拿旧插件代码在 0.23.3 上跑, P12 / P40 都挂。
+- 插件全量 (含真实网关 26 项) 两版都 788 过。

@@ -483,6 +483,91 @@ def _patch_p17_bg_review_inject() -> None:
 
 # ── P40 (7/31): Companion/Hermes/Codex 共享 state.db 的 user 双写防护 ─────
 
+P40_WINDOW_S = 30
+
+
+def _p40_content_key(value) -> str:
+    if isinstance(value, str):
+        if value.startswith("\x00json:"):  # 0.23.3 存结构化内容的前缀
+            try:
+                value = json.loads(value[len("\x00json:"):])
+            except ValueError:
+                return value.strip()
+        else:
+            return value.strip()
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:  # noqa: BLE001
+        return str(value).strip()
+
+
+def _p40_duplicate_rowid(db_path, session_id: str, content, incoming_ts) -> int | None:
+    """Companion 会话里, 最后一条有效消息是 30 秒内内容相同的 user → 返回它的 rowid (这次不再写)。只读。"""
+    import sqlite3  # noqa: PLC0415
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+    try:
+        row = con.execute("SELECT source FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if not _is_companion_session(type("_Db", (), {"db_path": db_path})(), session_id,
+                                     {"source": row[0] if row else ""}):
+            return None
+        last = con.execute("SELECT id, role, content, timestamp FROM messages WHERE session_id = ? AND active = 1 "
+                           "ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
+    finally:
+        con.close()
+    if not last or last[1] != "user" or _p40_content_key(last[2]) != _p40_content_key(content):
+        return None
+    if hasattr(incoming_ts, "timestamp"):
+        incoming_ts = incoming_ts.timestamp()
+    try:
+        incoming_ts = float(incoming_ts)
+    except (TypeError, ValueError):
+        incoming_ts = time.time()
+    return int(last[0]) if 0 <= incoming_ts - float(last[3] or 0) <= P40_WINDOW_S else None
+
+
+def _patch_p40_on_persistence_store() -> bool:
+    """11/20 hermes v0.23.3: 写消息全改走 `persistence.messages.append` (SQLiteMessageRepository.append),
+    不再经过 `SessionDB.append_message` —— 老补丁还装得上但不起作用。新版挂到这里 (老 SessionDB.append_message
+    在新版里也是转调它, 一处全覆盖)。覆盖面跟 0.23.2 一样: 单条写入; 一轮结束的批量写入 (append_batch,
+    0.23.2 叫 append_messages_batch) 两个版本都不经过 P40。返回 False = 老版本, 走原来的 SessionDB 补丁。"""
+    try:
+        from persistence.sqlite.conversation.messages import SQLiteMessageRepository  # noqa: PLC0415
+    except ImportError:
+        return False
+    original = getattr(SQLiteMessageRepository, "append", None)
+    if original is None:
+        return False
+    if getattr(original, "_catfish_p40_patched", False):
+        return True
+
+    locks_guard = threading.Lock()
+    session_locks: dict[str, threading.Lock] = {}
+
+    @functools.wraps(original)
+    def patched_append(self, session_id, message, *args, **kwargs):
+        if getattr(message, "role", None) != "user" or not session_id:
+            return original(self, session_id, message, *args, **kwargs)
+        with locks_guard:
+            session_lock = session_locks.setdefault(str(session_id), threading.Lock())
+        with session_lock:
+            try:
+                ts = message.timestamp if message.timestamp is not None else time.time()
+                existing = _p40_duplicate_rowid(self._store.holder().db_path, str(session_id), message.content, ts)
+                if existing is not None:
+                    # ⚠ 不打聊天正文 (数据零出端), session + rowid 够定位
+                    logger.info("P40 dedup skip: session=%s user rowid=%s (len=%d)",
+                                session_id, existing, len(_p40_content_key(message.content)))
+                    return existing
+            except Exception:  # noqa: BLE001 — 防重失败不能阻断聊天
+                logger.warning("P40 dedup check failed; fallback original append", exc_info=True)
+            return original(self, session_id, message, *args, **kwargs)
+
+    patched_append._catfish_p40_patched = True  # type: ignore[attr-defined]
+    SQLiteMessageRepository.append = patched_append
+    logger.info("P40 Companion user-message dedup patched at SQLiteMessageRepository.append ✓")
+    return True
+
+
 def _patch_p40_companion_user_message_dedup() -> None:
     """相邻相同 user message 只保留一条，且只作用于 Companion 会话。
 
@@ -501,6 +586,8 @@ def _patch_p40_companion_user_message_dedup() -> None:
       彻底的解法是幂等键（Companion 带一个 client id 进来按它去重），
       那样窗口宽窄就无所谓了。
     """
+    if _patch_p40_on_persistence_store():
+        return
     try:
         from hermes_state import SessionDB  # noqa: PLC0415
     except ImportError as e:
