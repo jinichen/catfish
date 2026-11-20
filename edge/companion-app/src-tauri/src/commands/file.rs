@@ -32,18 +32,78 @@ fn expand_tilde(path: &str) -> PathBuf {
 ///
 /// 错误信息直接给前端展示, 别带 PII.
 pub(crate) fn resolve_path(raw: &str) -> Result<PathBuf, String> {
-    let expanded = expand_tilde(raw);
+    let mut expanded = expand_tilde(raw);
     if !expanded.is_absolute() {
         return Err(format!("路径必须是绝对路径: {raw}"));
     }
     if !expanded.exists() {
-        return Err(format!("文件不存在: {raw}"));
+        match expand_ellipsis(&expanded) {
+            Some(found) => expanded = found,
+            None => return Err(format!("文件不存在: {raw}")),
+        }
     }
     let lower = expanded.to_string_lossy().to_lowercase();
     if is_blocked_path(&lower) {
         return Err(format!("拒绝打开敏感路径: {raw}"));
     }
     Ok(expanded)
+}
+
+/// 小鲶嫌文件名太长, 回答里常写成 `…二级）-...第三期集中采购项目.docx` (11/20 鸿波「取地址有BUG」):
+/// 名字里带 `...` / `…` 的那一段, 到上一级目录里按「省略号两边的字依次出现」找真文件。
+/// 只认唯一匹配 —— 对上多个就不猜, 照旧报文件不存在。
+pub(crate) fn expand_ellipsis(path: &std::path::Path) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    let mut changed = false;
+    for comp in path.components() {
+        let name = comp.as_os_str().to_string_lossy();
+        let next = out.join(comp.as_os_str());
+        if next.exists() || !(name.contains("...") || name.contains('…')) {
+            out = next;
+            continue;
+        }
+        let parts: Vec<String> = name
+            .replace('…', "...")
+            .split("...")
+            .map(|p| p.to_string())
+            .collect();
+        let matches: Vec<PathBuf> = std::fs::read_dir(&out)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| ellipsis_matches(&e.file_name().to_string_lossy(), &parts))
+            .map(|e| e.path())
+            .collect();
+        if matches.len() != 1 {
+            return None;
+        }
+        out = matches.into_iter().next()?;
+        changed = true;
+    }
+    (changed && out.exists()).then_some(out)
+}
+
+/// `parts` = 名字按省略号切开的几段: 第一段是开头, 最后一段是结尾, 中间的按顺序出现。
+fn ellipsis_matches(candidate: &str, parts: &[String]) -> bool {
+    let (Some(first), Some(last)) = (parts.first(), parts.last()) else {
+        return false;
+    };
+    if parts.len() < 2 || (first.is_empty() && last.is_empty()) {
+        return false;
+    }
+    if !candidate.starts_with(first.as_str()) || !candidate.ends_with(last.as_str()) {
+        return false;
+    }
+    if candidate.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut rest = &candidate[first.len()..candidate.len() - last.len()];
+    for mid in &parts[1..parts.len() - 1] {
+        match rest.find(mid.as_str()) {
+            Some(i) => rest = &rest[i + mid.len()..],
+            None => return false,
+        }
+    }
+    true
 }
 
 /// 在 Finder 里选中文件 (`open -R <path>`).
@@ -169,3 +229,32 @@ fn is_blocked_path(lower: &str) -> bool {
     BLOCKED_SUBSTR.iter().any(|s| lower.contains(s))
 }
 
+
+#[cfg(test)]
+mod ellipsis_tests {
+    use super::*;
+
+    #[test]
+    fn 省略号写法找回真文件_对上多个不猜() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = "评分标准（标包二：通信工程施工总承包二级）-2026-2028年中电福富资质能力服务第三期集中采购项目.docx";
+        std::fs::write(dir.path().join(real), b"x").unwrap();
+        std::fs::write(dir.path().join("技术规范书（标包二）-2026-2028年第三期集中采购项目.docx"), b"x").unwrap();
+        let short = dir.path().join("评分标准（标包二：通信工程施工总承包二级）-...第三期集中采购项目.docx");
+        assert_eq!(expand_ellipsis(&short), Some(dir.path().join(real)));
+        let short2 = dir.path().join("评分标准…采购项目.docx");
+        assert_eq!(resolve_path(short2.to_str().unwrap()).unwrap(), dir.path().join(real));
+        // 两个都以 .docx 结尾、都含「第三期」: 不猜
+        assert_eq!(expand_ellipsis(&dir.path().join("...第三期集中采购项目.docx")), None);
+        assert!(resolve_path(dir.path().join("不存在.docx").to_str().unwrap()).unwrap_err().contains("文件不存在"));
+    }
+
+    #[test]
+    fn 匹配规则() {
+        let p = |s: &str| s.replace('…', "...").split("...").map(String::from).collect::<Vec<_>>();
+        assert!(ellipsis_matches("abcXYZdef", &p("abc...def")));
+        assert!(ellipsis_matches("abc1mid2def", &p("abc...mid...def")));
+        assert!(!ellipsis_matches("abcdef", &p("abcd...cdef")));
+        assert!(!ellipsis_matches("anything", &p("...")));
+    }
+}
