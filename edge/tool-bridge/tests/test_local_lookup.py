@@ -59,6 +59,9 @@ def test_lookup_orders_sources_and_prompt(monkeypatch):
     monkeypatch.setattr(ll, "_wiki", lambda qs, question="": [{"kind": "知识库", "title": "ITSS一级", "where": "wiki/e.md", "text": "11/19 答辩"}])
     monkeypatch.setattr(ll, "_files", lambda qs: [{"kind": "本机文件", "title": f"f{i}.docx", "where": f"/f{i}", "text": "t"} for i in range(12)])
     monkeypatch.setattr(ll, "_mails", lambda qs: [{"kind": "邮件", "title": "答辩通知", "where": "m1", "text": "许春 · 2026-11-11"}])
+    monkeypatch.setattr(ll, "_journal", lambda qs: [])
+    monkeypatch.setattr(ll, "_chats", lambda qs: [])
+    monkeypatch.setattr(ll, "_learned", lambda q: [])
 
     async def fake(msgs, **kw):
         return '{"queries": ["ITSS 一级"]}'
@@ -123,3 +126,86 @@ def test_wiki_hit_text_carries_type_status_props_relations(tmp_path, monkeypatch
     text = ll._wiki(["应急"], "应急证书")[0]["text"]
     assert text.startswith("(顺着「中电福富」的关系找到的) [cert · 即将到期] [valid_until=2027-04-25] 关系: 「中电福富」持有 本条\n")
     assert "正文" in text
+
+
+# ── 11/20 「@小鲶 早上还写了感谢信」答不知道: 邮件整串匹配 + 没查日志 ──
+
+def test_words_split_and_drop_tail():
+    assert ll._words(["ITSS 感谢信", "感谢信"]) == ["ITSS", "感谢信", "感谢"]
+    assert ll._words(["信", "回函"]) == ["回函"]   # 去尾后不到 2 个字的不去
+
+
+def test_mails_searches_each_word_and_ranks_by_hits(monkeypatch):
+    from catfish_tool_bridge import email_search
+    box = {"m1": {"id": "m1", "subject": "关于ITSS一级评估结果公示的感谢", "sender": "我", "date": "2026-11-20 10:10"},
+           "m2": {"id": "m2", "subject": "ITSS现场评审通知", "sender": "许春", "date": "2026-11-11"}}
+    seen = []
+
+    def fake(args):
+        q = args["query"]
+        seen.append(q)
+        return {"matches": [m for m in box.values() if q.lower() in m["subject"].lower()]}   # 跟真的一样整串匹配
+
+    monkeypatch.setattr(email_search, "tool_email_search", fake)
+    out = ll._mails(["ITSS 感谢信"])
+    assert set(seen) == {"ITSS 感谢信", "ITSS", "感谢信", "感谢"}
+    assert [m["where"] for m in out] == ["m1", "m2"]   # 两个词都中的在前
+
+
+def test_journal_finds_entry_with_time_and_readable_title(tmp_path, monkeypatch):
+    (tmp_path / "employee_journal.md").write_text(
+        "## [2026-08-08 12:02] journal | 八月写过一封感谢信\n\n旧的\n\n"
+        "## [2026-11-20 08:44] journal | 更新部门周报\n\n只改资质模块\n\n"
+        "## [2026-11-20 10:10] session | api-4cf85a95213a9e66\n\n### 主题\n员工确定ITSS一级公示感谢信定稿, 邮件只落草稿箱、不发送。\n",
+        encoding="utf-8")
+    monkeypatch.setattr(ll, "_catfish_home", lambda: tmp_path)
+    out = ll._journal(["ITSS 感谢信"])
+    assert [o["where"] for o in out] == ["employee_journal.md 2026-11-20 10:10", "employee_journal.md 2026-08-08 12:02"]
+    assert out[0]["title"].startswith("2026-11-20 10:10 员工确定ITSS一级公示感谢信定稿")
+    assert out[0]["text"].startswith("2026-11-20 10:10: ") and "草稿箱" in out[0]["text"]
+    assert ll._journal(["周报"])[0]["kind"] == "日志"
+    monkeypatch.setattr(ll, "_catfish_home", lambda: tmp_path / "nope")
+    assert ll._journal(["感谢"]) == []
+
+
+def test_prompt_block_carries_now_for_journal_times():
+    block = ll.prompt_block({"queries": ["感谢"], "found": [{"kind": "日志", "title": "t", "where": "w", "text": "x"}], "block": "- [日志] t: x"})
+    assert "现在是 20" in block and "工作日志" in block
+
+
+def _state_db(tmp_path):
+    import time
+    db = tmp_path / "state.db"
+    con = sqlite3.connect(db)
+    con.executescript("CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, title TEXT, started_at REAL);"
+                      "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp REAL);"
+                      "CREATE TABLE catfish_companion_sessions (session_id TEXT PRIMARY KEY, origin TEXT, created_at REAL);")
+    now = time.time()
+    rows = [  # (会话, 来源, 标题, 是工作台, [(角色, 内容, 几秒前)])
+        ("w1", "api_server", "ITSS一级答辩", True, [("user", "帮我写一封 ITSS 一级公示的感谢邮件, 落草稿箱", 7000),
+                                                   ("assistant", "感谢邮件已落草稿 3892, 没发", 6900)]),
+        ("w2", "api_server", "金智达进度表", True, [("user", "ITSS 一项改到三月", 60)]),            # 更新, 但只中「ITSS」
+        ("api-x", "api_server", "1. 主题: …公示的感谢", False, [("user", "ITSS 公示的感谢 邮件原文", 6000)]),   # 后台分拣
+        ("wx", "weixin", "", False, [("user", "ITSS 感谢那封发了没", 5000)]),
+    ]
+    for sid, src, title, mine, msgs in rows:
+        con.execute("INSERT INTO sessions VALUES (?,?,?,?)", (sid, src, title, now - 8000))
+        if mine:
+            con.execute("INSERT INTO catfish_companion_sessions VALUES (?, 'companion', ?)", (sid, now))
+        for role, text, ago in msgs:
+            con.execute("INSERT INTO messages (session_id, role, content, timestamp) VALUES (?,?,?,?)", (sid, role, text, now - ago))
+    con.commit()
+    con.close()
+    return db
+
+
+def test_chats_ranks_by_words_and_skips_background_sessions(tmp_path, monkeypatch):
+    from catfish_tool_bridge import sessions_search
+    db = _state_db(tmp_path)
+    monkeypatch.setattr(sessions_search, "_state_db_path", lambda: db)
+    out = ll._chats(["ITSS 感谢信"])
+    assert [o["where"] for o in out] == ["wx", "w1"]      # 两个词都中的; 只中「ITSS」的 w2、后台分拣 api-x 不要
+    assert out[1]["title"].endswith("ITSS一级答辩") and "我说: 帮我写一封 ITSS 一级公示的感谢邮件" in out[1]["text"]
+    assert ll._chats(["三月"])[0]["where"] == "w2"
+    monkeypatch.setattr(sessions_search, "_state_db_path", lambda: None)
+    assert ll._chats(["感谢"]) == []
