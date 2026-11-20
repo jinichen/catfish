@@ -11,6 +11,8 @@
     "core:event:allow-unlisten",
     "core:webview:default",
     "core:window:default",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
     "shell:default",
     "shell:allow-open",
     "global-shortcut:default",

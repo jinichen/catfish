@@ -3,12 +3,14 @@
  *   - 成果 (FilePane): 小鲶生成的网页 / 文档 / 表格 / 图片 / Word·Excel·PPT
  *   - 浏览器 (BrowserPane): 小鲶正在操作的网页, 需要时「我来操作」自己接手
  * 什么时候自动打开见 useArtifactAutoOpen; 左边缘拖动调宽, 宽度记在本机。
+ * 11/20 起打开时窗口向右长出这一栏 (windowGrow.ts), 不再从对话区里切走一半。
  */
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
 import { useArtifactStore, ARTIFACT_MIN_WIDTH } from "../../../store/artifacts";
 import FilePane from "./FilePane";
 import BrowserPane from "./BrowserPane";
+import { growWindowFor, shrinkWindowBack } from "./windowGrow";
 
 /** 聊天区至少留这么宽, 右栏拖不过来 */
 const CHAT_MIN_WIDTH = 400;
@@ -49,6 +51,13 @@ export default function ArtifactPanel({ paths }: { paths: string[] }) {
     for (const el of Array.from(workspace.children)) if (el !== asideRef.current) ro.observe(el);
     return () => ro.disconnect();
   }, [measure, view]);
+  // 11/20 打开时窗口向右长出右侧栏的宽度, 关掉 / 离开对话页缩回去 (windowGrow.ts)
+  const open = view !== null;
+  useEffect(() => {
+    if (!open) return;
+    void growWindowFor(useArtifactStore.getState().width);
+    return () => void shrinkWindowBack();
+  }, [open]);
   const overlay = space !== null && space.docked < ARTIFACT_MIN_WIDTH;
   const maxWidth = useCallback(() => {
     const m = measure();
