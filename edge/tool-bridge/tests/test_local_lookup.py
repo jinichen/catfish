@@ -156,6 +156,7 @@ def test_journal_finds_entry_with_time_and_readable_title(tmp_path, monkeypatch)
     (tmp_path / "employee_journal.md").write_text(
         "## [2026-08-08 12:02] journal | 八月写过一封感谢信\n\n旧的\n\n"
         "## [2026-11-20 08:44] journal | 更新部门周报\n\n只改资质模块\n\n"
+        "## [2026-11-20 09:00] session | 20261120_090000_abc123\n\n### 主题\n周报改完了\n\n"
         "## [2026-11-20 10:10] session | api-4cf85a95213a9e66\n\n### 主题\n员工确定ITSS一级公示感谢信定稿, 邮件只落草稿箱、不发送。\n",
         encoding="utf-8")
     monkeypatch.setattr(ll, "_catfish_home", lambda: tmp_path)
@@ -163,7 +164,7 @@ def test_journal_finds_entry_with_time_and_readable_title(tmp_path, monkeypatch)
     assert [o["where"] for o in out] == ["employee_journal.md 2026-11-20 10:10", "employee_journal.md 2026-08-08 12:02"]
     assert out[0]["title"].startswith("2026-11-20 10:10 员工确定ITSS一级公示感谢信定稿")
     assert out[0]["text"].startswith("2026-11-20 10:10: ") and "草稿箱" in out[0]["text"]
-    assert ll._journal(["周报"])[0]["kind"] == "日志"
+    assert ll._journal(["周报"])[0]["title"] == "2026-11-20 09:00 周报改完了"   # hermes 会话号也换成正文第一句
     monkeypatch.setattr(ll, "_catfish_home", lambda: tmp_path / "nope")
     assert ll._journal(["感谢"]) == []
 
@@ -209,3 +210,20 @@ def test_chats_ranks_by_words_and_skips_background_sessions(tmp_path, monkeypatc
     assert ll._chats(["三月"])[0]["where"] == "w2"
     monkeypatch.setattr(sessions_search, "_state_db_path", lambda: None)
     assert ll._chats(["感谢"]) == []
+
+
+def test_pick_keeps_room_for_every_source():
+    big = "x" * 3000
+    found = [*({"kind": "知识库", "title": f"k{i}", "where": f"k{i}", "text": big} for i in range(4)),
+             {"kind": "日志", "title": "j", "where": "j", "text": "短"},
+             {"kind": "工作台对话", "title": "c", "where": "c", "text": "11/20 已公示" + "y" * 500},
+             {"kind": "邮件", "title": "…公示的感谢", "where": "m", "text": "我 · 11-20"}]
+    used = ll.pick(found, limit=9000)
+    assert [f["where"] for f in used] == ["k0", "k1", "j", "c", "m"]     # 原来按顺序塞: k0–k2 就满了, 对话和邮件全丢
+    res = {"queries": ["ITSS"], "found": found, "used": used, "block": ll.render(found, 9000)}
+    assert [s["kind"] for s in ll.sources(res)] == ["知识库", "日志", "工作台对话", "邮件", "知识库"]
+
+
+def test_prompt_block_newer_dated_material_beats_stale_wiki():
+    block = ll.prompt_block({"queries": ["ITSS"], "found": [], "used": [], "block": "- [日志] t: x"})
+    assert "以新的为准" in block and "知识库那条还没更新" in block
