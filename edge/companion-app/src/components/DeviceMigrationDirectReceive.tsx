@@ -92,8 +92,9 @@ export default function DeviceMigrationDirectReceive({ beforeRestart }: { before
     return (
       <div style={{ lineHeight: 1.7 }}>
         <div style={muted}>
-          两台电脑都开着、都登录了同一个账号就行, 不用 U 盘、不用设口令。这台会出一个二维码, 用旧电脑扫一下 (旧电脑没摄像头就手输配对码),
-          资料经公司服务器加密传过来 —— 公司服务器只转交、看不到内容, 传完就删。
+          这台出一个二维码, 在旧电脑上扫一下 (没摄像头就输配对码)。两台都要登录同一个账号。
+          <br />
+          资料加密后经公司服务器转过来, 服务器看不到内容、传完就删。
         </div>
         <button type="button" style={{ ...primaryBtn(busy), marginTop: 6 }} onClick={() => void start()} disabled={busy}>
           {busy ? "准备中…" : "开始: 在这台出二维码"}
@@ -109,7 +110,7 @@ export default function DeviceMigrationDirectReceive({ beforeRestart }: { before
         <Qr text={st.qr} />
         <div style={{ lineHeight: 1.8, minWidth: 220 }}>
           <div style={{ fontWeight: 600 }}>在旧电脑上扫这个码</div>
-          <div style={muted}>旧电脑: 设置 → 换机迁移 → 「直传到新电脑」→ 扫码</div>
+          <div style={muted}>旧电脑: 设置 → 隐私 / 本机数据 → 换机迁移 → 这台是旧电脑 → 扫码</div>
           <div style={{ marginTop: 6 }}>
             没有摄像头就输配对码:{" "}
             <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 18, letterSpacing: 2, fontWeight: 600 }}>{st.code}</span>

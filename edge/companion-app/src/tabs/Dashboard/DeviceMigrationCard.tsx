@@ -16,6 +16,8 @@ import DeviceMigrationImport, {
   primaryBtn,
 } from "../../components/DeviceMigrationImport";
 import {
+  directReceiveStatus,
+  directSendStatus,
   entryKey,
   formatBytes,
   migrationExport,
@@ -46,7 +48,38 @@ const tabBtn = (on: boolean): React.CSSProperties => ({
   borderColor: on ? "var(--catfish-cyan)" : "var(--catfish-border)",
 });
 
+type Role = "" | "old" | "new";
+
+/** 「这台是哪台」的大按钮 */
+function RoleCard({ icon, title, sub, onClick }: { icon: string; title: string; sub: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        flex: "1 1 240px",
+        textAlign: "left",
+        padding: "12px 14px",
+        border: "1px solid var(--catfish-border)",
+        borderRadius: 8,
+        background: "var(--catfish-bg)",
+        color: "var(--catfish-text)",
+        cursor: "pointer",
+        lineHeight: 1.6,
+      }}
+    >
+      <div style={{ fontSize: 14, fontWeight: 600 }}>
+        {icon} {title}
+      </div>
+      <div style={muted}>{sub}</div>
+    </button>
+  );
+}
+
+/** 11/21 鸿波「这个UI是不是应该优化一下」: 原来旧电脑 / 新电脑两半同时摆出来, 员工得先读完才知道自己该看哪半;
+ *  直传还要等「清点本机数据」才出来。改成先问这台是哪台, 只给那一半; 直传不等清点 (只有「连同文件」要用清点结果)。 */
 export default function DeviceMigrationCard() {
+  const [role, setRole] = React.useState<Role>("");
   const [scan, setScan] = React.useState<MigrationScan | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [mode, setMode] = React.useState<"direct" | "file">("direct");
@@ -55,59 +88,70 @@ export default function DeviceMigrationCard() {
     migrationScan()
       .then(setScan)
       .catch((e) => setError(String(e)));
+    // 正在传 / 正在收的, 回到这页直接进那一半
+    directSendStatus()
+      .then((s) => s && ["packing", "sending", "finishing"].includes(s.state) && setRole("old"))
+      .catch(() => {});
+    directReceiveStatus()
+      .then((s) => s && ["waiting", "receiving", "verifying", "ready"].includes(s.state) && setRole("new"))
+      .catch(() => {});
   }, []);
 
-  const files =
-    scan?.entries.filter((e) => e.class === "optional" && e.bytes > 0) ?? [];
+  const files = scan?.entries.filter((e) => e.class === "optional" && e.bytes > 0) ?? [];
   const filesBytes = files.reduce((n, e) => n + e.bytes, 0);
+  const back = (
+    <button type="button" style={{ ...plainBtn, padding: "2px 10px", fontSize: 11 }} onClick={() => setRole("")}>
+      ← 不是这台
+    </button>
+  );
 
   return (
     <div style={{ padding: 12, fontSize: 12 }}>
       <h3 style={{ margin: 0, fontSize: 15 }}>🧳 换机迁移</h3>
       <div style={{ ...muted, marginTop: 4, lineHeight: 1.6 }}>
-        换电脑 / 重装系统时, 把小鲶对你的积累整个搬过去。两台都开着就扫码直传;
-        旧电脑已经不在手边, 就先导出成一个口令加密的文件带过去。
+        换电脑 / 重装系统时, 把小鲶对你的积累 (工作日志、记忆、知识库、对话、技能、待办) 整个搬过去。账号和授权不搬, 新电脑重新登录。
       </div>
 
-      <h4 style={h4}>① 在旧电脑上</h4>
-      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-        <button
-          type="button"
-          style={tabBtn(mode === "direct")}
-          onClick={() => setMode("direct")}
-        >
-          直传到新电脑 (推荐)
-        </button>
-        <button
-          type="button"
-          style={tabBtn(mode === "file")}
-          onClick={() => setMode("file")}
-        >
-          导出成文件
-        </button>
-      </div>
-      {!scan && !error && <div style={muted}>正在清点本机数据…</div>}
-      {scan && mode === "direct" && (
-        <DeviceMigrationDirectSend
-          files={files.map(entryKey)}
-          filesBytes={filesBytes}
-        />
+      {role === "" && (
+        <>
+          <h4 style={h4}>这台电脑是…</h4>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <RoleCard icon="📤" title="旧电脑" sub="把这台上的资料搬到新电脑" onClick={() => setRole("old")} />
+            <RoleCard icon="📥" title="新电脑" sub="把旧电脑上的资料搬到这台" onClick={() => setRole("new")} />
+          </div>
+        </>
       )}
-      {scan && mode === "file" && (
-        <FileExport
-          scan={scan}
-          files={files.map(entryKey)}
-          filesBytes={filesBytes}
-        />
-      )}
-      {error && !scan && <div style={errStyle}>🚫 {error}</div>}
 
-      <h4 style={h4}>② 在新电脑上导入</h4>
-      <div style={{ ...muted, marginBottom: 6 }}>
-        新电脑装好 Companion、登录同一个账号后, 在这里收旧电脑直传过来的,
-        或者选迁移包文件导入。
-      </div>
-      <DeviceMigrationImport />
+      {role === "old" && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>📤 这台是旧电脑: 把资料搬出去</span>
+            {back}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <button type="button" style={tabBtn(mode === "direct")} onClick={() => setMode("direct")}>
+              直传到新电脑 (两台都开着, 推荐)
+            </button>
+            <button type="button" style={tabBtn(mode === "file")} onClick={() => setMode("file")}>
+              导出成文件 (新电脑不在手边)
+            </button>
+          </div>
+          {mode === "direct" && <DeviceMigrationDirectSend files={files.map(entryKey)} filesBytes={filesBytes} />}
+          {mode === "file" && !scan && !error && <div style={muted}>正在清点本机数据…</div>}
+          {mode === "file" && scan && <FileExport scan={scan} files={files.map(entryKey)} filesBytes={filesBytes} />}
+          {mode === "file" && error && !scan && <div style={errStyle}>🚫 {error}</div>}
+        </>
+      )}
+
+      {role === "new" && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>📥 这台是新电脑: 把资料搬进来</span>
+            {back}
+          </div>
+          <DeviceMigrationImport />
+        </>
+      )}
     </div>
   );
 }

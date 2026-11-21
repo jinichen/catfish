@@ -154,8 +154,9 @@ export default function DeviceMigrationDirectSend({ files, filesBytes }: { files
   return (
     <div style={{ lineHeight: 1.7 }}>
       <div style={muted}>
-        先在新电脑上装好 Companion、登录同一个账号, 到「换机迁移 → 从旧电脑直传」出二维码。迁移包用新电脑现场生成的密钥加密,
-        经公司服务器边传边删, 服务器看不到内容。不用 U 盘、不用设口令。
+        先在新电脑上登录同一个账号, 打开「换机迁移 → 这台是新电脑」出二维码, 再在这里扫。
+        <br />
+        资料用新电脑的密钥加密, 经公司服务器边传边删, 服务器看不到内容。
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
         <button type="button" style={primaryBtn(busy)} onClick={() => { setError(null); setMode("scan"); }} disabled={busy}>

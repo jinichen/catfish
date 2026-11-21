@@ -73,6 +73,8 @@ export default function SectionTabs({ storageKey, tabs, defaultKey }: Props) {
         role="tablist"
         style={{
           display: "flex",
+          // 11/21: 隐私区 10 个 tab, 窄窗口里挤不下 —— 整个 tab 换到下一行, 不把一个 tab 的字拆成两行 (「隐私状 / 态」)
+          flexWrap: "wrap",
           gap: 0,
           borderBottom: "1px solid var(--catfish-border)",
           marginBottom: "var(--space-3)",
@@ -92,6 +94,7 @@ export default function SectionTabs({ storageKey, tabs, defaultKey }: Props) {
                 border: "none",
                 padding: "8px 14px",
                 fontSize: 13,
+                whiteSpace: "nowrap",
                 fontWeight: active ? 600 : 400,
                 color: active ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
                 cursor: "pointer",
