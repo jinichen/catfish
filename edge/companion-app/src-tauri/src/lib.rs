@@ -518,6 +518,8 @@ pub fn run() {
             // 沿用立即启动，兼容自管 Hermes 环境。
             // 11/01 手机通道: 员工在「设置 → 手机」里开了才连中转站 (默认关), 不依赖 Hermes 就绪
             commands::mobile_bridge::start(app.handle().clone());
+            // 11/21 误删保护: 每天在本机做一份加密快照 (启动 10 分钟后开始看, 设置里可关)
+            commands::device_migration::snapshots::spawn_daily();
             let runtime_services_app = app.handle().clone();
             #[cfg(any(
                 target_os = "macos",

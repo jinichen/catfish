@@ -141,6 +141,7 @@ import SalesTemplateCard from "./SalesTemplateCard";
 import OutboundLogCard from "./OutboundLogCard";
 import AuditExportCard from "./AuditExportCard";  // P3.3.54 (6/12 鸿波): 审计员看的 xlsx 导出
 import DeviceMigrationCard from "./DeviceMigrationCard"; // 10/31 换机迁移 (docs/DEVICE-MIGRATION-DESIGN.md)
+import SnapshotsCard from "./SnapshotsCard"; // 11/21 误删保护 (docs/DEVICE-MIGRATION-DESIGN.md §13)
 import MobileCard from "./MobileCard"; // 11/01 手机通道 (docs/MOBILE-CLIENT-DESIGN.md)
 import AuditViewCard from "./AuditViewCard";  // P3.3.55 (6/12 鸿波): 审计员现场看的 tab
 import { useUIStore } from "../../store/ui";  // P3.3.55 (6/12): auditViewEnabled 开关
@@ -251,6 +252,7 @@ export default function DashboardTab() {
             { key: "audit-export", label: "📦 审计导出", render: () => <AuditExportCard /> },
             // 10/31 BL-L9: 换机迁移 —— 旧电脑导出加密迁移包, 新电脑导入 (不经过中央)
             { key: "migrate", label: "🧳 换机迁移", render: () => <DeviceMigrationCard /> },
+            { key: "snapshots", label: "🛟 误删保护", render: () => <SnapshotsCard /> },
             // P3.3.55 (6/12 鸿波): 审计视图 tab — 默认关 (PrivacyCard toggle 开)
             ...(auditViewEnabled
               ? [{ key: "audit-view", label: "🔍 审计视图", render: () => <AuditViewCard /> }]

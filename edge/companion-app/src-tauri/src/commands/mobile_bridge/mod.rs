@@ -131,7 +131,7 @@ fn send_long(phone_pk: &[u8; 32], phone: &str, m: Value) -> Result<(), String> {
     Ok(())
 }
 
-fn device_name() -> String {
+pub(crate) fn device_name() -> String {
     let host = hostname_guess();
     if host.is_empty() { "我的电脑".into() } else { host }
 }

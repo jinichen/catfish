@@ -1,6 +1,7 @@
 # 换机迁移设计（BL-L9）
 
 > 状态：**已实现**（Companion 1.2.18 / 中央端 alembic 20261031_016）· 设计 2026-10-31，同日按评审默认值落地。
+> 11/21 加：**扫码直传**（§12，中央 alembic 20261121_024）、**误删保护**（§13），Companion 1.2.238。
 > 实现与设计稿不同的地方见 §11。
 > 范围：员工换电脑 / 重装系统时，把「鲶鱼对你的积累」完整搬到新机器。
 > 不在范围：两台电脑同时用、内容实时合并（见 §9）。
@@ -169,8 +170,8 @@ A 的包格式设计成可以直接被 B 复用：B 只是换了个运输方式�
 
 ## 9. 以后（不在本期）
 
-- **B 扫码直传**：中央加一个只转交不留存的中转通道，两端用一次性密钥对（扫码交换）端到端加密，复用本期包格式。
-- **误删保护**：同一套导出逻辑，定时在本机生成加密快照（保留最近 N 份），BL-L9 的另一半。
+- ~~**B 扫码直传**~~：**11/21 已做 (Companion 1.2.238)**，见 §12。
+- ~~**误删保护**~~：**11/21 已做 (Companion 1.2.238)**，见 §13。
 - **多机同时用**：先观察真实需求；真要做，倾向点对点同步 + 按数据类型定合并规则，不在中央存密文。
 
 ## 10. 已拍板（2026-10-31，按默认）
@@ -206,3 +207,53 @@ A 的包格式设计成可以直接被 B 复用：B 只是换了个运输方式�
 - 本机开发机上仍「未归类」的 10 项都是空目录或开发残留（archive / raw / templates 等，代码不读），不带没有影响。
 
 代码位置：`edge/companion-app/src-tauri/src/commands/device_migration/`（`catalog.rs` 清单、`snapshot.rs` 快照与路径改写、`package.rs` 包格式、`apply.rs` 导入、`tests.rs` 端到端）、`commands/transparent_log_lineage.rs`（外发记录链）、`services/device_id.rs`；界面 `tabs/Dashboard/DeviceMigrationCard.tsx`、`components/DeviceMigrationImport.tsx`、`components/OnboardingStepMigrate.tsx`；中央 `central/llm-gateway/src/catfish_gateway/egress_anchor_*.py`。
+
+## 12. 扫码直传（11/21，Companion 1.2.238 / 中央 alembic 20261121_024）
+
+两台电脑都开着、都登录同一个账号时用，不用 U 盘、不用设口令。迁移包格式不变，只是换了加密方式和运输方式。
+
+**流程**
+1. 新电脑「换机迁移 → 从旧电脑直传」：现场生成一把一次性密钥（age x25519，私钥只在内存里），在中央开一次直传
+   （`POST /api/device-transfer`，带公钥），屏幕上出二维码（`catfishmove:1:<直传编号>:<公钥>`）、8 位配对码、6 位核对数字。
+2. 旧电脑「直传到新电脑」：摄像头扫码（公钥以二维码为准，再跟中央记的核一遍，对不上就不传）；没摄像头就手输配对码
+   （公钥从中央拿），两边屏幕的**核对数字**（公钥的 sha256 截 6 位）一样才点「开始传」—— 防中央 / 中间人换公钥。
+3. 旧电脑用同一套导出（外发记录链上照样记「导出迁移包」），用新电脑的公钥加密，1MB 一块 PUT 上去。
+4. 新电脑按顺序取一块、写盘、确认（中央删掉这一块）；收齐报 done → 解密、逐文件 sha256 校验 → 跟导入迁移包文件同样的检查
+   （本人？版本？已有数据要勾覆盖）→ 员工点导入 → 重启。
+
+**中央只转交、不留存**（`device_transfer_db.py`）：
+- 只见密文，没有私钥；不解析、不写日志（日志只有 谁 / 哪两台 / 多大 / 几块）。
+- 不存整包：同时最多留一个滑动窗口（默认 64MB，`CATFISH_DEVICE_TRANSFER_WINDOW_MB`），满了旧电脑等（429）；取走一块删一块。
+- 两台都得在线；等扫码 / 传输中半小时没动静就作废、删块；一个人同时只有一次直传（新开的把旧的作废）。
+- 元数据（谁、哪两台、大小、起止、转了多少字节）30 天后整行删。
+- 旧电脑记一条「数据外发记录」：目的地中央，已加密，只记字节数。
+
+**扫码要摄像头权限**：macOS 正式包 Info.plist 加 `NSCameraUsageDescription`，签名加 `com.apple.security.device.camera`
+（`build-sign-notarize-mac.sh` 签完检查，缺了就失败）；WebView 的授权由 wry 直接放行。Windows 由 WebView2 弹系统授权。
+
+**验证**：中央 router 测试 + 真 PG 测试（窗口、按序确认、作废删块、只认本人）；Rust 端到端
+`direct_e2e_经真中央_边传边收_新电脑导进去`（本机起临时中央 + docker PG，窗口调成 2MB，6MB 随机文件：
+传满了等、收到前轮询，收到的跟发的一字不差，中央最后一块不留，新电脑解开导入）。
+
+代码：`commands/device_migration/direct.rs`（流程 + Tauri 命令）、`direct_net.rs`（跟中央说话）；
+界面 `components/DeviceMigrationDirectSend.tsx` / `DeviceMigrationDirectReceive.tsx` / `QrScanner.tsx`；
+中央 `device_transfer_router.py` / `device_transfer_db.py`。
+
+## 13. 误删保护（11/21，Companion 1.2.238）
+
+每天在本机自动做一份加密快照，留最近几份；误删了挑一份、只把那几项还原回来。
+
+- **内容**：跟迁移包同一份清单的「必带」项（日志、记忆、画像、知识库、对话、技能、待办、群聊记录 …），**不含**附件 / 生成的文件这类大件。
+- **加密**：age x25519，密钥只在这台电脑的系统钥匙串（`catfish-snapshots / snapshot-key`），快照被拷走也打不开；换电脑请用换机迁移。
+- **什么时候做**：Companion 启动 10 分钟后起每小时看一眼，最新一份超过一天（或还没有）就做；磁盘剩余不到「数据量 × 2 + 1GB」就跳过并在页面上说；
+  失败的隔 6 小时再试。设置页可关、可改留几份（1–7，默认 3），可「现在做一份」。不记外发记录（没离开这台电脑）。
+- **存放**：`~/.catfish/snapshots/鲶鱼快照-<时间>.catfishsnap` + 同名 `.json` 明文摘要（时间、大小、带了哪些项，列表页不用解密几 GB）。
+  清单里归「重建」类，不随换机迁移带走。
+- **还原**：选一份 → 勾要还原的几项 → 二次确认 → 只换入勾上的；当前数据先挪进 `~/.catfish/.migration-backup-<时间>/`。
+  对话 / 记忆 / 技能在 Hermes 那边，还原了就重启 Hermes 让它重新加载。
+  **外发记录 / 审计类不还原**（界面不给勾，后端也去掉）：那是只追加的哈希链，退回去会跟中央锚点对不上、被当成篡改。
+
+**验证**：Rust 测试 `快照_做_列_留几份_只还原挑的那几项`（做 3 份留 2 份、快照是密文、不带附件和凭证、误删知识库后只还原知识库、
+没勾的日志不动、外发记录不还原、别的密钥解不开）；界面测试 `SnapshotsCard.test.tsx`。
+
+代码：`commands/device_migration/snapshots.rs`；界面 `tabs/Dashboard/SnapshotsCard.tsx`（设置 → 隐私 / 本机数据 → 误删保护）。

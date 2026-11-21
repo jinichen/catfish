@@ -10,10 +10,15 @@
 
 pub mod apply;
 pub mod catalog;
+pub mod direct;
+pub mod direct_net;
 pub mod package;
 pub mod snapshot;
+pub mod snapshots;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_direct_snapshots;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -22,12 +27,12 @@ use std::sync::Mutex;
 use serde::Serialize;
 
 use catalog::Class;
-use package::{Manifest, Source};
+use package::{Lock, Manifest, Source, Unlock};
 use snapshot::{Entry, Roots};
 
 const MIN_PASSPHRASE: usize = 8;
-/// 同一时间只做一件 (导出 / 导入都要独占)
-static BUSY: Mutex<()> = Mutex::new(());
+/// 同一时间只做一件 (导出 / 导入 / 直传 / 快照都要独占)
+pub(crate) static BUSY: Mutex<()> = Mutex::new(());
 
 /// 当前这台的身份 (导出写进包、导入时核对是不是同一个人)。
 pub struct Me {
@@ -36,7 +41,7 @@ pub struct Me {
 }
 
 impl Me {
-    fn current() -> Result<Me, String> {
+    pub(crate) fn current() -> Result<Me, String> {
         let email = crate::services::oauth::current_user_sub().ok_or("请先登录, 再做换机迁移")?;
         let device_id = crate::services::device_id::current().ok_or("找不到用户目录")?;
         Ok(Me { email, device_id })
@@ -53,15 +58,15 @@ fn os_name() -> &'static str {
     }
 }
 
-fn stamp() -> String {
+pub(crate) fn stamp() -> String {
     chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
 }
 
 /// 临时目录放在 .catfish 下 (跟目标同一个盘, 换入时是改名不是拷贝); 用完删。
-struct TmpDir(PathBuf);
+pub(crate) struct TmpDir(pub(crate) PathBuf);
 
 impl TmpDir {
-    fn new(roots: &Roots) -> Result<TmpDir, String> {
+    pub(crate) fn new(roots: &Roots) -> Result<TmpDir, String> {
         let p = roots.catfish.join(format!(".migration-tmp-{}", stamp()));
         std::fs::create_dir_all(&p).map_err(|e| format!("建临时目录失败: {e}"))?;
         Ok(TmpDir(p))
@@ -109,23 +114,27 @@ pub struct ExportReport {
 
 #[cfg(test)]
 pub fn export_at(roots: &Roots, me: &Me, dest: &Path, passphrase: &str, optional: &[String]) -> Result<ExportReport, String> {
-    export_with(roots, me, dest, passphrase, optional, &package::RoomsDb::default())
+    export_with(roots, me, dest, &Lock::Passphrase(passphrase.into()), optional, &package::RoomsDb::default(), true)
 }
 
+/// `mark_export`: 在外发记录链上记一行「导出迁移包」(换机用; 本机误删保护快照不记 —— 每天一份, 不是给别的电脑的)。
 pub fn export_with(
     roots: &Roots,
     me: &Me,
     dest: &Path,
-    passphrase: &str,
+    lock: &Lock,
     optional: &[String],
     rooms: &package::RoomsDb,
+    mark_export: bool,
 ) -> Result<ExportReport, String> {
-    if passphrase.chars().count() < MIN_PASSPHRASE {
-        return Err(format!("迁移口令至少 {MIN_PASSPHRASE} 位"));
+    if let Lock::Passphrase(p) = lock {
+        if p.chars().count() < MIN_PASSPHRASE {
+            return Err(format!("迁移口令至少 {MIN_PASSPHRASE} 位"));
+        }
     }
     // 外发记录链上先记一行「导出迁移包」(快照里就带着这一行)
     let egress = roots.catfish.join("outbound_log.db");
-    if egress.exists() {
+    if mark_export && egress.exists() {
         let mut conn = super::transparent_log::open_db_at(&egress)?;
         super::transparent_log_lineage::record_export(&mut conn, &me.device_id)?;
     }
@@ -142,7 +151,7 @@ pub fn export_with(
     };
     let chosen: HashSet<String> = optional.iter().cloned().collect();
     let m = package::build_zip(roots, &scan.entries, &chosen, &tmp.0, &zip_path, source, rooms)?;
-    let bytes = package::encrypt(&zip_path, dest, passphrase)?;
+    let bytes = package::encrypt(&zip_path, dest, lock)?;
     Ok(ExportReport {
         path: dest.to_string_lossy().into_owned(),
         bytes,
@@ -178,16 +187,16 @@ fn ver(s: &str) -> (u64, u64, u64) {
     (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
 }
 
-fn open_package(roots: &Roots, pkg: &Path, passphrase: &str) -> Result<(TmpDir, PathBuf, Manifest), String> {
+pub(crate) fn open_package(roots: &Roots, pkg: &Path, unlock: &Unlock) -> Result<(TmpDir, PathBuf, Manifest), String> {
     let tmp = TmpDir::new(roots)?;
     let zip_path = tmp.0.join("pkg.zip");
-    package::decrypt(pkg, passphrase, &zip_path)?;
+    package::decrypt(pkg, unlock, &zip_path)?;
     let m = package::read_manifest(&zip_path)?;
     package::verify(&zip_path, &m)?;
     Ok((tmp, zip_path, m))
 }
 
-fn inspect_report(roots: &Roots, me: &Me, m: &Manifest) -> InspectReport {
+pub(crate) fn inspect_report(roots: &Roots, me: &Me, m: &Manifest) -> InspectReport {
     let carried: HashSet<String> = m.items.iter().filter_map(|i| {
         let (root, rel) = package::split_path(&i.path)?;
         Some(format!("{}/{}", root.dir_name(), rel.split('/').next().unwrap_or(rel)))
@@ -208,14 +217,33 @@ fn inspect_report(roots: &Roots, me: &Me, m: &Manifest) -> InspectReport {
     }
 }
 
-pub fn inspect_at(roots: &Roots, me: &Me, pkg: &Path, passphrase: &str) -> Result<InspectReport, String> {
-    let (_tmp, _zip, m) = open_package(roots, pkg, passphrase)?;
+pub fn inspect_at(roots: &Roots, me: &Me, pkg: &Path, unlock: &Unlock) -> Result<InspectReport, String> {
+    let (_tmp, _zip, m) = open_package(roots, pkg, unlock)?;
     Ok(inspect_report(roots, me, &m))
 }
 
-pub fn import_at(roots: &Roots, me: &Me, pkg: &Path, passphrase: &str, overwrite: bool) -> Result<apply::ImportReport, String> {
-    let (tmp, zip_path, m) = open_package(roots, pkg, passphrase)?;
-    let check = inspect_report(roots, me, &m);
+/// 导入的几种用法: 换机 (整包、接外发记录链) / 误删保护还原 (可以只还原几项, 不碰外发记录链)。
+#[derive(Default)]
+pub struct ImportOpts {
+    pub overwrite: bool,
+    /// 只换入这几项 (`catfish/wiki` 这种第一层名字); None = 包里全部
+    pub only: Option<HashSet<String>>,
+    /// 换机: 在外发记录链上接一行「设备迁移」
+    pub lineage: bool,
+}
+
+pub fn import_at(roots: &Roots, me: &Me, pkg: &Path, unlock: &Unlock, overwrite: bool) -> Result<apply::ImportReport, String> {
+    import_with(roots, me, pkg, unlock, &ImportOpts { overwrite, only: None, lineage: true })
+}
+
+pub fn import_with(roots: &Roots, me: &Me, pkg: &Path, unlock: &Unlock, o: &ImportOpts) -> Result<apply::ImportReport, String> {
+    let (tmp, zip_path, m) = open_package(roots, pkg, unlock)?;
+    import_opened(roots, me, &tmp, &zip_path, &m, o)
+}
+
+pub(crate) fn import_opened(roots: &Roots, me: &Me, tmp: &TmpDir, zip_path: &Path, m: &Manifest, o: &ImportOpts) -> Result<apply::ImportReport, String> {
+    let overwrite = o.overwrite;
+    let check = inspect_report(roots, me, m);
     if !check.same_person {
         return Err(format!("这是 {} 的迁移包, 当前登录的是 {}。迁移包只能导给本人", check.user_email, check.logged_in_as));
     }
@@ -226,11 +254,11 @@ pub fn import_at(roots: &Roots, me: &Me, pkg: &Path, passphrase: &str, overwrite
         return Err("这台电脑已经有鲶鱼数据。要导入请勾选「先备份当前数据再覆盖」".into());
     }
     let stamp = stamp();
-    let mut rep = apply::apply(&apply::Target { roots, zip: &zip_path, tmp: &tmp.0, stamp: &stamp }, &m)?;
+    let mut rep = apply::apply(&apply::Target { roots, zip: zip_path, tmp: &tmp.0, stamp: &stamp, only: o.only.as_ref() }, m)?;
     rep.rooms_key = m.collab_rooms_key.clone();
     // 外发记录: 接着旧链记一行「设备迁移」, 登记旧机锚点只认到导出点
     let egress = roots.catfish.join("outbound_log.db");
-    if let (true, Some(tip)) = (egress.exists(), m.egress_chain.as_ref()) {
+    if let (true, true, Some(tip)) = (o.lineage, egress.exists(), m.egress_chain.as_ref()) {
         let r = super::transparent_log::open_db_at(&egress).and_then(|mut c| {
             super::transparent_log_lineage::record_import(&mut c, &m.source.device_id, &me.device_id, (tip.last_id, &tip.last_hash))
         });
@@ -243,12 +271,12 @@ pub fn import_at(roots: &Roots, me: &Me, pkg: &Path, passphrase: &str, overwrite
 
 // ── Tauri 命令 ─────────────────────────────────────────
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tokio::task::spawn_blocking(f).await.map_err(|e| format!("内部错误: {e}"))?
 }
 
 /// 导出 / 查看 / 导入互斥 (员工连点两下、或一边导出一边导入)
-async fn exclusive<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+pub(crate) async fn exclusive<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     blocking(move || {
         let _busy = BUSY.try_lock().map_err(|_| "正在做另一次迁移, 请等它结束")?;
         f()
@@ -285,7 +313,7 @@ pub async fn migration_export(dest: String, passphrase: String, optional: Vec<St
     let roots = Roots::current()?;
     let rooms = rooms_for_export(&roots).await?;
     let snap = rooms.snapshot.clone();
-    let r = exclusive(move || export_with(&roots, &Me::current()?, Path::new(&dest), &passphrase, &optional, &rooms)).await;
+    let r = exclusive(move || export_with(&roots, &Me::current()?, Path::new(&dest), &Lock::Passphrase(passphrase), &optional, &rooms, true)).await;
     if let Some(p) = snap {
         let _ = std::fs::remove_file(p);
     }
@@ -294,7 +322,7 @@ pub async fn migration_export(dest: String, passphrase: String, optional: Vec<St
 
 /// 11/6: 群聊本机库加密了 (钥匙串里有密钥) → 让 tool-bridge 先做一份快照 (也是加密的), 密钥一起进包。
 /// 还没加密过 (没有密钥) → 照旧由这边做快照, 包里不带密钥。
-async fn rooms_for_export(roots: &Roots) -> Result<package::RoomsDb, String> {
+pub(crate) async fn rooms_for_export(roots: &Roots) -> Result<package::RoomsDb, String> {
     let key = tokio::task::spawn_blocking(crate::services::rooms_db_key::existing)
         .await
         .map_err(|e| e.to_string())?
@@ -322,12 +350,17 @@ async fn rooms_for_export(roots: &Roots) -> Result<package::RoomsDb, String> {
 
 #[tauri::command]
 pub async fn migration_inspect(path: String, passphrase: String) -> Result<InspectReport, String> {
-    exclusive(move || inspect_at(&Roots::current()?, &Me::current()?, Path::new(&path), &passphrase)).await
+    exclusive(move || inspect_at(&Roots::current()?, &Me::current()?, Path::new(&path), &Unlock::Passphrase(passphrase))).await
 }
 
 #[tauri::command]
 pub async fn migration_import(path: String, passphrase: String, overwrite: bool) -> Result<apply::ImportReport, String> {
-    let mut rep = exclusive(move || import_at(&Roots::current()?, &Me::current()?, Path::new(&path), &passphrase, overwrite)).await?;
+    let rep = exclusive(move || import_at(&Roots::current()?, &Me::current()?, Path::new(&path), &Unlock::Passphrase(passphrase), overwrite)).await?;
+    Ok(after_import(rep).await)
+}
+
+/// 导入之后: 群聊库密钥写进钥匙串、重启 Hermes (换机导入、直传导入共用)。
+pub(crate) async fn after_import(mut rep: apply::ImportReport) -> apply::ImportReport {
     // 11/6: 包里带着旧电脑的群聊库密钥 → 写进这台的钥匙串 (这台原来那把另存一条)
     if let Some(key) = rep.rooms_key.take() {
         let st = stamp();
@@ -341,7 +374,7 @@ pub async fn migration_import(path: String, passphrase: String, overwrite: bool)
     if let Err(e) = tokio::task::spawn_blocking(super::codex_gateway::restart_hermes_gateway).await.map_err(|e| e.to_string()).and_then(|r| r) {
         rep.warnings.push(format!("Hermes 没能自动重启 ({e}), 请重启 Companion"));
     }
-    Ok(rep)
+    rep
 }
 
 /// 导入完重启 Companion: 索引 / 缓存按新数据重建, 设置重新加载。

@@ -1,6 +1,6 @@
 //! 换机迁移导入: 解到暂存目录 → 改写路径 → 备份新机原有的 → 整项换入; 中途出错整体回滚 (设计稿 §7)。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -139,6 +139,8 @@ pub struct Target<'a> {
     pub zip: &'a Path,
     pub tmp: &'a Path,
     pub stamp: &'a str,
+    /// 只换入这几项 (`catfish/wiki` 这种第一层名字); None = 包里全部 (误删保护还原时可以只还原几项)
+    pub only: Option<&'a HashSet<String>>,
 }
 
 /// 已经校验过 (decrypt + verify + 同一个人 + 版本) 之后调。
@@ -158,6 +160,10 @@ pub fn apply(t: &Target, m: &Manifest) -> Result<ImportReport, String> {
     let mut groups: BTreeMap<(String, String), (Root, Class)> = BTreeMap::new();
     for item in &m.items {
         let (root, rel) = split_path(&item.path).ok_or("迁移包路径不安全")?;
+        let top = rel.split('/').next().unwrap_or(rel).to_string();
+        if t.only.is_some_and(|o| !o.contains(&format!("{}/{}", root.dir_name(), top))) {
+            continue;
+        }
         let dst = stage.join(root.dir_name()).join(rel);
         extract_to(&mut a, &item.path, &dst)?;
         if is_text(rel) && item.bytes < 64 * 1024 * 1024 {
@@ -171,7 +177,6 @@ pub fn apply(t: &Target, m: &Manifest) -> Result<ImportReport, String> {
         }
         rep.files += 1;
         rep.bytes += item.bytes;
-        let top = rel.split('/').next().unwrap_or(rel).to_string();
         groups.insert((root.dir_name().to_string(), top), (root, item.class));
     }
     // 2. 逐项换入, 记下做了什么, 出错整体回滚

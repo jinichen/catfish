@@ -624,5 +624,19 @@ pub(crate) fn handler(
             crate::commands::device_migration::migration_inspect,
             crate::commands::device_migration::migration_import,
             crate::commands::device_migration::migration_restart_app,
+            // 11/21 扫码直传 + 误删保护快照 (docs/DEVICE-MIGRATION-DESIGN.md §12 §13)
+            crate::commands::device_migration::direct::migration_direct_receive_start,
+            crate::commands::device_migration::direct::migration_direct_receive_status,
+            crate::commands::device_migration::direct::migration_direct_receive_cancel,
+            crate::commands::device_migration::direct::migration_direct_import,
+            crate::commands::device_migration::direct::migration_direct_lookup,
+            crate::commands::device_migration::direct::migration_direct_from_qr,
+            crate::commands::device_migration::direct::migration_direct_send,
+            crate::commands::device_migration::direct::migration_direct_send_status,
+            crate::commands::device_migration::direct::migration_direct_send_cancel,
+            crate::commands::device_migration::snapshots::snapshots_status,
+            crate::commands::device_migration::snapshots::snapshots_set,
+            crate::commands::device_migration::snapshots::snapshots_make_now,
+            crate::commands::device_migration::snapshots::snapshots_restore,
     ]
 }

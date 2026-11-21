@@ -189,11 +189,26 @@ pub fn build_zip(
     Ok(manifest)
 }
 
+/// 包怎么加密: 员工设的口令 (导出成文件), 或对方电脑现场生成的公钥 (11/21 扫码直传 / 误删保护快照)。
+pub enum Lock {
+    Passphrase(String),
+    Recipient(age::x25519::Recipient),
+}
+
+/// 怎么解: 口令, 或那把公钥对应的私钥。
+pub enum Unlock {
+    Passphrase(String),
+    Identity(age::x25519::Identity),
+}
+
 /// zip → age 加密 → `dest` (先写 .part 再改名, 写一半不留半个包)。
-pub fn encrypt(zip_path: &Path, dest: &Path, passphrase: &str) -> Result<u64, String> {
+pub fn encrypt(zip_path: &Path, dest: &Path, lock: &Lock) -> Result<u64, String> {
     let part = PathBuf::from(format!("{}.part", dest.display()));
     let out = File::create(&part).map_err(|e| format!("写 {} 失败: {e}", dest.display()))?;
-    let enc = age::Encryptor::with_user_passphrase(SecretString::from(passphrase.to_owned()));
+    let enc = match lock {
+        Lock::Passphrase(p) => age::Encryptor::with_user_passphrase(SecretString::from(p.clone())),
+        Lock::Recipient(r) => age::Encryptor::with_recipients(std::iter::once(r as &dyn age::Recipient)).map_err(|e| format!("加密失败: {e}"))?,
+    };
     let mut w = enc.wrap_output(BufWriter::new(out)).map_err(|e| format!("加密失败: {e}"))?;
     let mut r = BufReader::new(File::open(zip_path).map_err(|e| e.to_string())?);
     io::copy(&mut r, &mut w).map_err(|e| format!("加密失败: {e}"))?;
@@ -203,13 +218,23 @@ pub fn encrypt(zip_path: &Path, dest: &Path, passphrase: &str) -> Result<u64, St
 }
 
 /// 解密到临时 zip。口令不对单独报 (员工最常见的错)。
-pub fn decrypt(pkg: &Path, passphrase: &str, zip_path: &Path) -> Result<(), String> {
+pub fn decrypt(pkg: &Path, unlock: &Unlock, zip_path: &Path) -> Result<(), String> {
     let f = File::open(pkg).map_err(|e| format!("打不开迁移包: {e}"))?;
     let dec = age::Decryptor::new(BufReader::new(f)).map_err(|_| "这不是鲶鱼迁移包 (或文件已损坏)".to_string())?;
-    let id = age::scrypt::Identity::new(SecretString::from(passphrase.to_owned()));
-    let mut r = dec.decrypt(std::iter::once(&id as &dyn age::Identity)).map_err(|e| match e {
-        age::DecryptError::DecryptionFailed | age::DecryptError::NoMatchingKeys => "迁移口令不对".to_string(),
-        other => format!("解密失败: {other}"),
+    let scrypt;
+    let id: &dyn age::Identity = match unlock {
+        Unlock::Passphrase(p) => {
+            scrypt = age::scrypt::Identity::new(SecretString::from(p.clone()));
+            &scrypt
+        }
+        Unlock::Identity(i) => i,
+    };
+    let mut r = dec.decrypt(std::iter::once(id)).map_err(|e| match (e, unlock) {
+        (age::DecryptError::DecryptionFailed | age::DecryptError::NoMatchingKeys, Unlock::Passphrase(_)) => "迁移口令不对".to_string(),
+        (age::DecryptError::DecryptionFailed | age::DecryptError::NoMatchingKeys, Unlock::Identity(_)) => {
+            "解不开: 这个包不是给这台电脑的 (或密钥已经换了)".to_string()
+        }
+        (other, _) => format!("解密失败: {other}"),
     })?;
     let mut out = BufWriter::new(File::create(zip_path).map_err(|e| e.to_string())?);
     io::copy(&mut r, &mut out).map_err(|_| "迁移包已损坏 (解密到一半出错)".to_string())?;

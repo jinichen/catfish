@@ -8,18 +8,22 @@ use rusqlite::Connection;
 use super::snapshot::Roots;
 use super::*;
 
-fn machine(dir: &Path, name: &str) -> Roots {
+pub(super) fn pw(p: &str) -> package::Unlock {
+    package::Unlock::Passphrase(p.into())
+}
+
+pub(super) fn machine(dir: &Path, name: &str) -> Roots {
     let home = dir.join(name);
     // 两台假电脑各自的目录; Hermes 目录名随便取 (真机上由 catfish_paths::hermes_home 决定)
     Roots { catfish: home.join(".catfish"), hermes: home.join("hermes-data"), home }
 }
 
-fn me(email: &str, dev: &str) -> Me {
+pub(super) fn me(email: &str, dev: &str) -> Me {
     Me { email: email.into(), device_id: dev.into() }
 }
 
 /// 旧机上造一套像样的数据
-fn seed_old(r: &Roots) {
+pub(super) fn seed_old(r: &Roots) {
     fs::create_dir_all(r.catfish.join("wiki/entities")).unwrap();
     fs::create_dir_all(r.catfish.join("task_chat")).unwrap();
     fs::create_dir_all(r.catfish.join("oauth")).unwrap();
@@ -86,10 +90,10 @@ fn 导出导入_积累都到了_凭证和缓存没带() {
     assert!(!raw.windows(12).any(|w| w == "巡检表".as_bytes()));
 
     let who = me("LinXiao@x.cn", "bbbb2222-0000-4000-8000-000000000002");
-    let info = inspect_at(&new, &who, &pkg, "correct horse").unwrap();
+    let info = inspect_at(&new, &who, &pkg, &pw("correct horse")).unwrap();
     assert!(info.same_person && info.version_ok && !info.target_has_data, "{info:?}");
 
-    let rep = import_at(&new, &who, &pkg, "correct horse", false).unwrap();
+    let rep = import_at(&new, &who, &pkg, &pw("correct horse"), false).unwrap();
     assert!(rep.paths_rewritten >= 1, "{rep:?}");
     assert!(fs::read_to_string(new.catfish.join("employee_journal.md")).unwrap().contains("巡检表"));
     assert!(new.catfish.join("wiki/entities/滨江花园.md").exists());
@@ -121,7 +125,7 @@ fn 外发记录链接着写_旧机导出后的锚点不算这条链() {
     seed_old(&old);
     seed_new(&new);
     let pkg = export(t.path(), &old, &[]);
-    import_at(&new, &me("linxiao@x.cn", "bbbb2222-0000-4000-8000-000000000002"), &pkg, "correct horse", false).unwrap();
+    import_at(&new, &me("linxiao@x.cn", "bbbb2222-0000-4000-8000-000000000002"), &pkg, &pw("correct horse"), false).unwrap();
 
     let conn = crate::commands::transparent_log::open_db_at(&new.catfish.join("outbound_log.db")).unwrap();
     let purposes: Vec<String> = conn
@@ -147,25 +151,25 @@ fn 口令错_包被改_别人的包_新机已有数据() {
     let pkg = export(t.path(), &old, &[]);
     let who = me("linxiao@x.cn", "bbbb2222-0000-4000-8000-000000000002");
 
-    assert_eq!(inspect_at(&new, &who, &pkg, "wrong horse!").unwrap_err(), "迁移口令不对");
+    assert_eq!(inspect_at(&new, &who, &pkg, &pw("wrong horse!")).unwrap_err(), "迁移口令不对");
 
     let mut bad = fs::read(&pkg).unwrap();
     let n = bad.len();
     bad[n - 40] ^= 0xff;
     let bad_pkg = t.path().join("bad.catfishmove");
     fs::write(&bad_pkg, bad).unwrap();
-    assert!(import_at(&new, &who, &bad_pkg, "correct horse", false).is_err());
+    assert!(import_at(&new, &who, &bad_pkg, &pw("correct horse"), false).is_err());
 
     let other = me("zhougong@x.cn", "cccc3333-0000-4000-8000-000000000003");
-    let e = import_at(&new, &other, &pkg, "correct horse", false).unwrap_err();
+    let e = import_at(&new, &other, &pkg, &pw("correct horse"), false).unwrap_err();
     assert!(e.contains("只能导给本人"), "{e}");
     assert!(!new.catfish.join("employee_journal.md").exists(), "拒绝时什么都没动");
 
     fs::write(new.catfish.join("employee_journal.md"), "新机上已经写了点东西").unwrap();
-    let e = import_at(&new, &who, &pkg, "correct horse", false).unwrap_err();
+    let e = import_at(&new, &who, &pkg, &pw("correct horse"), false).unwrap_err();
     assert!(e.contains("已经有鲶鱼数据"), "{e}");
     // 勾了「先备份再覆盖」: 原来的挪进备份目录
-    let rep = import_at(&new, &who, &pkg, "correct horse", true).unwrap();
+    let rep = import_at(&new, &who, &pkg, &pw("correct horse"), true).unwrap();
     let backup = Path::new(rep.backup_dir.as_deref().unwrap()).join("catfish/employee_journal.md");
     assert_eq!(fs::read_to_string(backup).unwrap(), "新机上已经写了点东西");
     assert!(fs::read_to_string(new.catfish.join("employee_journal.md")).unwrap().contains("巡检表"));
@@ -201,12 +205,12 @@ fn 加密的群聊库_用tool_bridge做的快照_密钥随包到新机() {
     let key = "ab".repeat(32);
     let rooms = package::RoomsDb { snapshot: Some(snap), key: Some(key.clone()) };
     let pkg = t.path().join("p.catfishmove");
-    export_with(&old, &me("linxiao@x.cn", "aaaa1111-0000-4000-8000-000000000001"), &pkg, "correct horse", &[], &rooms).unwrap();
+    export_with(&old, &me("linxiao@x.cn", "aaaa1111-0000-4000-8000-000000000001"), &pkg, &package::Lock::Passphrase("correct horse".into()), &[], &rooms, true).unwrap();
     // 密钥只在口令加密的包里
     assert!(!fs::read(&pkg).unwrap().windows(64).any(|w| w == key.as_bytes()));
 
     let who = me("linxiao@x.cn", "bbbb2222-0000-4000-8000-000000000002");
-    let rep = import_at(&new, &who, &pkg, "correct horse", false).unwrap();
+    let rep = import_at(&new, &who, &pkg, &pw("correct horse"), false).unwrap();
     assert_eq!(rep.rooms_key.as_deref(), Some(key.as_str()));
     assert_eq!(fs::read(new.catfish.join("collab_rooms/rooms.db")).unwrap(), vec![0xccu8; 2048], "带的是快照");
     // 密钥不回给前端

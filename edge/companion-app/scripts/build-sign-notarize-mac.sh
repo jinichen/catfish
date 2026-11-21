@@ -646,6 +646,7 @@ cat >"$WORK_DIR/app.entitlements" <<'PLIST'
 <plist version="1.0">
 <dict>
   <key>com.apple.security.device.audio-input</key><true/>
+  <key>com.apple.security.device.camera</key><true/>
 </dict>
 </plist>
 PLIST
@@ -654,6 +655,11 @@ codesign_ts --force --options runtime --timestamp \
   --sign "$SIGNING_IDENTITY" "$APP_PATH"
 if ! codesign -d --entitlements - "$APP_PATH" 2>/dev/null | grep -q "com.apple.security.device.audio-input"; then
   echo "❌ 主程序没带上 audio-input entitlement, 正式包录音会是静音" >&2
+  exit 1
+fi
+# 11/21 换机直传扫二维码: 没有 camera entitlement, 正式包里 getUserMedia 直接失败 (dev 不签名照样能用, 同上)
+if ! codesign -d --entitlements - "$APP_PATH" 2>/dev/null | grep -q "com.apple.security.device.camera"; then
+  echo "❌ 主程序没带上 camera entitlement, 换机直传扫不了码" >&2
   exit 1
 fi
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"

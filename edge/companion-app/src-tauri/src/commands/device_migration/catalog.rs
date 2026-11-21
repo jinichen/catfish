@@ -75,6 +75,8 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Contains("_backup_"), Rebuild, "旧备份"),
     (Contains("-backups"), Rebuild, "旧备份"),
     (Exact("backups"), Rebuild, "旧备份"),
+    // 11/21 误删保护快照: 这台电脑自己的密钥加密, 带到别的电脑也打不开; 新电脑自己会做
+    (Exact("snapshots"), Rebuild, "误删保护快照"),
     (Contains(".broken"), Rebuild, "旧备份"),
     (Contains(".corrupt"), Rebuild, "旧备份"),
     (Contains(".legacy"), Rebuild, "旧备份"),

@@ -329,6 +329,13 @@ except Exception as e:
     logger.warning("room_link_router 挂载失败: %s", e)
 
 try:
+    # 11/21 换机直传: 旧电脑 → 新电脑, 中央只转交密文、边传边删 (device_transfer_router.py)
+    from .device_transfer_router import router as device_transfer_router  # noqa: PLC0415
+    app.include_router(device_transfer_router)
+except Exception as e:
+    logger.warning("device_transfer_router 挂载失败: %s", e)
+
+try:
     from .org_policy_router import router as org_policy_router  # noqa: PLC0415
     app.include_router(org_policy_router)
     logger.info("org_policy_router: /api/org/policy 已挂载 (公司级设置: 群聊记录保留天数)")

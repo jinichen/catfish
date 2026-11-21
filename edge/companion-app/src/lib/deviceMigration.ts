@@ -80,3 +80,103 @@ export function passphraseHint(p: string): string | null {
   if (p.length < 12 || /^\d+$/.test(p)) return "口令偏弱: 建议 12 位以上、混用字母和数字";
   return null;
 }
+
+// ── 11/21 扫码直传 (docs/DEVICE-MIGRATION-DESIGN.md §12) ──────────────
+// 新电脑出二维码 (一次性公钥) → 旧电脑扫码 / 手输配对码 → 迁移包用那把公钥加密, 经中央边传边删 → 新电脑收齐导入。
+
+export type DirectRecvState = "waiting" | "receiving" | "verifying" | "ready" | "failed" | "cancelled";
+
+export interface DirectRecvStatus {
+  state: DirectRecvState;
+  id: string;
+  code: string;
+  qr: string;
+  safety: string;
+  toDevice: string;
+  fromDevice: string;
+  got: number;
+  n: number;
+  size: number;
+  error: string | null;
+  info: MigrationInspectReport | null;
+}
+
+export interface DirectTarget {
+  id: string;
+  recipient: string;
+  toDevice: string;
+  safety: string;
+}
+
+export type DirectSendState = "packing" | "sending" | "finishing" | "done" | "failed" | "cancelled";
+
+export interface DirectSendStatus {
+  state: DirectSendState;
+  id: string;
+  toDevice: string;
+  size: number;
+  n: number;
+  sent: number;
+  acked: number;
+  files: number;
+  error: string | null;
+}
+
+export const directReceiveStart = () => invoke<DirectRecvStatus>("migration_direct_receive_start");
+export const directReceiveStatus = () => invoke<DirectRecvStatus | null>("migration_direct_receive_status");
+export const directReceiveCancel = () => invoke<void>("migration_direct_receive_cancel");
+export const directImport = (overwrite: boolean) => invoke<MigrationImportReport>("migration_direct_import", { overwrite });
+export const directLookup = (code: string) => invoke<DirectTarget>("migration_direct_lookup", { code });
+export const directFromQr = (text: string) => invoke<DirectTarget>("migration_direct_from_qr", { text });
+export const directSend = (target: DirectTarget, optional: string[]) =>
+  invoke<DirectSendStatus>("migration_direct_send", { target, optional });
+export const directSendStatus = () => invoke<DirectSendStatus | null>("migration_direct_send_status");
+export const directSendCancel = () => invoke<void>("migration_direct_send_cancel");
+
+/** 8 位配对码: 去掉空格 / 横线, 转大写, 每 4 位一组 (「ABCD-EFGH」); 不够 8 位原样返回 (还在输) */
+export function normalizeCode(s: string): string {
+  const raw = s.replace(/[\s-]/g, "").toUpperCase().slice(0, 8);
+  return raw.length > 4 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw;
+}
+
+/** 进度百分比 (0–100, 没开始 = 0) */
+export function percent(done: number, total: number): number {
+  return total > 0 ? Math.min(100, Math.floor((done * 100) / total)) : 0;
+}
+
+// ── 11/21 误删保护 (docs/DEVICE-MIGRATION-DESIGN.md §13) ──────────────
+
+export interface SnapshotSettings {
+  enabled: boolean;
+  keep: number;
+  lastError: string | null;
+  lastTryAt: string | null;
+}
+
+export interface SnapshotInfo {
+  name: string;
+  createdAt: string;
+  bytes: number;
+  files: number;
+  companionVersion: string;
+  entries: MigrationEntry[];
+}
+
+export interface SnapshotsStatus {
+  settings: SnapshotSettings;
+  snapshots: SnapshotInfo[];
+  dir: string;
+  busy: boolean;
+}
+
+export const snapshotsStatus = () => invoke<SnapshotsStatus>("snapshots_status");
+export const snapshotsSet = (enabled: boolean, keep: number) => invoke<SnapshotsStatus>("snapshots_set", { enabled, keep });
+export const snapshotsMakeNow = () => invoke<SnapshotInfo>("snapshots_make_now");
+export const snapshotsRestore = (name: string, only: string[]) =>
+  invoke<MigrationImportReport>("snapshots_restore", { name, only });
+
+/** 外发记录 / 审计类不还原 (只追加的链, 退回去会被当成被人改过) —— 跟 Rust snapshots::restorable 一致 */
+export function restorable(e: MigrationEntry): boolean {
+  const n = e.name.toLowerCase();
+  return !(n.startsWith("outbound_log") || n.includes("audit"));
+}
