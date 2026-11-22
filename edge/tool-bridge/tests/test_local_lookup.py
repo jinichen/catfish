@@ -227,3 +227,32 @@ def test_pick_keeps_room_for_every_source():
 def test_prompt_block_newer_dated_material_beats_stale_wiki():
     block = ll.prompt_block({"queries": ["ITSS"], "found": [], "used": [], "block": "- [日志] t: x"})
     assert "以新的为准" in block and "知识库那条还没更新" in block
+
+
+def test_shared_pages_are_labelled_department_knowledge_with_publisher(tmp_path, monkeypatch):
+    """11/23 「安装分享会不会产生冲突」: 自己的页和同事分享的同名页说法不一样时, 小鲶要分得清哪页是谁的。"""
+    from catfish_tool_bridge import wiki_search
+    own = tmp_path / "wiki" / "entities"
+    dept = tmp_path / "wiki-shared" / "dept" / "市场部"
+    own.mkdir(parents=True)
+    dept.mkdir(parents=True)
+    (own / "ITSS一级.md").write_text("---\ntitle: ITSS一级\n---\n# ITSS一级\n等评审结论\n", encoding="utf-8")
+    (dept / "f1.md").write_text("---\ntitle: ITSS一级\n---\n# ITSS一级\n已公示\n", encoding="utf-8")
+    (dept / "f1.meta.json").write_text('{"published_by": "linxiao@x.cn"}', encoding="utf-8")
+    (dept / "f2.md").write_text("---\ntitle: 周报规范\n---\n# 周报规范\n", encoding="utf-8")   # 老副本, 没 meta
+    monkeypatch.setattr(ll, "_catfish_home", lambda: tmp_path)
+    monkeypatch.setattr(wiki_search, "search_wiki", lambda q, top_k: {"matches": [
+        {"rel_path": "wiki/entities/ITSS一级.md", "title": "ITSS一级", "source": "own"},
+        {"rel_path": "wiki-shared/dept/市场部/f1.md", "title": "ITSS一级", "source": "dept/市场部", "review": "待审"},
+        {"rel_path": "wiki-shared/dept/市场部/f2.md", "title": "周报规范", "source": "dept/市场部"},
+    ]})
+    hits = {h["where"]: h for h in ll._wiki(["ITSS 一级"], "ITSS 一级现状")}
+    assert hits["wiki/entities/ITSS一级.md"]["kind"] == "知识库"
+    mine = hits["wiki/entities/ITSS一级.md"]["text"]
+    assert "等评审结论" in mine and "分享" not in mine
+    shared = hits["wiki-shared/dept/市场部/f1.md"]
+    assert shared["kind"] == "部门知识"
+    assert shared["text"].startswith("(市场部 · linxiao@x.cn 分享, 不是员工自己确认的; 主管待审) ") and "已公示" in shared["text"]
+    assert hits["wiki-shared/dept/市场部/f2.md"]["text"].startswith("(市场部同事分享, 不是员工自己确认的) ")
+    block = ll.prompt_block({"queries": ["ITSS"], "found": [], "used": [], "block": "- [部门知识] ITSS一级: x"})
+    assert "两边各怎么说都写出来" in block and "不要把同事写的说成员工自己的" in block
