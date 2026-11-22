@@ -1,9 +1,9 @@
 /** 分享到部门: 员工在对话框里勾了什么 → 依次发哪几页、要不要先确认警告 (11/09)。纯函数, 界面在 WikiShareDialog。
  *
- * 顺序: 原件 → 一起分享的关联页 → 这一页。原件先上去, 后面几页里的 [[原件 · 名称]] 同事装的时候才连得上。
+ * 顺序: 原件 → 一起分享的关联页 (这一页指向的 + 11/23 指向这一页的) → 这一页。原件先上去, 后面几页里的 [[原件 · 名称]] 同事装的时候才连得上。
  * 每一页都带同一份 attached_sources (勾了的原件 + 部门里已经有的原件): 关联页引用同一份原件时也改成链接。
  */
-import type { WikiSharePlan, WikiShareScan, WikiShareScope, WikiShareWarning } from "./tauri_wiki";
+import type { WikiSharePlan, WikiShareRelation, WikiShareScan, WikiShareScope, WikiShareWarning } from "./tauri_wiki";
 
 /** 11/09 按分享范围重算「同事那边点不点得开」。
  *
@@ -12,15 +12,18 @@ import type { WikiSharePlan, WikiShareScan, WikiShareScope, WikiShareWarning } f
  *   我发过但只在部门里的关联页 → 可以勾「一起分享」(重发成全公司, 一样等管理员审);
  *   别人发的、只在他部门里的 → dept_only, 别的部门点不开, 我也没法替他发。
  */
+function forCompany(r: WikiShareRelation): WikiShareRelation {
+  if (r.status !== "shared" || r.company) return r;
+  return r.mine && r.rel_path ? { ...r, status: "local" as const } : { ...r, status: "dept_only" as const };
+}
+
 export function scopePlan(plan: WikiSharePlan, scope: WikiShareScope): WikiSharePlan {
   if (scope === "department") return plan;
   return {
     ...plan,
     sources: plan.sources.map((s) => (s.kind === "raw" ? { ...s, shared: !!s.shared_company } : s)),
-    relations: plan.relations.map((r) => {
-      if (r.status !== "shared" || r.company) return r;
-      return r.mine && r.rel_path ? { ...r, status: "local" as const } : { ...r, status: "dept_only" as const };
-    }),
+    relations: plan.relations.map(forCompany),
+    incoming: plan.incoming?.map(forCompany),
   };
 }
 
@@ -64,8 +67,11 @@ export function shareSteps(
       scan: s.scan,
     });
   }
-  for (const r of plan.relations) {
-    if (r.status !== "local" || !r.rel_path || !choice.together.has(r.rel_path)) continue;
+  // 一起分享的关联页: 这一页指向的 + 指向这一页的 (11/23), 同一页只发一次
+  const sent = new Set<string>();
+  for (const r of [...plan.relations, ...(plan.incoming ?? [])]) {
+    if (r.status !== "local" || !r.rel_path || !choice.together.has(r.rel_path) || sent.has(r.rel_path)) continue;
+    sent.add(r.rel_path);
     steps.push({
       label: r.title ?? r.name,
       kind: "related",

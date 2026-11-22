@@ -113,6 +113,49 @@ export default function WikiShareDialog({
 
   const choice: ShareChoice = useMemo(() => ({ attach, together }), [attach, together]);
   const steps = useMemo(() => (plan ? shareSteps(plan, choice, ackWarnings, scope) : []), [plan, choice, ackWarnings, scope]);
+  /** 一条关系一行: 本机有、同事还看不到的可以勾「一起分享」。dir=in 是写在别的条目上、指向这一页的 (「周报 负责 本条」) */
+  const relRow = (r: WikiShareRelation, dir: "out" | "in") => {
+    const pickable = r.status === "local" && !!r.rel_path && !r.scan?.blocked;
+    const picked = !!r.rel_path && together.has(r.rel_path);
+    return (
+      <label key={`${dir}:${r.rel_path ?? r.name}`} className={`wiki-share__row${pickable ? "" : " wiki-share__row--static"}`}>
+        {pickable ? (
+          <input
+            type="checkbox"
+            checked={picked}
+            disabled={sharing || done}
+            onChange={(e) => setTogether((t) => toggle(t, r.rel_path!, e.target.checked))}
+          />
+        ) : (
+          <span className="wiki-share__dot" aria-hidden="true" />
+        )}
+        <span className="wiki-share__grow">
+          {dir === "in" ? (
+            <>
+              {r.title ?? r.name}
+              <span className="wiki-share__muted"> · {r.rel || "关联"} · 本条</span>
+            </>
+          ) : (
+            <>
+              {r.rel ? <span className="wiki-share__muted">{r.rel} · </span> : null}
+              {r.title ?? r.name}
+            </>
+          )}
+          <span className={`wiki-share__status wiki-share__status--${r.status}`}>
+            {r.status === "local" && picked
+              ? "一起分享"
+              : company && r.status === "shared"
+                ? "全公司已经能看到"
+                : company && r.status === "local" && r.mine
+                  ? "只在你部门里, 可以一起分享到全公司"
+                  : REL_STATUS[r.status]}
+          </span>
+          {r.scan?.blocked && <div className="wiki-share__err">{r.scan.blocked}</div>}
+        </span>
+      </label>
+    );
+  };
+
   const issues = useMemo(() => shareIssues(steps), [steps]);
   const reachable = useMemo(
     () => (plan ? reachableNames(plan, attachedKeys(plan, choice), together) : new Set<string>()),
@@ -303,41 +346,21 @@ export default function WikiShareDialog({
                 <div className="wiki-share__label">
                   关系 <span className="wiki-share__muted">· {who}那边只有他能看到的页才点得开</span>
                 </div>
-                {plan.relations.map((r) => {
-                  const pickable = r.status === "local" && !!r.rel_path && !r.scan?.blocked;
-                  const picked = !!r.rel_path && together.has(r.rel_path);
-                  return (
-                    <label key={r.name} className={`wiki-share__row${pickable ? "" : " wiki-share__row--static"}`}>
-                      {pickable ? (
-                        <input
-                          type="checkbox"
-                          checked={picked}
-                          disabled={sharing || done}
-                          onChange={(e) => setTogether((t) => toggle(t, r.rel_path!, e.target.checked))}
-                        />
-                      ) : (
-                        <span className="wiki-share__dot" aria-hidden="true" />
-                      )}
-                      <span className="wiki-share__grow">
-                        {r.rel ? <span className="wiki-share__muted">{r.rel} · </span> : null}
-                        {r.title ?? r.name}
-                        <span className={`wiki-share__status wiki-share__status--${r.status}`}>
-                          {r.status === "local" && picked
-                            ? "一起分享"
-                            : company && r.status === "shared"
-                              ? "全公司已经能看到"
-                              : company && r.status === "local" && r.mine
-                                ? "只在你部门里, 可以一起分享到全公司"
-                                : REL_STATUS[r.status]}
-                        </span>
-                        {r.scan?.blocked && <div className="wiki-share__err">{r.scan.blocked}</div>}
-                      </span>
-                    </label>
-                  );
-                })}
+                {plan.relations.map((r) => relRow(r, "out"))}
                 {!plan.hub_known && (
                   <div className="wiki-share__muted">没连上中央知识库, 「同事能不能看到」只按你自己分享过的算。</div>
                 )}
+              </section>
+            )}
+
+            {/* 11/23 鸿波「知识库在分享关系有同时分享出去吗」: 写在别的条目上、指向这一页的关系 —— 那一页不一起分享, 同事看不到 */}
+            {(plan.incoming?.length ?? 0) > 0 && (
+              <section className="wiki-share__section">
+                <div className="wiki-share__label">
+                  指向这一页的关系{" "}
+                  <span className="wiki-share__muted">· 写在别的条目上, 那一页不一起分享, {who}就看不到这条关系</span>
+                </div>
+                {plan.incoming!.map((r) => relRow(r, "in"))}
               </section>
             )}
 

@@ -94,6 +94,33 @@ describe("全公司 (11/09)", () => {
   });
 });
 
+describe("指向这一页的关系 (11/23)", () => {
+  const withIn: WikiSharePlan = {
+    ...plan,
+    incoming: [
+      { name: "周报", rel: "负责", status: "local", rel_path: "wiki/entities/周报.md", title: "周报", scan: clean },
+      // 同一页既在「关系」里又指过来 (后端会去重, 前端也不重复发)
+      { name: "中电福富", rel: "下辖", status: "local", rel_path: "wiki/entities/中电福富.md", scan: clean },
+      { name: "北部分公司", rel: "下辖", status: "shared", company: false, mine: true, rel_path: "wiki/entities/北部分公司.md", scan: clean },
+    ],
+  };
+
+  it("勾了的跟关联页一样先发、同一页只发一次", () => {
+    const steps = shareSteps(withIn, {
+      attach: new Set(),
+      together: new Set(["wiki/entities/周报.md", "wiki/entities/中电福富.md"]),
+    }, false);
+    expect(steps.map((s) => [s.kind, s.args.wiki_rel_path])).toEqual([
+      ["related", "wiki/entities/中电福富.md"], ["related", "wiki/entities/周报.md"], ["main", plan.rel_path],
+    ]);
+  });
+
+  it("全公司: 我发过、只在部门里的也可以一起重发", () => {
+    const c = scopePlan(withIn, "company");
+    expect(c.incoming!.find((r) => r.name === "北部分公司")!.status).toBe("local");
+  });
+});
+
 describe("shareIssues", () => {
   it("警告和拒发分开列: 含凭据的那页不能发", () => {
     const steps = shareSteps(plan, {

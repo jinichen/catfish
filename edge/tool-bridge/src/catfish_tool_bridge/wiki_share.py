@@ -313,6 +313,22 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
             )
         sources.append(entry)
 
+    def page_status(entry: dict[str, Any], local_path: str, local_title: str, name: str) -> dict[str, Any]:
+        """本机有这一页: 同事能看到 (发过 / 部门里有同名的) 还是可以一起分享; 客户档案不能分享。"""
+        mine = local_path in published
+        shared = mine or (on_hub is not None and (_norm(name) in on_hub or _norm(local_title) in on_hub))
+        entry.update(status="shared" if shared else "local", rel_path=local_path, title=local_title, mine=mine,
+                     company=on_company is not None and (_norm(name) in on_company or _norm(local_title) in on_company))
+        if not shared or (mine and not entry["company"]):
+            # 没发过的要扫; 我发过但只在部门里的, 分享到全公司时可以一起重发, 也要扫
+            ltext = (_home() / local_path).read_text(encoding="utf-8", errors="replace")
+            lfm, _ = wiki_publish._parse_frontmatter(ltext)
+            if wiki_publish._extract_field(lfm, "entity_type") == "customer":
+                entry.update(status="private", reason="客户档案只存在你本机, 不能分享到部门")
+            else:
+                entry["scan"] = scan(Path(local_path).name, ltext)
+        return entry
+
     # 关系: 同事能看到 (已在部门知识库) / 本机有、可以一起分享 / 本机都没有
     relations: list[dict[str, Any]] = []
     for r in _merge_related_with_body(_parse_related(fm), body):
@@ -320,27 +336,30 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
         if name.startswith(SOURCE_TITLE_PREFIX):
             continue
         local = _resolve_local(name, items)
-        on_hub_by_name = on_hub is not None and _norm(name) in on_hub
         entry = {"name": name, "rel": r.get("rel")}
         if local and local["rel_path"] != rel_path:
-            mine = local["rel_path"] in published
-            shared = mine or on_hub_by_name or (on_hub is not None and _norm(local["title"]) in on_hub)
-            entry.update(status="shared" if shared else "local", rel_path=local["rel_path"], title=local["title"], mine=mine,
-                         company=on_company is not None and (_norm(name) in on_company or _norm(local["title"]) in on_company))
-            if not shared or (mine and not entry["company"]):
-                # 没发过的要扫; 我发过但只在部门里的, 分享到全公司时可以一起重发, 也要扫
-                ltext = (_home() / local["rel_path"]).read_text(encoding="utf-8", errors="replace")
-                lfm, _ = wiki_publish._parse_frontmatter(ltext)
-                if wiki_publish._extract_field(lfm, "entity_type") == "customer":
-                    entry.update(status="private", reason="客户档案只存在你本机, 不能分享到部门")
-                else:
-                    entry["scan"] = scan(Path(local["rel_path"]).name, ltext)
+            page_status(entry, local["rel_path"], local["title"], name)
         elif local:
             continue  # 指向自己
         else:
-            entry["status"] = "shared" if on_hub_by_name else "missing"
+            entry["status"] = "shared" if on_hub is not None and _norm(name) in on_hub else "missing"
             entry["company"] = on_company is not None and _norm(name) in on_company
         relations.append(entry)
+
+    # 11/23 鸿波「知识库在分享关系有同时分享出去吗」: 写在别的条目上、指向这一页的关系 (例「中电福富 持有 本条」)
+    # 只存在那一页里 —— 那一页不一起分享, 同事就看不到这条关系。从关系图里找 (正文里「提及」的不算关系), 跟上面一样可以勾一起分享。
+    from . import wiki_relations  # noqa: PLC0415
+    out_paths = {r.get("rel_path") for r in relations if r.get("rel_path")}
+    incoming: list[dict[str, Any]] = []
+    seen_in: set[str] = set()
+    for x in (wiki_relations.relations_of(_home(), rel_path) or {}).get("in") or []:
+        src = str(x.get("rel_path") or "")
+        if (x.get("rel") == "提及" or not src.startswith("wiki/") or src == rel_path
+                or src in out_paths or src in seen_in or not (_home() / src).is_file()):
+            continue
+        seen_in.add(src)
+        src_title = str(x.get("source") or Path(src).stem)
+        incoming.append(page_status({"name": src_title, "rel": x.get("rel")}, src, src_title, src_title))
 
     new_fm, new_body = rewrite_for_share(fm, body, attached)
     from .wiki_files import _parse_field, _parse_list  # noqa: PLC0415
@@ -375,4 +394,5 @@ def plan(params: dict[str, Any]) -> dict[str, Any]:
         "preview": {"frontmatter_yaml": new_fm, "body_md": new_body, "fields": fields},
         "sources": sources,
         "relations": relations,
+        "incoming": incoming,
     }

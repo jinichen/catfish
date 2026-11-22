@@ -151,6 +151,29 @@ describe("分享到部门", () => {
     await waitFor(() => expect((screen.getByRole("radio", { name: /^全公司/ }) as HTMLInputElement).checked).toBe(true));
   });
 
+  it("指向这一页的关系 (11/23): 单列一节, 写成「周报 · 负责 · 本条」; 勾了跟这一页一起发", async () => {
+    t.wikiSharePlan.mockImplementation(async (_p: string, attached: string[]) => ({
+      ...makePlan(attached),
+      incoming: [
+        { name: "周报", rel: "负责", status: "local", rel_path: "wiki/entities/周报.md", title: "周报", scan: clean },
+        { name: "北部分公司", rel: "下辖", status: "shared", rel_path: "wiki/entities/北部分公司.md", title: "北部分公司" },
+      ],
+    }));
+    render(<WikiShareDialog selectedFile={file} onClose={() => {}} />);
+    expect(await screen.findByText("指向这一页的关系")).toBeTruthy();
+    expect(screen.getByText(/写在别的条目上, 那一页不一起分享, 同事就看不到这条关系/)).toBeTruthy();
+    expect(screen.getByText(/· 负责 · 本条/)).toBeTruthy();
+    fireEvent.click(screen.getByText("周报", { selector: "label *" }));
+    fireEvent.click(screen.getByText(/已经装走的撤不回/));
+    const btn = screen.getByRole("button", { name: "分享 2 页" }) as HTMLButtonElement;
+    await waitFor(() => expect(btn.disabled).toBe(false));
+    fireEvent.click(btn);
+    await waitFor(() => expect(t.toolBridgeCallTool).toHaveBeenCalledTimes(2));
+    expect(t.toolBridgeCallTool.mock.calls.map((c) => (c[1] as { wiki_rel_path: string }).wiki_rel_path)).toEqual([
+      "wiki/entities/周报.md", "wiki/entities/市场部.md",
+    ]);
+  });
+
   it("某一页没发出去: 逐页说清", async () => {
     t.toolBridgeCallTool.mockResolvedValueOnce({ ok: true, result: { ok: false, error: "gateway 502" } });
     render(<WikiShareDialog selectedFile={file} onClose={() => {}} />);

@@ -283,3 +283,41 @@ def test_scrub_local_去掉说明行和本机路径_留文件名():
 def test_rewrite_for_share_也去本机路径():
     _, body = wiki_share.rewrite_for_share("title: x", "见 /Users/someone/Desktop/规范.pdf 第二节。")
     assert body == "见 「规范.pdf」 第二节。"
+
+
+def _graph(root, edges):
+    """关系图 (Companion wiki_graph.rs 同步的那张表): edges = [(source_path, target_path, relation_type)]"""
+    import sqlite3
+    con = sqlite3.connect(root / "wiki_graph.db")
+    con.executescript("CREATE TABLE wiki_graph_node (rel_path TEXT PRIMARY KEY, title TEXT, aliases TEXT);"
+                      "CREATE TABLE wiki_graph_edge (source_path TEXT, target_path TEXT, relation_type TEXT, source_name TEXT);")
+    titles = {"wiki/entities/中电福富.md": "中电福富信息科技有限公司", "wiki/entities/市场部.md": "市场部",
+              "wiki/entities/销售单元.md": "销售单元", "wiki/entities/某客户.md": "某客户", "wiki/entities/周报.md": "周报"}
+    con.executemany("INSERT INTO wiki_graph_node VALUES (?, ?, '[]')", titles.items())
+    con.executemany("INSERT INTO wiki_graph_edge VALUES (?, ?, ?, '')", edges)
+    con.commit()
+    con.close()
+
+
+def test_plan_lists_relations_written_on_other_pages_pointing_here(home, gateway, monkeypatch):
+    # 11/23: 「中电福富 下辖 市场部」写在中电福富那页上 (市场部这页也指向它 → 只在「关系」里列一次);
+    # 「周报 负责 市场部」只写在周报那页上 → 列进「指向这一页的关系」, 能一起分享; 客户档案指过来 → 不能发;
+    # 正文里提到 (提及) 的不算关系
+    (home / "wiki" / "entities" / "周报.md").write_text("---\ntitle: 周报\n---\n\n周报\n", encoding="utf-8")
+    _graph(home, [
+        ("wiki/entities/中电福富.md", "wiki/entities/市场部.md", "下辖"),
+        ("wiki/entities/周报.md", "wiki/entities/市场部.md", "负责"),
+        ("wiki/entities/某客户.md", "wiki/entities/市场部.md", "服务"),
+        ("wiki/entities/销售单元.md", "wiki/entities/市场部.md", "提及"),
+    ])
+    monkeypatch.setattr(wiki_publish, "_load_publish_state", lambda: {})
+    gateway["routes"][("GET", "/v1/wiki/documents")] = _hub_list()
+    p = wiki_share.plan({"wiki_rel_path": "wiki/entities/市场部.md"})
+    inc = {r["name"]: r for r in p["incoming"]}
+    assert set(inc) == {"周报"}, inc   # 中电福富 / 某客户 已在「关系」里; 销售单元只是提及
+    assert inc["周报"]["rel"] == "负责" and inc["周报"]["status"] == "local" and inc["周报"]["rel_path"] == "wiki/entities/周报.md"
+    assert inc["周报"]["scan"] == {"blocked": None, "warnings": []}
+
+    # 没有关系图 (还没同步过) → 空, 不出错
+    (home / "wiki_graph.db").unlink()
+    assert wiki_share.plan({"wiki_rel_path": "wiki/entities/市场部.md"})["incoming"] == []

@@ -389,6 +389,8 @@ export interface WikiSharePlan {
   };
   sources: WikiShareSource[];
   relations: WikiShareRelation[];
+  /** 11/23: 写在别的条目上、指向这一页的关系 (例「中电福富 持有 本条」); 那一页不一起分享, 同事看不到这条关系。老 tool-bridge 没有这项 */
+  incoming?: WikiShareRelation[];
 }
 export const wikiSharePlan = (relPath: string, attachSources: string[]) =>
   rawInvoke<WikiSharePlan>("wiki_share_plan", { relPath, attachSources });
