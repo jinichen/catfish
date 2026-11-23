@@ -208,6 +208,30 @@ function compactGroupedLabels(spec: Obj, width: number): void {
   visit(spec);
 }
 
+/** 11/24 鸿波「为什么结果没有?」(上周邮件分类饼图): 模型给数值字段 (theta = count) 写了一串类别名当 scale.domain ——
+ *  数值比例尺拿文字当范围, 每一块的角度都是 NaN, 饼图整个是空的, 只剩图例。数值 / 时间字段的 domain 里有对不上的
+ *  (不是数字 / 日期) 就去掉, 让 Vega 按数据自己算。 */
+export function dropMismatchedDomains(node: unknown): void {
+  if (Array.isArray(node)) {
+    node.forEach(dropMismatchedDomains);
+    return;
+  }
+  if (!isObj(node)) return;
+  const enc = node.encoding;
+  if (isObj(enc)) {
+    for (const ch of Object.values(enc)) {
+      if (!isObj(ch) || !isObj(ch.scale) || !Array.isArray(ch.scale.domain)) continue;
+      const dom = ch.scale.domain as unknown[];
+      const bad =
+        ch.type === "quantitative" ? dom.some((v) => typeof v !== "number")
+        : ch.type === "temporal" ? dom.some((v) => typeof v !== "number" && (typeof v !== "string" || Number.isNaN(Date.parse(v))))
+        : false;
+      if (bad) delete ch.scale.domain;
+    }
+  }
+  for (const k of ["layer", "spec", "concat", "hconcat", "vconcat"]) if (k in node) dropMismatchedDomains(node[k]);
+}
+
 /** 数值标签 (text 标记) 的字色跟主题走: 模型常写成浅色, 浅色模式下看不见 */
 function themeTextMarks(node: unknown): void {
   if (Array.isArray(node)) {
@@ -227,6 +251,7 @@ function themeTextMarks(node: unknown): void {
 export function prepareSpec(spec: Obj, width: number, height: number, theme: ChartTheme): Obj {
   const out = structuredClone(spec) as Obj;
   stripThemeColors(out);
+  dropMismatchedDomains(out);
   keepDataOrder(out);
   themeTextMarks(out);
   wrapCategoryLabels(out, width);

@@ -144,3 +144,19 @@ def test_card_update_reminds_to_update_summary(tmp_path, monkeypatch):
     assert r["ok"] and "结论也要一起改" in r["note"]
     r = ac.update_card({"card_id": cid, "data": {"/chart/data/values": [{"day": "周三", "n": 41}], "/summary": "周三最多"}})
     assert r["ok"] and "结论" not in r["note"]
+
+
+def test_fix_domains_drops_text_domain_on_numeric_field_in_bound_chart():
+    """11/24 上周邮件分类饼图: theta = count (数值) 却给了类别名当 domain, 饼画不出来 —— 出卡时就地去掉; 类别字段的照留。"""
+    from catfish_tool_bridge import a2ui_chart
+    pie = {"data": {"values": [{"category": "本人自留", "count": 7}, {"category": "订阅资讯", "count": 6}]},
+           "mark": {"type": "arc", "innerRadius": 60},
+           "encoding": {"theta": {"field": "count", "type": "quantitative", "scale": {"domain": ["本人自留", "订阅资讯"]}},
+                        "color": {"field": "category", "type": "nominal", "scale": {"domain": ["本人自留", "订阅资讯"]}},
+                        "y": {"field": "count", "type": "quantitative", "scale": {"domain": [0, 10]}}}}
+    msgs = [{"version": "1.0", "createSurface": {"surfaceId": "s", "catalogId": "x", "dataModel": {"chart1": pie},
+             "components": [{"id": "root", "component": "VegaChart", "spec": {"@path": "/chart1"}}]}}]
+    assert a2ui_chart.check_messages(msgs) == 1
+    enc = msgs[0]["createSurface"]["dataModel"]["chart1"]["encoding"]
+    assert "domain" not in enc["theta"]["scale"]
+    assert enc["color"]["scale"]["domain"] == ["本人自留", "订阅资讯"] and enc["y"]["scale"]["domain"] == [0, 10]

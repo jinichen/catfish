@@ -111,3 +111,29 @@ describe("prepareSpec 分组柱状图 (11/16 鸿波: 7 个资质名斜着放、�
     expect(out.layer[1].encoding.text).toEqual({ field: "n" });
   });
 });
+
+describe("数值字段写了文字范围 (11/24 上周邮件分类饼图画不出来)", () => {
+  it("theta = count (数值) 却给了类别名当 domain → 去掉; 类别字段的 domain 照留", () => {
+    const pie = {
+      data: { values: [{ category: "本人自留", count: 7 }, { category: "订阅资讯", count: 6 }] },
+      mark: { type: "arc", innerRadius: 60 },
+      encoding: {
+        theta: { field: "count", type: "quantitative", scale: { domain: ["本人自留", "订阅资讯"] } },
+        color: { field: "category", type: "nominal", scale: { domain: ["本人自留", "订阅资讯"] } },
+      },
+    };
+    const out = prepareSpec(pie, 360, 0, THEME) as Record<string, any>;
+    expect(out.encoding.theta.scale.domain).toBeUndefined();
+    expect(out.encoding.color.scale.domain).toEqual(["本人自留", "订阅资讯"]);
+    expect((pie.encoding.theta.scale as Record<string, unknown>).domain).toBeTruthy();   // 原对象不动
+  });
+  it("数值 domain 写数字的、时间 domain 写日期的照留", () => {
+    const bar = { mark: "bar", encoding: {
+      y: { field: "n", type: "quantitative", scale: { domain: [0, 100] } },
+      x: { field: "d", type: "temporal", scale: { domain: ["2026-11-16", "2026-11-22"] } },
+    } };
+    const out = prepareSpec(bar, 360, 0, THEME) as Record<string, any>;
+    expect(out.encoding.y.scale.domain).toEqual([0, 100]);
+    expect(out.encoding.x.scale.domain).toEqual(["2026-11-16", "2026-11-22"]);
+  });
+});

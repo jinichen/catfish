@@ -118,10 +118,42 @@ def _binding(spec: Any) -> str | None:
     return None
 
 
+def _domain_ok(field_type: Any, domain: list[Any]) -> bool:
+    if field_type == "quantitative":
+        return all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in domain)
+    if field_type == "temporal":
+        return all(isinstance(v, (int, float, str)) and not isinstance(v, bool) for v in domain)
+    return True
+
+
+def fix_domains(node: Any) -> int:
+    """11/24 鸿波「为什么结果没有?」: 上周邮件分类饼图, 模型给数值字段 (theta = count) 写了一串类别名当 scale.domain ——
+    数值比例尺拿文字当范围, 角度全是 NaN, 整个饼是空的。数值字段的 domain 里有不是数字的、时间字段的有不是数字 / 文字的,
+    去掉 domain (就地改), 让 Vega 按数据自己算。返回改了几处。前端 lib/a2uiChart.ts dropMismatchedDomains 同样兜一层 (老卡)。"""
+    n = 0
+    if isinstance(node, list):
+        return sum(fix_domains(v) for v in node)
+    if not isinstance(node, dict):
+        return 0
+    enc = node.get("encoding")
+    if isinstance(enc, dict):
+        for ch in enc.values():
+            sc = ch.get("scale") if isinstance(ch, dict) else None
+            if isinstance(sc, dict) and isinstance(sc.get("domain"), list) and not _domain_ok(ch.get("type"), sc["domain"]):
+                del sc["domain"]
+                n += 1
+    for v in node.values():
+        if isinstance(v, (dict, list)):
+            n += fix_domains(v)
+    return n
+
+
 def check_messages(messages: list[dict[str, Any]]) -> int:
     """一张卡 (出卡时的消息, 或改卡后的全部消息) 里每个 VegaChart: 直接写的 spec 查它, 绑定的 ({"path": ...}) 查数据里那份。
-    返回查了几个图表。"""
+    返回查了几个图表。查之前先把写错的范围 (数值字段给了文字 domain) 就地去掉 (fix_domains)。"""
     charts = [c for c in _components(messages) if c.get("component") == "VegaChart"]
+    if charts:
+        fix_domains(messages)
     if not charts:
         return 0
     model = _data_model(messages)
