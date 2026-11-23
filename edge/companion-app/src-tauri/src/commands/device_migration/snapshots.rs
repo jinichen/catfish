@@ -310,6 +310,13 @@ pub async fn snapshots_restore(name: String, only: Vec<String>) -> Result<apply:
 /// 启动后 10 分钟起, 每小时看一眼: 开着、最新一份超过一天 (或还没有)、没在做别的迁移 → 做一份。
 pub fn spawn_daily() {
     tauri::async_runtime::spawn(async {
+        // 11/23: 上次做到一半被打断留下的临时文件 (没加密的整包), 启动时先清掉
+        let _ = tokio::task::spawn_blocking(|| {
+            if let Ok(roots) = Roots::current() {
+                super::sweep_stale(&roots, std::time::SystemTime::now() - super::STALE_AFTER);
+            }
+        })
+        .await;
         tokio::time::sleep(std::time::Duration::from_secs(600)).await;
         loop {
             let due = tokio::task::spawn_blocking(|| {

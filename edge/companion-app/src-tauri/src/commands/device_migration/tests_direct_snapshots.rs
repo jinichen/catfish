@@ -161,3 +161,25 @@ async fn direct_e2e_经真中央_边传边收_新电脑导进去() {
     assert_eq!(fs::read(new.catfish.join("wiki/entities/大附件.bin")).unwrap(), big);
     assert!(fs::read_to_string(new.catfish.join("employee_journal.md")).unwrap().contains("巡检表"));
 }
+
+
+#[test]
+fn 做到一半留下的临时文件_过时的清掉_备份不动() {
+    // 11/23: 快照做到一半 Companion 被退出, ~/.catfish 里留下 2.4GB 的 .migration-tmp-…/pkg.zip, 没人删
+    let t = tempfile::tempdir().unwrap();
+    let pc = machine(t.path(), "pc");
+    let c = &pc.catfish;
+    fs::create_dir_all(c.join(".migration-tmp-20261121-191244/db")).unwrap();
+    fs::write(c.join(".migration-tmp-20261121-191244/pkg.zip"), b"plain").unwrap();
+    fs::write(c.join(".migration-rooms-20261121-191200.db"), b"x").unwrap();
+    fs::write(c.join(".migration-direct-t_abc.part"), b"x").unwrap();
+    fs::create_dir_all(c.join(".migration-backup-20261120-101010/catfish")).unwrap();   // 导入前挪走的原有数据
+    fs::write(c.join("employee_journal.md"), "日志").unwrap();
+    // 刚写的 (cutoff 在过去): 可能正在做, 不动
+    assert_eq!(sweep_stale(&pc, std::time::SystemTime::now() - STALE_AFTER), 0);
+    // 都算过时 (cutoff 在将来): 三种残留删掉, 备份和别的不动
+    assert_eq!(sweep_stale(&pc, std::time::SystemTime::now() + std::time::Duration::from_secs(60)), 3);
+    let left: Vec<String> = fs::read_dir(c).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(left.contains(&".migration-backup-20261120-101010".to_string()) && left.contains(&"employee_journal.md".to_string()), "{left:?}");
+    assert!(!left.iter().any(|n| n.starts_with(".migration-tmp") || n.starts_with(".migration-rooms") || n.starts_with(".migration-direct")));
+}

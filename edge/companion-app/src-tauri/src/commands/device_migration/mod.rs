@@ -65,8 +65,42 @@ pub(crate) fn stamp() -> String {
 /// 临时目录放在 .catfish 下 (跟目标同一个盘, 换入时是改名不是拷贝); 用完删。
 pub(crate) struct TmpDir(pub(crate) PathBuf);
 
+/// 做到一半被打断的临时文件 (这几种前缀)。`.migration-backup-*` 是导入 / 还原前挪走的员工原有数据, **不在里面**, 不能删。
+const STALE_PREFIXES: &[&str] = &[".migration-tmp-", ".migration-rooms-", ".migration-direct-"];
+/// 超过这么久没动过的才算残留 (正在做的导出 / 直传几分钟到一两个小时)
+pub(crate) const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
+/// 11/23 鸿波「硬盘爆了」: 11/21 一次误删保护快照做到一半 Companion 被退出 (装新版), TmpDir 的 Drop 没机会跑,
+/// ~/.catfish 里留下 2.4GB 的 .migration-tmp-…/pkg.zip —— 没加密的整包资料, 而且永远没人删。
+/// Companion 启动时、每次开始新的导出 / 导入之前扫一遍: 最后修改早于 `cutoff` 的残留删掉。返回删了几个。
+pub(crate) fn sweep_stale(roots: &Roots, cutoff: std::time::SystemTime) -> usize {
+    let Ok(rd) = std::fs::read_dir(&roots.catfish) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !STALE_PREFIXES.iter().any(|p| name.starts_with(p)) {
+            continue;
+        }
+        let Ok(modified) = e.metadata().and_then(|m| m.modified()) else { continue };
+        if modified >= cutoff {
+            continue;
+        }
+        let p = e.path();
+        let r = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        match r {
+            Ok(()) => {
+                log::info!("[migration] 删了做到一半留下的临时文件: {name}");
+                n += 1;
+            }
+            Err(err) => log::warn!("[migration] 临时文件 {name} 删不掉: {err}"),
+        }
+    }
+    n
+}
+
 impl TmpDir {
     pub(crate) fn new(roots: &Roots) -> Result<TmpDir, String> {
+        sweep_stale(roots, std::time::SystemTime::now() - STALE_AFTER);
         let p = roots.catfish.join(format!(".migration-tmp-{}", stamp()));
         std::fs::create_dir_all(&p).map_err(|e| format!("建临时目录失败: {e}"))?;
         Ok(TmpDir(p))
