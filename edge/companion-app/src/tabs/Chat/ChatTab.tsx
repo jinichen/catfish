@@ -8,7 +8,7 @@
  */
 
 import { ExpertPicker } from "./ExpertPicker";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../store/chat";
 import { useUIStore } from "../../store/ui";
@@ -26,6 +26,7 @@ import ChatSidebar from "./ChatSidebar";
 import TaskPicker from "./TaskPicker";
 // 11/07: 对话右侧栏 —— 成果 (小鲶生成的网页 / 文档 / 表格 / 图片) + 浏览器 (小鲶在操作的网页)
 import ArtifactPanel from "./artifacts/ArtifactPanel";
+import { useCardPanelStore } from "../../store/cardPanel";
 import { useArtifactAutoOpen } from "./artifacts/useArtifactAutoOpen";
 import { useArtifactStore } from "../../store/artifacts";
 import { sessionArtifactPaths } from "../../lib/artifactKinds";
@@ -373,6 +374,12 @@ export default function ChatTab() {
   }, [persistedSessionId, isStreaming, messages.length, loadSession, loadSessionAttachments]);
 
   const artifactView = useArtifactStore((s) => s.view);
+  // 11/24 右栏「待处理」只放这个会话的卡片: 换会话 / 新对话清空 (对话里那一行画出来时会重新登记)。
+  // 用 layout effect: 它在所有 useEffect 之前跑, 不会把子组件 (ToolCards) 同一轮刚登记的卡片又清掉
+  const noMessages = messages.length === 0;
+  useLayoutEffect(() => {
+    useCardPanelStore.getState().reset();
+  }, [persistedSessionId, noMessages]);
   const artifactPaths = useMemo(() => sessionArtifactPaths(messages), [messages]);
   useArtifactAutoOpen(messages, isStreaming, persistedSessionId);
 

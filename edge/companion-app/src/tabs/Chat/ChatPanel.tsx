@@ -77,7 +77,8 @@ export default function ChatPanel({
   }, [onSend]);
 
   // 11/15 对话卡片 (lib/a2uiCard.ts): 对话页的卡片能交 (点按钮走上面的 catfish:approval-send); 交过的照样显示「已交」
-  const cardEnv = useMemo(() => ({ interactive: true, submitted: submittedCardKeys(messages) }), [messages]);
+  // 11/24: 对话页旁边有右栏 —— 要填 / 大件的卡片放右栏「待处理」(ToolCards)
+  const cardEnv = useMemo(() => ({ interactive: true, submitted: submittedCardKeys(messages), panel: true }), [messages]);
 
   const isEmpty = messages.length === 0;
   useExpertChat(); // 10/18: 订阅「找谁」, 切专家时空态 (快捷问法) 跟着换

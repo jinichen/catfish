@@ -19,7 +19,8 @@ function loadWidth(): number {
   }
 }
 
-export type PanelView = "file" | "browser";
+/** 11/24 加 cards: 「待处理」—— 要填 / 大件的对话卡片 (store/cardPanel.ts) */
+export type PanelView = "file" | "browser" | "cards";
 
 interface ArtifactState {
   /** 右栏开着哪一页; null = 右栏关着 */
@@ -41,6 +42,8 @@ interface ArtifactState {
   autoOpen: (path: string, since: number) => void;
   /** 小鲶开始操作浏览器, 自动切到浏览器页 */
   autoBrowser: (since: number) => void;
+  /** 11/24 小鲶出了一张要填的卡片 / 改了它, 自动切到「待处理」 */
+  autoCards: (since: number) => void;
   /** 换对话时收起 (不算用户操作) */
   dismiss: () => void;
   setWidth: (w: number) => void;
@@ -59,6 +62,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   autoOpen: (path, since) =>
     set((s) => (s.userActedAt >= since || (s.view === "file" && s.path === path) ? s : { path, view: "file" })),
   autoBrowser: (since) => set((s) => (s.userActedAt >= since || s.view === "browser" ? s : { view: "browser" })),
+  autoCards: (since) => set((s) => (s.userActedAt >= since || s.view === "cards" ? s : { view: "cards" })),
   dismiss: () => set({ view: null, path: null }),
   setWidth: (w) => {
     const width = Math.max(ARTIFACT_MIN_WIDTH, Math.round(w));

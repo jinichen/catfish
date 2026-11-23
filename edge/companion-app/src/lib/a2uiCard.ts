@@ -105,6 +105,26 @@ export function missingComponents(messages: unknown[]): string[] {
   return missing;
 }
 
+/** 11/24 鸿波「A2UI 生成的内容是不是应该放在右边」: 卡片放哪。
+ *  - 要员工填 / 选的 (输入框、勾选、单选多选、滑块、日期) 和大件 (图表、邮件 / 日程卡、列表) → 右栏「待处理」,
+ *    对话里只留一行 —— 放在对话里会被后面的消息顶上去, 小鲶改了 (card_update) 还得往上翻着找;
+ *  - 只有几个按钮的 (「好 / 不用」这种点一下就完的) → 照旧在对话里。 */
+const INPUT_COMPONENTS = new Set(["TextField", "CheckBox", "ChoicePicker", "Slider", "DateTimeInput"]);
+const BIG_COMPONENTS = new Set(["VegaChart", "EmailCard", "EventCard", "List"]);
+/** 按钮超过这么多、或者组件超过这么多, 也算大件 */
+const INLINE_MAX_BUTTONS = 3;
+const INLINE_MAX_COMPONENTS = 12;
+
+export type CardPlacement = "panel" | "inline";
+
+export function cardPlacement(messages: unknown[]): CardPlacement {
+  const names: string[] = [];
+  for (const comps of componentsBySurface(messages).values()) for (const c of comps) names.push(String(c?.component ?? ""));
+  if (names.some((n) => INPUT_COMPONENTS.has(n) || BIG_COMPONENTS.has(n))) return "panel";
+  if (names.filter((n) => n === "Button").length > INLINE_MAX_BUTTONS || names.length > INLINE_MAX_COMPONENTS) return "panel";
+  return "inline";
+}
+
 /** 画之前的兜底检查; 有问题返回原因 */
 export function cardProblem(messages: unknown[]): string | null {
   if (!Array.isArray(messages) || messages.length === 0) return "卡片是空的";

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import catfish from "../tabs/Chat/__fixtures__/a2ui_card_catfish.json";
 import meeting from "../tabs/Chat/__fixtures__/a2ui_card_meeting.json";
 import {
-  blockedFunctions, buildSubmission, cardIdFromToolCall, cardProblem, cardUpdateFromToolCall, cardTitle, missingComponents, parseSubmission,
+  blockedFunctions, buildSubmission, cardIdFromToolCall, cardPlacement, cardProblem, cardUpdateFromToolCall, cardTitle, missingComponents, parseSubmission,
   submissionLines, submittedCardKeys, unknownComponents,
 } from "./a2uiCard";
 
@@ -107,5 +107,25 @@ describe("鲶鱼目录 (11/15): 自定义组件 / List 模板 / card_update", ()
     const card = JSON.stringify({ ok: true, card_id: "c_20261115_093012_a1b2c3" });
     expect(cardUpdateFromToolCall({ name: "catfish_form", args: { action: "card" }, result: card })).toBeNull();
     expect(cardUpdateFromToolCall({ name: "catfish_form", args: { action: "card_update" }, result: JSON.stringify({ ok: false, error: "x" }) })).toBeNull();
+  });
+});
+
+describe("卡片放哪 (11/24: 要填 / 大件的放右栏, 点一下就完的留在对话里)", () => {
+  const btn = (id: string) => ({ id, component: "Button", child: `${id}t`, action: { event: { name: id } } });
+  const txt = (id: string) => ({ id, component: "Text", text: id });
+  it("有输入 (单选 / 输入框) 的会议卡 → 右栏; 图表 / 邮件卡 / 列表 → 右栏", () => {
+    expect(cardPlacement(meeting)).toBe("panel");
+    expect(cardPlacement(surface([{ id: "root", component: "VegaChart", spec: {} }]))).toBe("panel");
+    expect(cardPlacement(surface([{ id: "root", component: "EmailCard" }]))).toBe("panel");
+    expect(cardPlacement(surface([{ id: "root", component: "DateTimeInput" }]))).toBe("panel");
+  });
+  it("只有一句话 + 两三个按钮 → 留在对话里; 按钮多了 / 组件多了 → 右栏", () => {
+    const small = surface([{ id: "root", component: "Column", children: ["t", "b1", "b2"] }, txt("t"), btn("b1"), txt("b1t"), btn("b2"), txt("b2t")]);
+    expect(cardPlacement(small)).toBe("inline");
+    const manyButtons = surface([{ id: "root", component: "Row", children: ["b1", "b2", "b3", "b4"] },
+      ...["b1", "b2", "b3", "b4"].flatMap((b) => [btn(b), txt(`${b}t`)])]);
+    expect(cardPlacement(manyButtons)).toBe("panel");
+    const big = surface([{ id: "root", component: "Column", children: [] }, ...Array.from({ length: 12 }, (_, i) => txt(`t${i}`))]);
+    expect(cardPlacement(big)).toBe("panel");
   });
 });

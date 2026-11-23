@@ -1,6 +1,7 @@
 /**
- * 对话右侧栏 (11/07 鸿波「先做成果区」「浏览器两步一起做」): 两页 ——
+ * 对话右侧栏 (11/07 鸿波「先做成果区」「浏览器两步一起做」): 三页 ——
  *   - 成果 (FilePane): 小鲶生成的网页 / 文档 / 表格 / 图片 / Word·Excel·PPT
+ *   - 待处理 (CardsPane, 11/24): 要填 / 大件的对话卡片 (A2UI), 对话里只留一行
  *   - 浏览器 (BrowserPane): 小鲶正在操作的网页, 需要时「我来操作」自己接手
  * 什么时候自动打开见 useArtifactAutoOpen; 左边缘拖动调宽, 宽度记在本机。
  * 11/20 起打开时窗口向右长出这一栏 (windowGrow.ts), 不再从对话区里切走一半。
@@ -9,6 +10,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { X } from "@phosphor-icons/react";
 import { useArtifactStore, ARTIFACT_MIN_WIDTH } from "../../../store/artifacts";
 import FilePane from "./FilePane";
+import CardsPane from "./CardsPane";
+import { useCardPanelStore } from "../../../store/cardPanel";
 import BrowserPane from "./BrowserPane";
 import { growWindowFor, shrinkWindowBack } from "./windowGrow";
 
@@ -19,6 +22,8 @@ const OVERLAY_GAP = 48;
 
 export default function ArtifactPanel({ paths }: { paths: string[] }) {
   const { view, width, showView, close, setWidth } = useArtifactStore();
+  const cards = useCardPanelStore((s) => s.cards);
+  const pendingCards = cards.filter((c) => !c.submitted).length;
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const asideRef = useRef<HTMLElement>(null);
 
@@ -116,6 +121,11 @@ export default function ArtifactPanel({ paths }: { paths: string[] }) {
           <button type="button" role="tab" aria-selected={view === "file"} onClick={() => showView("file")}>
             成果{paths.length > 0 && <span className="artifact-panel__count">{paths.length}</span>}
           </button>
+          {(cards.length > 0 || view === "cards") && (
+            <button type="button" role="tab" aria-selected={view === "cards"} onClick={() => showView("cards")}>
+              待处理{pendingCards > 0 && <span className="artifact-panel__count">{pendingCards}</span>}
+            </button>
+          )}
           <button type="button" role="tab" aria-selected={view === "browser"} onClick={() => showView("browser")}>
             浏览器
           </button>
@@ -124,7 +134,7 @@ export default function ArtifactPanel({ paths }: { paths: string[] }) {
           <button type="button" onClick={close} title="关闭右侧栏" aria-label="关闭右侧栏"><X size={16} /></button>
         </div>
       </header>
-      {view === "file" ? <FilePane paths={paths} /> : <BrowserPane />}
+      {view === "file" ? <FilePane paths={paths} /> : view === "cards" ? <CardsPane /> : <BrowserPane />}
     </aside>
   );
 }
