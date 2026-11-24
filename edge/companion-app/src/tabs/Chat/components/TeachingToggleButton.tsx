@@ -4,6 +4,7 @@
  * Teaching-Mode header → lean inject (跳 session_history / facts 等).
  */
 
+import { GraduationCap } from "@phosphor-icons/react";
 import { useTeachingStore } from "../../../store/teaching";
 
 
@@ -14,10 +15,11 @@ function TeachingToggleButton({ isStreaming }: { isStreaming: boolean }) {
     <button
       onClick={toggle}
       disabled={isStreaming}
+      aria-label={on ? "关闭教学模式" : "开启教学模式"}
       title={
         on
-          ? "🎓 教学模式 ON: 走 LEAN (关 9 个干扰 inject), 适合教新 skill. 点关闭回常态."
-          : "🎓 开启教学模式: 关掉 9 个干扰 inject 让 prompt 干净, 适合教 catfish 跑新流程 (catfish_teach_start). 不影响 mid-task retry."
+          ? "教学模式已开: 走 LEAN (关 9 个干扰 inject), 适合教新 skill. 点关闭回常态."
+          : "开启教学模式: 关掉 9 个干扰 inject 让 prompt 干净, 适合教 catfish 跑新流程 (catfish_teach_start). 不影响 mid-task retry."
       }
       style={{
         padding: "6px 10px",
@@ -33,7 +35,7 @@ function TeachingToggleButton({ isStreaming }: { isStreaming: boolean }) {
         transition: "all 120ms ease",
       }}
     >
-      🎓
+      <GraduationCap size={16} weight="regular" aria-hidden="true" />
     </button>
   );
 }

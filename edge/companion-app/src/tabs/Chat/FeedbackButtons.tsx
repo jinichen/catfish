@@ -15,6 +15,8 @@
  */
 
 import { useState } from "react";
+import { FloppyDisk, PencilSimple, ThumbsDown, ThumbsUp } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 import { feedbackRecord, wikiSaveChatMessage } from "../../lib/tauri";
 import { useChatStore } from "../../store/chat";
 
@@ -67,17 +69,16 @@ export default function FeedbackButtons({ messageId, preview, hidden }: Props) {
   if (status === "saved") {
     const label =
       savedKind === "thumb_up"
-        ? "👍 已记"
+        ? "已记: 有用"
         : savedKind === "thumb_down"
-        ? "👎 已记: " + (comment || "无评论")
-        : "✏️ 已记: " + (comment || "无评论");
+        ? "已记: 不行 · " + (comment || "无评论")
+        : "已记: 想改 · " + (comment || "无评论");
     return (
       <div
         style={{
           marginTop: "var(--space-1)",
           fontSize: 11,
           color: "var(--catfish-text-muted)",
-          fontStyle: "italic",
         }}
       >
         {label}
@@ -175,19 +176,19 @@ export default function FeedbackButtons({ messageId, preview, hidden }: Props) {
         title="回答得好"
         onClick={() => void submit("thumb_up")}
       >
-        👍
+        <ThumbsUp size={14} weight="regular" aria-label="有用" />
       </FeedbackBtn>
       <FeedbackBtn
         title="回答不行 (可写为啥)"
         onClick={() => setStatus("writing-down")}
       >
-        👎
+        <ThumbsDown size={14} weight="regular" aria-label="不行" />
       </FeedbackBtn>
       <FeedbackBtn
         title="想要不一样的回答 (写改成怎样)"
         onClick={() => setStatus("writing-edit")}
       >
-        ✏️ 改
+        <Ico as={PencilSimple} size={14} />改
       </FeedbackBtn>
       {wikiSavedPath ? (
         <span
@@ -254,7 +255,7 @@ export default function FeedbackButtons({ messageId, preview, hidden }: Props) {
             }
           }}
         >
-          {wikiSaving ? "⏳ 存…" : "💾 存 wiki"}
+          {wikiSaving ? "存…" : <><Ico as={FloppyDisk} size={14} />存 wiki</>}
         </FeedbackBtn>
       )}
       {error && (
@@ -282,6 +283,8 @@ function FeedbackBtn({
       onClick={onClick}
       style={{
         padding: "2px 8px",
+        display: "inline-flex",
+        alignItems: "center",
         fontSize: 11,
         border: "1px solid transparent",
         borderRadius: 4,

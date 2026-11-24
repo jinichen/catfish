@@ -17,7 +17,8 @@
 import { useEffect, useState } from "react";
 import { revealInFinder, openFile, emailCreateDraft } from "../lib/tauri";
 import { draftParseMd, type ParsedDraft } from "../lib/drafts";
-import { basename, fileEmoji } from "../lib/path_detect";
+import { basename } from "../lib/path_detect";
+import { FileKindIcon } from "./icons";
 import { fileManagerName, modKey } from "../lib/platformLabels";
 import { emailClientName } from "../lib/emailPlatformHints";
 import { artifactKind } from "../lib/artifactKinds";
@@ -133,9 +134,7 @@ export default function FilePill({ path }: Props) {
           maxWidth: 360,
         }}
       >
-        <span style={{ fontSize: 13 }} aria-hidden>
-          {fileEmoji(path)}
-        </span>
+        <FileKindIcon name={path} gap={0} />
         <span
           style={{
             fontFamily: "var(--font-mono)",

@@ -2,7 +2,9 @@
  *  只在最后一条消息上给「继续」: 点了等于发一条"继续", 网关计数清零接着做。
  *  10/27: hermes 自己的步数上限 (agent.max_turns) 也用这条, 传 text 进来。 */
 
+import { Pause } from "@phosphor-icons/react";
 import { agentLoopLimitText } from "../../lib/agentLoopLimit";
+import { Ico } from "../../components/icons";
 
 export default function ChatLoopLimitNotice(
   { error, text, canContinue }: { error?: string; text?: string; canContinue: boolean },
@@ -24,7 +26,7 @@ export default function ChatLoopLimitNotice(
         flexWrap: "wrap",
       }}
     >
-      <span style={{ flex: 1, minWidth: 200 }}>⏸ {text ?? agentLoopLimitText(error ?? "")}</span>
+      <span style={{ flex: 1, minWidth: 200 }}><Ico as={Pause} />{text ?? agentLoopLimitText(error ?? "")}</span>
       {canContinue && (
         <button
           type="button"

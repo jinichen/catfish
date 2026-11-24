@@ -50,7 +50,7 @@ export default function CustomerFollowupStrip({ radar, onAdd }: { radar: Custome
   return (
     <div className="customer-followup" style={{ marginBottom: "var(--space-2)", display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", fontSize: 13 }}>
-        <strong>🤝 客户跟进</strong>
+        <strong>客户跟进</strong>
         <span style={{ color: "var(--catfish-text-muted)" }}>
           {`${cards.length} 件要跟 · ${customers} 个客户`}
         </span>

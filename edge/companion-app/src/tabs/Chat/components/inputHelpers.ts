@@ -1,19 +1,10 @@
 /** ChatInput 显示用 helper — 抽自 ChatInput.tsx (5/20 拆分).
  *
- * fileEmoji: 看文件名返合适 emoji
+ * (11/24 unslop: fileEmoji 删了, 文件图标走 components/icons.tsx 的 FileKindIcon)
  * metaSummary: 看 attachment meta 拼成一行人话 (页数 / 字符数 / 时长 等)
  */
 
 import type { Attachment } from "../../../types/chat";
-
-export function fileEmoji(name: string): string {
-  const lower = name.toLowerCase();
-  if (lower.endsWith(".pdf")) return "📕";
-  if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".csv")) return "📊";
-  if (lower.endsWith(".docx")) return "📝";
-  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "📋";
-  return "📄";
-}
 
 /** 把 meta 转成简短显示文案. excel: "5 sheets · 365 行"; pdf: "12 页"; etc */
 export function metaSummary(att: Attachment): string {
@@ -58,7 +49,7 @@ export function metaSummary(att: Attachment): string {
         ? `${Math.floor(sec / 60)}分${Math.round(sec % 60)}秒`
         : `${Math.round(sec)}秒`
       : "?";
-    return `🎵 ${durLabel} · 转录 ${chars ?? "?"} 字 · ${sizeLabel}`;
+    return `音频 ${durLabel} · 转录 ${chars ?? "?"} 字 · ${sizeLabel}`;
   }
   return sizeLabel;
 }

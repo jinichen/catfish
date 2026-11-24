@@ -4,6 +4,9 @@ import { BuildOverviewButton, TaughtReapply } from "./ChatExpertBuild";
 import { PublishConfirmButton } from "./ChatWikiPublish";
 import { ExpertSuggestButton } from "./ExpertPicker";
 import { useState } from "react";
+import type { Icon } from "@phosphor-icons/react";
+import { Check, Hourglass, Wrench, X } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 import type { ToolCall } from "../../types/chat";
 import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
@@ -32,11 +35,12 @@ interface Props {
   call: ToolCall;
 }
 
-const STATUS_EMOJI: Record<ToolCall["status"], string> = {
-  pending: "⏳",
-  running: "🔧",
-  done: "✓",
-  error: "✗",
+// 11/24 unslop: 原 ⏳ 🔧 ✓ ✗ → Phosphor 线性图标, 颜色跟着 .toolcall__status 走
+const STATUS_ICON: Record<ToolCall["status"], Icon> = {
+  pending: Hourglass,
+  running: Wrench,
+  done: Check,
+  error: X,
 };
 
 // E2 (6/6): STATUS_COLOR 删 — 颜色走 CSS class `.toolcall--<status>` 控制 4px
@@ -128,7 +132,7 @@ export default function ChatToolCall({ call }: Props) {
         aria-expanded={open}
         aria-label={`Tool call ${call.name}, ${open ? "已展开" : "已折叠"}`}
       >
-        <span className="toolcall__status">{STATUS_EMOJI[call.status]}</span>
+        <span className="toolcall__status"><Ico as={STATUS_ICON[call.status]} size={14} gap={0} /></span>
         <span className="toolcall__caret">▶</span>
         <span className="toolcall__name">{call.name}</span>
         <span className="toolcall__args-preview">({argsPreview(call.args)})</span>

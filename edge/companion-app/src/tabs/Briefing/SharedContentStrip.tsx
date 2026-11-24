@@ -108,7 +108,7 @@ export default function SharedContentStrip() {
   return (
     <div role="status" className="shared-strip">
       <div className="shared-strip__head">
-        <span className="shared-strip__summary">🔄 你装的共享内容: {bits.join(" · ")}</span>
+        <span className="shared-strip__summary">你装的共享内容: {bits.join(" · ")}</span>
         <button type="button" className="chat-composer__secondary-button" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? "收起" : "看看"}</button>
         <button type="button" className="chat-composer__secondary-button" onClick={() => void recheck()} disabled={busy !== null}>
           {busy === "check" ? "查询中…" : "现在查"}

@@ -30,14 +30,14 @@ afterEach(cleanup);
 describe("客户跟进", () => {
   it("没有要跟的: 问候行一个小标签, 不出整条", () => {
     render(<><CustomerFollowupStrip radar={radar({})} onAdd={() => {}} /><CustomerChip radar={radar({})} onAdd={() => {}} /></>);
-    expect(screen.getByText("🤝 1 个客户, 今天没有要跟的 ✓")).toBeTruthy();
-    expect(screen.queryByText("🤝 客户跟进")).toBeNull();
+    expect(screen.getByText("1 个客户, 今天没有要跟的 ✓")).toBeTruthy();
+    expect(screen.queryByText("客户跟进")).toBeNull();
   });
 
   it("还没有客户: 也给「+ 加客户」", () => {
     const onAdd = vi.fn();
     render(<CustomerChip radar={radar({ customers: 0 })} onAdd={onAdd} />);
-    expect(screen.getByText("🤝 还没有客户")).toBeTruthy();
+    expect(screen.getByText("还没有客户")).toBeTruthy();
     fireEvent.click(screen.getByText("+ 加客户"));
     expect(onAdd).toHaveBeenCalled();
   });

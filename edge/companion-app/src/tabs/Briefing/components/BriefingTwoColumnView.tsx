@@ -15,6 +15,8 @@
  */
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Alarm } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 import { runningTaskChatKeys, subscribeTaskChatRunning } from "../../../hooks/useTaskChat";
 import { alertDialog } from "../../../components/dialogs";
 
@@ -126,7 +128,7 @@ export default function BriefingTwoColumnView({
     // MVP alert. 未来 Phase 10.1 inline toast.
     window.setTimeout(() => {
       void alertDialog(
-        `已切到 Chat tab + 复制 reflect prompt:\n\n  ${prompt}\n\n💡 Cmd+V 粘贴到输入框 send`,
+        `已切到 Chat tab + 复制 reflect prompt:\n\n  ${prompt}\n\nCmd+V 粘贴到输入框 send`,
       );
     }, 50);
   };
@@ -176,7 +178,7 @@ export default function BriefingTwoColumnView({
             <span className="briefing-2col__task-running" title="小鲶还在处理这条, 点回来能看进度">处理中</span>
           )}
           {effective === "resolved" && "✓ "}
-          {effective === "paused" && "⏰ "}
+          {effective === "paused" && <Ico as={Alarm} />}
           {t.title}
         </div>
         {t.reason && (
@@ -191,7 +193,7 @@ export default function BriefingTwoColumnView({
   if (tasks.length === 0 && handledItems.length === 0) {
     return (
       <div className="briefing-2col__empty">
-        今天的主菜都处理完了, 喝杯茶吧 ☕
+        今天的主菜都处理完了, 喝杯茶吧
       </div>
     );
   }

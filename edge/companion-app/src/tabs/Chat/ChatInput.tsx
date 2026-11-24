@@ -15,7 +15,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ClipboardEvent, type DragEvent, type ChangeEvent } from "react";
 import { confirmDialog } from "../../components/dialogs";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowBendDownLeft, Microphone, Paperclip } from "@phosphor-icons/react";
+import { ArrowBendDownLeft, Microphone, Paperclip, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 import type { Attachment } from "../../types/chat";
 import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
 import { useChatStore } from "../../store/chat";
@@ -153,7 +154,7 @@ export default function ChatInput({
     try {
       await invoke("speech_start_recording");
       setIsRecording(true);
-      setSpeechHint("正在录音… 再按 🎤 结束");
+      setSpeechHint("正在录音… 再按麦克风按钮结束");
     } catch (err) {
       console.error("speech_start_recording failed:", err);
       setSpeechHint(`录音启动失败: ${(err as Error).message || err}`);
@@ -219,7 +220,7 @@ export default function ChatInput({
           const isAudio =
             f.type.startsWith("audio/") ||
             SUPPORTED_AUDIO_EXTS.some((ext) => (f.name || "").toLowerCase().endsWith(ext));
-          setParseLabel(isAudio ? `🎙 正在转录音频${progress}…(可能要几十秒, 取决于音频长度)` : `正在解析文件${progress}…`);
+          setParseLabel(isAudio ? `正在转录音频${progress}…(可能要几十秒, 取决于音频长度)` : `正在解析文件${progress}…`);
         } catch {
           setParseLabel("正在解析文件…");
         }
@@ -413,7 +414,7 @@ export default function ChatInput({
             display: "inline-block",
           }}
         >
-          🎤 {speechHint}
+          <Ico as={Microphone} size={14} />{speechHint}
         </div>
       )}
 
@@ -426,7 +427,7 @@ export default function ChatInput({
             marginBottom: "var(--space-2)",
           }}
         >
-          ⚠ {attachError}
+          <Ico as={Warning} size={14} />{attachError}
         </div>
       )}
 

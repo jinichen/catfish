@@ -6,6 +6,8 @@
  */
 
 import { useState } from "react";
+import { CalendarBlank, Clock, MapPin, Users } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 
 import type { CalendarEvent } from "../../../lib/tauri";
 import { formatDayLabel, formatFullDateRange, formatTime } from "./helpers";
@@ -44,8 +46,8 @@ export function EventsDetailSection({ events, defaultOpen = false }: { events: C
           marginBottom: 6,
         }}
       >
-        📅 日历详情 · {events.length} 件
-        <span style={{ marginLeft: 6, fontSize: 10, color: "var(--catfish-text-muted)", opacity: 0.6, fontWeight: 400 }}>
+        日历详情 · {events.length} 件
+        <span style={{ marginLeft: 6, fontSize: 11, color: "var(--catfish-text-muted)", opacity: 0.6, fontWeight: 400 }}>
           (点条目展开)
         </span>
       </summary>
@@ -81,7 +83,7 @@ export function EventsDetailSection({ events, defaultOpen = false }: { events: C
                 }}
                 title={isOpen ? "点击收起" : "点击展开"}
               >
-                <span style={{ color: "var(--catfish-text-muted)", fontSize: 9, minWidth: 10 }}>
+                <span style={{ color: "var(--catfish-text-muted)", fontSize: 11, minWidth: 10 }}>
                   {isOpen ? "▼" : "▶"}
                 </span>
                 <span
@@ -107,10 +109,10 @@ export function EventsDetailSection({ events, defaultOpen = false }: { events: C
                     }}
                     title={e.location}
                   >
-                    📍 {e.location}
+                    <Ico as={MapPin} size={12} />{e.location}
                   </span>
                 )}
-                <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", opacity: 0.6 }}>
+                <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", opacity: 0.6 }}>
                   {e.calendar}
                 </span>
               </div>
@@ -119,20 +121,20 @@ export function EventsDetailSection({ events, defaultOpen = false }: { events: C
                   style={{
                     padding: "6px 10px 8px 24px",
                     background: "var(--catfish-bg)",
-                    fontSize: 10,
+                    fontSize: 11,
                     color: "var(--catfish-text-muted)",
                     lineHeight: 1.5,
                   }}
                 >
-                  <div>🕐 {e.all_day ? "全天事件" : formatFullDateRange(e.start, e.end)}</div>
+                  <div><Ico as={Clock} size={12} />{e.all_day ? "全天事件" : formatFullDateRange(e.start, e.end)}</div>
                   {e.location && (
-                    <div style={{ marginTop: 3, wordBreak: "break-all" }}>📍 {e.location}</div>
+                    <div style={{ marginTop: 3, wordBreak: "break-all" }}><Ico as={MapPin} size={12} />{e.location}</div>
                   )}
-                  <div style={{ marginTop: 3 }}>🗓️ 日历: {e.calendar}</div>
+                  <div style={{ marginTop: 3 }}><Ico as={CalendarBlank} size={12} />日历: {e.calendar}</div>
                   {/* BL-COMPANION-BRIEFING-V2 sub-step 1.3 (5/20): 参会人 */}
                   {e.attendees && e.attendees.length > 0 && (
                     <div style={{ marginTop: 3 }}>
-                      👥 参会人 ({e.attendees.length}):{" "}
+                      <Ico as={Users} size={12} />参会人 ({e.attendees.length}):{" "}
                       <span style={{ color: "var(--catfish-text)" }}>
                         {e.attendees.slice(0, 5).join(", ")}
                         {e.attendees.length > 5 && ` 等 ${e.attendees.length} 人`}
@@ -151,7 +153,7 @@ export function EventsDetailSection({ events, defaultOpen = false }: { events: C
                         wordBreak: "break-word",
                       }}
                     >
-                      📝 {e.description}
+                      {e.description}
                     </div>
                   )}
                 </div>
@@ -203,7 +205,7 @@ export function WeekEventsDetailSection({
           marginBottom: 6,
         }}
       >
-        🗓️ 本周其他日程 · {futureEvents.length} 件
+        本周其他日程 · {futureEvents.length} 件
       </summary>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
         {Array.from(groups.entries()).map(([day, events]) => (
@@ -257,7 +259,7 @@ export function WeekEventsDetailSection({
                       }}
                       title={e.location}
                     >
-                      📍 {e.location}
+                      <Ico as={MapPin} size={12} />{e.location}
                     </span>
                   )}
                 </li>

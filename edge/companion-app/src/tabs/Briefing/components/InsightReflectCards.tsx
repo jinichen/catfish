@@ -26,6 +26,8 @@
  * Card 0 item 时 component 返 null → BriefingTwoColumnView 0 渲染空 card.
  */
 
+import { ChatCircle, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 import type {
   BlindSpotItem,
   GraveyardItem,
@@ -57,7 +59,7 @@ export function SubconsciousCard({ items, onReflect }: SubconsciousProps) {
           color: "var(--catfish-text)",
         }}
       >
-        🌊 反复出现 ({items.length}) — 多次咨询但没深入
+        反复出现 ({items.length}) — 多次咨询但没深入
       </summary>
       <div style={{ padding: "4px 12px 12px", paddingLeft: 16 }}>
         {items.map((item, i) => (
@@ -107,7 +109,7 @@ export function SubconsciousCard({ items, onReflect }: SubconsciousProps) {
                   cursor: "pointer",
                 }}
               >
-                💬 {item.reflectPrompt}
+                <Ico as={ChatCircle} size={12} />{item.reflectPrompt}
               </button>
             )}
           </div>
@@ -141,7 +143,7 @@ export function GraveyardCard({ items }: GraveyardProps) {
           color: "var(--catfish-text)",
         }}
       >
-        📦 久未使用 ({items.length}) — 装了但很少打开
+        久未使用 ({items.length}) — 装了但很少打开
       </summary>
       <div style={{ padding: "4px 12px 12px", paddingLeft: 16 }}>
         {items.map((item, i) => (
@@ -178,10 +180,9 @@ export function GraveyardCard({ items }: GraveyardProps) {
         <div
           style={{
             marginTop: 6,
-            fontSize: 10,
+            fontSize: 11,
             color: "var(--catfish-text-muted)",
             opacity: 0.7,
-            fontStyle: "italic",
           }}
         >
           注: catfish 不删. 想清理去对应 tab 自己决定.
@@ -216,7 +217,7 @@ export function BlindSpotsCard({ items, onReflect }: BlindSpotsProps) {
           color: "var(--catfish-text)",
         }}
       >
-        ⚠️ 需要关注 ({items.length}) — 标重要但还没跟进
+        <Ico as={Warning} style={{ color: "var(--status-warn)" }} />需要关注 ({items.length}) — 标重要但还没跟进
       </summary>
       <div style={{ padding: "4px 12px 12px", paddingLeft: 16 }}>
         {items.map((item, i) => (
@@ -266,7 +267,7 @@ export function BlindSpotsCard({ items, onReflect }: BlindSpotsProps) {
                   cursor: "pointer",
                 }}
               >
-                💬 {item.reflectPrompt}
+                <Ico as={ChatCircle} size={12} />{item.reflectPrompt}
               </button>
             )}
           </div>

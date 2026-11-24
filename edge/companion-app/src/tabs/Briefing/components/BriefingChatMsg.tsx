@@ -9,7 +9,9 @@
  * 直接撞色看不清。所以 user 消息走纯文本 + whiteSpace: pre-wrap 保留换行,
  * 只有助手消息才过 Markdown。
  */
+import { Warning } from "@phosphor-icons/react";
 import ChatToolCall from "../../Chat/ChatToolCall";
+import { Ico } from "../../../components/icons";
 import { Markdown } from "../../../lib/markdown";  // P3.3.10 fix (6/10): 复用工作台 markdown render (粗体/列表/代码块)
 import type { ChatMessage } from "../../../types/chat";
 
@@ -45,7 +47,7 @@ export function ChatMsg({ msg }: { msg: ChatMessage }) {
     >
       {hasContent && <Markdown text={msg.content} />}
       {msg.status === "error" && (
-        <div>⚠️ {msg.error || "回答失败，请重新发送"}</div>
+        <div><Ico as={Warning} />{msg.error || "回答失败，请重新发送"}</div>
       )}
       {hasToolCalls && (
         <div style={{ marginTop: hasContent ? 8 : 0 }}>

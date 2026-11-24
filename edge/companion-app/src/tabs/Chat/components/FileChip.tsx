@@ -1,11 +1,13 @@
 /** ChatInput FileChip — 抽自 ChatInput.tsx (5/20 拆分).
  *
- * 文件 / 音频 attachment 一条 chip 显示 (emoji + name + meta + 删除按钮).
+ * 文件 / 音频 attachment 一条 chip 显示 (图标 + name + meta + 删除按钮).
  */
 
+import { ChatCircle } from "@phosphor-icons/react";
 import type { Attachment } from "../../../types/chat";
+import { FileKindIcon, Ico } from "../../../components/icons";
 
-import { fileEmoji, metaSummary } from "./inputHelpers";
+import { metaSummary } from "./inputHelpers";
 
 
 /** compact (10/27): 附件区展开后的列表里用 —— 单行、撑满格子宽度, 好几列排开 (见 AttachmentTray)。 */
@@ -37,8 +39,10 @@ function FileChip({
         ? `${attachment.name}\n${summary}\n已导入本机 (隐私 → 微信接入 可删除)`
         : `${attachment.name}\n${summary}\n完整文件: ${attachment.keptPath || "(未保留)"}`}
     >
-      <span style={{ fontSize: compact ? 13 : 16, flexShrink: 0 }}>
-        {attachment.fileKind === "wechat" ? "💬" : fileEmoji(attachment.name)}
+      <span style={{ display: "inline-flex", flexShrink: 0 }}>
+        {attachment.fileKind === "wechat"
+          ? <Ico as={ChatCircle} size={compact ? 14 : 16} gap={0} />
+          : <FileKindIcon name={attachment.name} size={compact ? 14 : 16} gap={0} />}
       </span>
       <span
         style={{

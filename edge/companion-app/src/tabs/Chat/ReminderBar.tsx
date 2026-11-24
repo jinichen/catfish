@@ -22,6 +22,21 @@
  *                                            [好，交给小鲶] [改一改] [不用] ✕
  */
 import { useEffect, useRef, useState } from "react";
+import type { Icon } from "@phosphor-icons/react";
+import {
+  Alarm,
+  ChatCircle,
+  Check,
+  CheckCircle,
+  ClipboardText,
+  EnvelopeSimple,
+  HandWaving,
+  Repeat,
+  Sun,
+  Warning,
+  X,
+} from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import { extendOptions, snoozeOptions, type Reminder } from "../../lib/reminders";
 import { ROUTINE_DECLINE_MS } from "../../lib/routines";
@@ -34,22 +49,25 @@ import { useUIStore } from "../../store/ui";
 import { useAgentStore } from "../../store/agent";
 import CronResultDialog from "./CronResultDialog";
 
-const ICONS: Record<Reminder["kind"], string> = {
-  deadline: "⏰",
-  briefing: "☀️",
-  email: "📮",
-  silence: "💬",
-  focus: "💬",
-  ctask: "📋",
-  cron: "✅",
-  routine: "🔁",
-  ask: "🙋",
+const ICONS: Record<Reminder["kind"], Icon> = {
+  deadline: Alarm,
+  briefing: Sun,
+  email: EnvelopeSimple,
+  silence: ChatCircle,
+  focus: ChatCircle,
+  ctask: ClipboardText,
+  cron: CheckCircle,
+  routine: Repeat,
+  ask: HandWaving,
 };
 
-function iconFor(r: Reminder): string {
-  if (r.kind === "cron" && r.cron?.status === "error") return "⚠️";
-  if (r.kind === "cron" && r.cron?.prep) return "📋";
-  return ICONS[r.kind];
+/** 11/24 unslop: 原 emoji → Phosphor 线性图标; 没做成的托管任务用错误色 (跟这条的 --reminder-accent 一致) */
+function ReminderIcon({ r }: { r: Reminder }) {
+  if (r.kind === "cron" && r.cron?.status === "error") {
+    return <Ico as={Warning} gap={0} style={{ color: "var(--status-err)" }} />;
+  }
+  if (r.kind === "cron" && r.cron?.prep) return <Ico as={ClipboardText} gap={0} />;
+  return <Ico as={ICONS[r.kind]} gap={0} />;
 }
 
 /** 「下次 11/16 8:00」—— 建好托管任务后那句话用 */
@@ -268,7 +286,7 @@ export default function ReminderBar() {
       <div className="reminder-bar-slot">
         <section className="reminder-bar reminder-bar--done" data-kind={current.kind} aria-label="提醒" role="status">
           <p className="reminder-bar__text">
-            <span className="reminder-bar__icon" aria-hidden="true">✓</span>
+            <span className="reminder-bar__icon" aria-hidden="true"><Ico as={Check} gap={0} /></span>
             <span className="reminder-bar__main">{done.text ?? "已标完成"}</span>
             {!done.text && <span className="reminder-bar__meta"> · {current.task?.title}</span>}
           </p>
@@ -293,10 +311,10 @@ export default function ReminderBar() {
           title="关掉 (今天不再提醒这条)"
           disabled={busy}
         >
-          ✕
+          <X size={14} weight="regular" aria-hidden="true" style={{ display: "block", margin: "0 auto" }} />
         </button>
         <p className="reminder-bar__text" title={fullText}>
-          <span className="reminder-bar__icon" aria-hidden="true">{iconFor(current)}</span>
+          <span className="reminder-bar__icon" aria-hidden="true"><ReminderIcon r={current} /></span>
           <span className="reminder-bar__main">{current.text}</span>
           {current.meta && <span className="reminder-bar__meta"> · {current.meta}</span>}
           {done?.phase === "error" && (

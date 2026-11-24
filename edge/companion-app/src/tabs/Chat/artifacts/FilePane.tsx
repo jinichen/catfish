@@ -7,7 +7,8 @@ import { ArrowClockwise, ArrowSquareOut, FolderOpen } from "@phosphor-icons/reac
 import { useArtifactStore } from "../../../store/artifacts";
 import { artifactStat, type ArtifactInfo } from "../../../lib/tauri_artifacts";
 import { artifactLabel } from "../../../lib/artifactKinds";
-import { basename, fileEmoji } from "../../../lib/path_detect";
+import { basename } from "../../../lib/path_detect";
+import { FileKindIcon } from "../../../components/icons";
 import { formatBytes } from "../../../lib/format";
 import { fileManagerName } from "../../../lib/platformLabels";
 import { openFile, revealInFinder } from "../../../lib/tauri";
@@ -70,7 +71,7 @@ export default function FilePane({ paths }: { paths: string[] }) {
         {paths.length > 0 && (
           <ul className="artifact-filelist">
             {paths.map((p) => (
-              <li key={p}><button type="button" onClick={() => openArtifact(p)} title={p}>{fileEmoji(p)} {basename(p)}</button></li>
+              <li key={p}><button type="button" onClick={() => openArtifact(p)} title={p}><FileKindIcon name={p} />{basename(p)}</button></li>
             ))}
           </ul>
         )}
@@ -95,7 +96,7 @@ export default function FilePane({ paths }: { paths: string[] }) {
     <>
       <div className="artifact-panel__toolbar">
         <div className="artifact-panel__title">
-          <span aria-hidden>{fileEmoji(path)}</span>
+          <FileKindIcon name={path} gap={0} />
           {list.length > 1 ? (
             <select value={path} onChange={(e) => openArtifact(e.target.value)} aria-label={`这段对话的成果，共 ${list.length} 个`} title={path}>
               {list.map((p) => <option key={p} value={p}>{basename(p)}</option>)}

@@ -23,7 +23,10 @@
 // "仅添加访问权限...必须 Cmd+Q 重启" 文案 + email.rs "Mail.app 没开/没权限"
 // 文案直接推到 UI, 不在前端瞎写指引.
 
+import type { Icon } from "@phosphor-icons/react";
+import { ArrowClockwise, CalendarBlank, CheckCircle, CheckSquare, EnvelopeSimple, XCircle } from "@phosphor-icons/react";
 import type { SourceStatus } from "../diagnosis_types";
+import { Ico } from "../../../components/icons";
 import { emailFailureHint } from "../../../lib/emailPlatformHints";
 
 export interface DataDiagnosisCardProps {
@@ -71,7 +74,7 @@ export function DataDiagnosisCard({ statuses, onRetry, title = "今天没有素�
       </div>
 
       <SourceRow
-        icon="📧"
+        icon={EnvelopeSimple}
         name="邮件"
         status={statuses.emails}
         zeroHint="系统邮件客户端当前没有未读邮件 (可能你都看完了). 收新邮件后点刷新."
@@ -88,14 +91,14 @@ export function DataDiagnosisCard({ statuses, onRetry, title = "今天没有素�
       />
 
       <SourceRow
-        icon="📅"
+        icon={CalendarBlank}
         name="本周日程"
         status={statuses.events}
-        zeroHint="本周确实没日程? 也可能是权限档错: 系统设置 → 隐私 → 日历 → Catfish Companion → 改 '完全日历访问权限' (常见踩坑). 改完 Cmd+Q 重启 Companion!"
+        zeroHint="本周确实没日程? 也可能是权限档错: 系统设置 → 隐私 → 日历 → Catfish Companion → 改 '完全日历访问权限' (常见踩坑). 改完 Cmd+Q 重启 Companion."
         failHints={[
           {
             keywords: ["仅添加", "完全访问", "完全日历"],
-            fix: "日历权限给的是'仅添加访问'档, 读取被静默拒. 系统设置 → 隐私与安全性 → 日历 → Catfish Companion → 点'选项...' → 改'完全日历访问权限'. ⚠ 改完必须 Cmd+Q 完全退出 Companion 再重开 (TCC 权限按进程启动时快照, 改完不重启用旧快照).",
+            fix: "日历权限给的是'仅添加访问'档, 读取被静默拒. 系统设置 → 隐私与安全性 → 日历 → Catfish Companion → 点'选项...' → 改'完全日历访问权限'. 改完必须 Cmd+Q 完全退出 Companion 再重开 (TCC 权限按进程启动时快照, 改完不重启用旧快照).",
           },
           {
             keywords: ["自动化", "-1743"],
@@ -109,7 +112,7 @@ export function DataDiagnosisCard({ statuses, onRetry, title = "今天没有素�
       />
 
       <SourceRow
-        icon="☑️"
+        icon={CheckSquare}
         name="当前待办"
         status={statuses.todos}
         zeroHint={
@@ -143,7 +146,7 @@ export function DataDiagnosisCard({ statuses, onRetry, title = "今天没有素�
             cursor: "pointer",
           }}
         >
-          ⟳ 刷新
+          <Ico as={ArrowClockwise} />刷新
         </button>
       </div>
     </div>
@@ -153,7 +156,7 @@ export function DataDiagnosisCard({ statuses, onRetry, title = "今天没有素�
 // ─── SourceRow 子组件 ───────────────────────────────────────────
 
 interface SourceRowProps {
-  icon: string;
+  icon: Icon;
   name: string;
   status: SourceStatus;
   /** count=0 但 ok=true 时的指引 (e.g. "今天没事件, 也可能权限档错") */
@@ -174,17 +177,19 @@ function SourceRow({ icon, name, status, zeroHint, failHints }: SourceRowProps) 
       }}
     >
       <div style={{ marginBottom: 6, color: "var(--catfish-text)" }}>
-        <span style={{ marginRight: 6 }}>{icon}</span>
+        <Ico as={icon} gap={6} />
         <strong>{name}</strong>
         <span
           style={{
             marginLeft: 8,
             fontSize: 12,
-            color: status.ok ? "#16a34a" : "#dc2626",
+            color: status.ok ? "var(--status-ok)" : "var(--status-err)",
             fontWeight: 500,
           }}
         >
-          {status.ok ? `✓ OK · ${status.count} 条` : "✗ 失败"}
+          {status.ok
+            ? <><Ico as={CheckCircle} />{`OK · ${status.count} 条`}</>
+            : <><Ico as={XCircle} />失败</>}
         </span>
       </div>
 

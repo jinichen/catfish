@@ -10,6 +10,8 @@
  *   · 颜色取鲶鱼主题变量, 深浅色切换时重画
  */
 import { useEffect, useRef, useState } from "react";
+import { ChartBar } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 import { z } from "zod"; // 运行时被 vite.config.ts 的别名指到 zod/v3, 跟 @a2ui/* 同一套
 import { createComponentImplementation } from "@a2ui/react";
 import { DynamicNumberSchema, DynamicValueSchema } from "@a2ui/web_core/v1_0";
@@ -103,7 +105,7 @@ export function ChartView({ spec, height }: { spec: unknown; height?: number }) 
   return (
     <div data-a2ui="VegaChart" style={{ width: "100%", minWidth: 0 }}>
       <div ref={box} style={{ width: "100%", minHeight: error ? 0 : h }} />
-      {error && <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>📊 {error}</div>}
+      {error && <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}><Ico as={ChartBar} />{error}</div>}
     </div>
   );
 }

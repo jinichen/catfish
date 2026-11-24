@@ -13,6 +13,8 @@ import { z } from "zod"; // 运行时被 vite.config.ts 的别名指到 zod/v3, 
 import { createComponentImplementation } from "@a2ui/react";
 import { DynamicBooleanSchema, DynamicStringListSchema, DynamicStringSchema } from "@a2ui/web_core/v1_0";
 
+import { CalendarBlank, EnvelopeSimple, MapPin, Users } from "@phosphor-icons/react";
+import { FileKindIcon, Ico } from "../../components/icons";
 import { openFile } from "../../lib/tauri_app";
 import { useUIStore } from "../../store/ui";
 import { VegaChart } from "./VegaChart";   // 11/16 数据图表 (上游官方扩展 vegachart)
@@ -85,8 +87,8 @@ const staticStr = (v: unknown): string => (typeof v === "string" ? v : "");
 
 const EmailCard = createComponentImplementation(EmailCardApi, ({ props }) => (
   <div style={box} data-a2ui="EmailCard">
-    <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-      <span aria-hidden>✉️</span>
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <Ico as={EnvelopeSimple} gap={0} />
       <strong style={{ ...ellipsis, flex: 1 }}>{str(props.subject) || "(无主题)"}</strong>
       {props.date ? <span style={muted}>{str(props.date)}</span> : null}
     </div>
@@ -102,13 +104,13 @@ const EventCard = createComponentImplementation(EventCardApi, ({ props }) => {
   const people = Array.isArray(props.attendees) ? props.attendees.map(str).filter(Boolean) : [];
   return (
     <div style={box} data-a2ui="EventCard">
-      <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-        <span aria-hidden>📅</span>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <Ico as={CalendarBlank} gap={0} />
         <strong style={{ ...ellipsis, flex: 1 }}>{str(props.title)}</strong>
       </div>
       <div style={muted}>{str(props.start)}{props.end ? ` – ${str(props.end)}` : ""}</div>
-      {props.location ? <div style={muted}>📍 {str(props.location)}</div> : null}
-      {people.length ? <div style={muted}>👥 {people.join("、")}</div> : null}
+      {props.location ? <div style={muted}><Ico as={MapPin} size={14} />{str(props.location)}</div> : null}
+      {people.length ? <div style={muted}><Ico as={Users} size={14} />{people.join("、")}</div> : null}
     </div>
   );
 });
@@ -130,7 +132,7 @@ const FileCard = createComponentImplementation(FileCardApi, ({ props }) => {
   const name = str(props.name) || path.split(/[\\/]/).filter(Boolean).pop() || path;
   return (
     <div style={{ ...box, flexDirection: "row", alignItems: "center", gap: 8 }} data-a2ui="FileCard" title={path}>
-      <span aria-hidden>📄</span>
+      <FileKindIcon name={name} gap={0} />
       <span style={{ ...ellipsis, flex: 1 }}>{name}</span>
       {ok ? (
         <button type="button" style={{ ...linkBtn, marginTop: 0 }} onClick={() => { void openFile(path).catch(() => {}); }}>

@@ -1,7 +1,8 @@
 /* 鲶鱼品牌设计 token —— 只在这里定义，全应用引用 var(--xxx)。
  * 五一 sprint 5/3 BL-D11: 配色升级到正式 brand kit (深青 + 暖橙).
  * 8/7 UI REFRESH: token 体系扩容 —— 保留全部旧 token 名 (全 app 1200+ 处内联引用),
- *   数值整体调优 + 新增 渐变 / 分层阴影 / 动效 / 焦点环 token (refresh.css 消费).
+ *   数值整体调优 + 新增 分层阴影 / 动效 / 焦点环 token (refresh.css 消费).
+ * 11/24 unslop: 去掉 渐变 / 品牌光晕 token —— 颜色只留给内容, 外壳用实色 + 发丝线.
  *   设计原则: 墨青做骨架, 暖橙只做点睛 (≤10%), 光影代替线框, 层次代替分割线.
  */
 
@@ -60,6 +61,14 @@
   --space-6: 24px;
   --space-8: 32px;
 
+  /* —— 字号 (11/24 unslop): 全应用只用这 6 档。原来散着 15 种 (8–44px), --text-xs/sm/md 被引用却从没定义过 —— 落空就继承父级字号 —— */
+  --text-xs: 11px;   /* 时间 / 计数 / 次要说明 */
+  --text-sm: 12px;   /* 列表副行 / 标签 / 小按钮 */
+  --text-base: 13px; /* 正文默认 */
+  --text-md: 14px;   /* 卡片标题 / 对话正文 */
+  --text-lg: 16px;   /* 区块标题 */
+  --text-xl: 20px;   /* 页面标题 / 空状态大字 */
+
   /* —— 字体 —— */
   --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC",
     "Microsoft YaHei", sans-serif;
@@ -76,15 +85,6 @@
   --shadow-sm: 0 1px 2px rgba(15, 34, 40, 0.05), 0 1px 1px rgba(15, 34, 40, 0.03);
   --shadow-md: 0 2px 6px rgba(15, 34, 40, 0.05), 0 10px 28px rgba(15, 34, 40, 0.07);
   --shadow-lg: 0 4px 12px rgba(15, 34, 40, 0.07), 0 20px 48px rgba(15, 34, 40, 0.12);
-  /* 主色投影 — 激活项 / 主按钮的"品牌光晕" */
-  --shadow-brand: 0 4px 14px rgba(14, 97, 105, 0.28);
-
-  /* —— 渐变 (refresh.css / 主按钮 / rail 激活态) ——
-   * 8/8 评审修正: 起点压深到 #12808D — 白字 14px 在渐变最亮端也 ≥ 4.5:1 (AA).
-   * 用户气泡 / 主按钮 / rail 激活 pill 都是白字, 起点太亮就是可读性硬伤. */
-  --gradient-brand: linear-gradient(135deg, #12808D 0%, #0A4F57 100%);
-  --gradient-cta: linear-gradient(135deg, #F78A50 0%, #EC6528 100%);
-  --gradient-rail: linear-gradient(180deg, var(--catfish-rail) 0%, var(--catfish-rail-deep) 100%);
 
   /* —— 焦点环 (键盘可达性 + 输入态) —— */
   --focus-ring: 0 0 0 3px rgba(22, 141, 153, 0.22);
@@ -135,11 +135,6 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28), 0 1px 1px rgba(0, 0, 0, 0.18);
     --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.32), 0 12px 32px rgba(0, 0, 0, 0.36);
     --shadow-lg: 0 4px 14px rgba(0, 0, 0, 0.38), 0 24px 56px rgba(0, 0, 0, 0.46);
-    --shadow-brand: 0 4px 16px rgba(34, 164, 176, 0.38);
-
-    /* 8/8 评审修正: 暗底同理压深起点, 白字 AA */
-    --gradient-brand: linear-gradient(135deg, #17818C 0%, #0C525B 100%);
-    --gradient-cta: linear-gradient(135deg, #F89866 0%, #E9622A 100%);
 
     --focus-ring: 0 0 0 3px rgba(65, 190, 201, 0.30);
   }

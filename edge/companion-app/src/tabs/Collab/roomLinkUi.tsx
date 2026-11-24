@@ -76,6 +76,9 @@ export function Btn({
       style={{
         padding: "5px 12px",
         fontSize: 12,
+        // 11/24: 卡片标题行挤的时候按钮被压成一字一行 (「发起填表」竖成 4 行) —— 按钮不换行、不被压缩
+        whiteSpace: "nowrap",
+        flex: "none",
         borderRadius: "var(--radius-sm)",
         cursor: disabled ? "default" : "pointer",
         opacity: disabled ? 0.6 : 1,

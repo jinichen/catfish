@@ -77,8 +77,8 @@ export default function EduPopover({ isStreaming }: Props) {
         data-active={teachingOn || undefined}
         title={
           teachingOn
-            ? "📚 教学入口 · 🎓 教学模式 ON"
-            : "📚 教学入口 — 让鲶鱼学新流程 (🎓 教学模式 / 登录密码)"
+            ? "教学入口 · 教学模式已开"
+            : "教学入口 — 让鲶鱼学新流程 (教学模式 / 登录密码)"
         }
       >
         <BookOpenText size={18} aria-hidden="true" />

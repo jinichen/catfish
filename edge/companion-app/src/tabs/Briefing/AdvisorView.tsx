@@ -10,6 +10,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ChartBar, Plant, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import {
   advisorCacheGet,
@@ -360,7 +362,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           ) {
             setResult(stale.result);
             setStaleNotice(
-              `⚠️ 模型 ${model} 响应慢 (>${Math.round(CLIENT_TIMEOUT_MS / 60000)} 分钟), ` +
+              `模型 ${model} 响应慢 (>${Math.round(CLIENT_TIMEOUT_MS / 60000)} 分钟), ` +
                 `显示上次结果. 后台仍在算, 完成会自动更新.`,
             );
             setPhase("stale_fallback");
@@ -388,7 +390,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           ) {
             setResult(stale.result);
             setStaleNotice(
-              `⚠️ 模型 ${model} 本次没有形成可靠业务结论，显示上次有效结果。`,
+              `模型 ${model} 本次没有形成可靠业务结论，显示上次有效结果。`,
             );
             setPhase("stale_fallback");
           } else {
@@ -576,6 +578,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
             marginBottom: 10,
           }}
         >
+          <Ico as={Warning} />
           {staleNotice}
         </div>
       )}
@@ -674,7 +677,7 @@ function ConfidenceHint({ profile }: { profile: Profile }) {
   const bg = isLow ? "var(--catfish-hint-amber-bg)" : "var(--catfish-hint-blue-bg)";
   const border = isLow ? "var(--catfish-hint-amber-border)" : "var(--catfish-hint-blue-border)";
   const color = isLow ? "var(--catfish-hint-amber-text)" : "var(--catfish-hint-blue-text)";
-  const icon = isLow ? "🪴" : "📊";
+  const icon = isLow ? Plant : ChartBar;
   const title = isLow ? "刚认识你" : "画像中";
   const body = isLow
     ? "默认按通用版 (中层) 渲染. 多用几天 catfish (写邮件 / 跟我聊几次) 会自动校准更准."
@@ -694,7 +697,7 @@ function ConfidenceHint({ profile }: { profile: Profile }) {
       }}
     >
       <strong style={{ marginRight: 6 }}>
-        {icon} {title}
+        <Ico as={icon} />{title}
       </strong>
       {body}
     </div>
@@ -711,7 +714,6 @@ function Placeholder({ text, error = false }: { text: string; error?: boolean })
         padding: "20px 18px",
         color: error ? "#dc2626" : "var(--catfish-text-muted)",
         fontSize: 13,
-        fontStyle: error ? "normal" : "italic",
         textAlign: "center",
         background: "var(--catfish-bg)",
         borderRadius: "var(--radius-sm)",

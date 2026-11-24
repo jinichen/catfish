@@ -142,7 +142,7 @@ export default function InlineCredentialPrompt({ req }: { req: CredentialRequest
       <div style={wrapStyle}>
         <div style={hintStyle}>
           {req.site} 的密码本机已经存过了 —— 这一步应该已经处理完。
-          要改密码去 📚 → 登录密码。
+          要改密码去 教学入口 → 登录密码。
         </div>
       </div>
     );
@@ -230,8 +230,8 @@ export default function InlineCredentialPrompt({ req }: { req: CredentialRequest
 
       {error && <div style={errStyle}>{error}</div>}
       <div style={{ ...hintStyle, fontSize: 11 }}>
-        密码只写入本机系统凭据库，不进聊天、配置文件或终端。以后改密码在 📚 →
-        保存登录密码 里改，不用重新教一遍。
+        密码只写入本机系统凭据库，不进聊天、配置文件或终端。以后改密码在 教学入口 →
+        登录密码 里改，不用重新教一遍。
       </div>
     </div>
   );

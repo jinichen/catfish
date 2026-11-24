@@ -23,7 +23,7 @@
   color: var(--catfish-text);
 }
 .toolsteps__caret {
-  font-size: 9px;
+  font-size: 11px;
   transition: transform var(--transition-fast, 0.15s);
 }
 .toolsteps--open .toolsteps__caret {

@@ -13,7 +13,7 @@
 
 // 员工实际拿得出去的文件类型. 加新格式时三处注意:
 //   1. 这里
-//   2. emoji map (FILE_EMOJI)
+//   2. (11/24: 文件图标挪到 components/icons.tsx FileKindIcon)
 //   3. is_blocked_path Rust 端 (file.rs)
 const SUPPORTED_EXT = [
   // Office
@@ -147,38 +147,3 @@ export function extname(path: string): string {
   return m ? m[1].toLowerCase() : "";
 }
 
-/** 不同文件类型的 emoji —— 视觉区分 office / 数据 / 图片 */
-const FILE_EMOJI: Record<string, string> = {
-  docx: "📄",
-  doc: "📄",
-  pdf: "📕",
-  pptx: "📊",
-  ppt: "📊",
-  xlsx: "📈",
-  xls: "📈",
-  csv: "📈",
-  tsv: "📈",
-  json: "🧾",
-  yaml: "🧾",
-  yml: "🧾",
-  txt: "📝",
-  md: "📝",
-  log: "📝",
-  png: "🖼",
-  jpg: "🖼",
-  jpeg: "🖼",
-  gif: "🖼",
-  svg: "🖼",
-  webp: "🖼",
-  zip: "🗜",
-  tar: "🗜",
-  gz: "🗜",
-  html: "🌐",
-  htm: "🌐",
-  xlsm: "📈",
-  markdown: "📝",
-};
-
-export function fileEmoji(path: string): string {
-  return FILE_EMOJI[extname(path)] || "📁";
-}

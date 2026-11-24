@@ -16,6 +16,8 @@
  */
 
 import { useState } from "react";
+import { PencilSimple, ThumbsDown, ThumbsUp } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { useChatStore } from "../../store/chat";
 
@@ -66,17 +68,16 @@ export default function SkillFeedbackButtons({
   if (status === "saved") {
     const label =
       savedKind === "thumb_up"
-        ? `🛠 ${skillPath} 👍 已记`
+        ? `skill ${skillPath} 已记: 有用`
         : savedKind === "thumb_down"
-        ? `🛠 ${skillPath} 👎 已记: ${comment || "无评论"}`
-        : `🛠 ${skillPath} ✏️ 已记: ${comment || "无评论"}`;
+        ? `skill ${skillPath} 已记: 不行 · ${comment || "无评论"}`
+        : `skill ${skillPath} 已记: 想改 · ${comment || "无评论"}`;
     return (
       <div
         style={{
           marginTop: 4,
           fontSize: 11,
           color: "var(--catfish-text-muted)",
-          fontStyle: "italic",
         }}
       >
         {label}
@@ -174,21 +175,21 @@ export default function SkillFeedbackButtons({
     >
       <span
         style={{
-          fontSize: 10,
+          fontSize: 11,
           color: "var(--catfish-text-muted)",
           marginRight: 4,
         }}
       >
-        🛠 skill <code style={{ fontSize: 10 }}>{skillPath}</code>:
+        skill <code style={{ fontSize: 11 }}>{skillPath}</code>:
       </span>
       <SBtn title="这个 skill 用得好" onClick={() => void submit("thumb_up")}>
-        👍
+        <ThumbsUp size={14} weight="regular" aria-label="有用" />
       </SBtn>
       <SBtn title="skill 用得不行 (可写为啥)" onClick={() => setStatus("writing-down")}>
-        👎
+        <ThumbsDown size={14} weight="regular" aria-label="不行" />
       </SBtn>
       <SBtn title="想要不一样的 skill 输出" onClick={() => setStatus("writing-edit")}>
-        ✏️ 改
+        <Ico as={PencilSimple} size={14} />改
       </SBtn>
       {error && (
         <span style={{ fontSize: 11, color: "var(--status-err)", marginLeft: 6 }}>
@@ -215,6 +216,8 @@ function SBtn({
       onClick={onClick}
       style={{
         padding: "1px 6px",
+        display: "inline-flex",
+        alignItems: "center",
         fontSize: 11,
         border: "1px solid transparent",
         borderRadius: 4,

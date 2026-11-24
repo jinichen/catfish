@@ -1,7 +1,8 @@
 /** 单条消息渲染 —— user / assistant / 错误状态 */
 
 import { useMemo, useState } from "react";
-import { ArrowClockwise, FastForward, Paperclip, PencilSimple } from "@phosphor-icons/react";
+import { ArrowClockwise, FastForward, Gear, Paperclip, PencilSimple } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 import { internalMessage, splitUserBubbleText } from "../../lib/userBubbleText";
 import { Markdown } from "../../lib/markdown";
 import { parseSubmission, submissionLines, type CardSubmission } from "../../lib/a2uiCard";
@@ -113,7 +114,7 @@ function SystemNote({ label, raw }: { label: string; raw: string }) {
         }}
         title="这条是系统自动生成的, 不是你发的"
       >
-        ⚙ {label} · {open ? "收起" : "展开"}
+        <Ico as={Gear} size={14} />{label} · {open ? "收起" : "展开"}
       </button>
       {open && (
         <pre
@@ -245,14 +246,13 @@ function UserBubble({
         style={{
           background: isAutoContinue
             ? "var(--catfish-cyan-tint)"  // 淡色, 区别于真用户消息
-            : "var(--gradient-brand, var(--catfish-cyan))",  // 8/8 UI 二轮: 品牌渐变气泡
+            : "var(--catfish-cyan)",  // 11/24 unslop: 实色气泡 (原品牌渐变 + 青色投影)
           color: isAutoContinue
             ? "var(--catfish-cyan)"
             : "white",
           padding: "var(--space-3) var(--space-4)",
           borderRadius: "var(--radius-lg)",
           borderBottomRightRadius: "var(--radius-sm)",  // 8/8: 右下小角 — 气泡指向感
-          boxShadow: isAutoContinue ? "none" : "var(--shadow-brand, none)",
           // BL-COMPANION-EDIT (7/23 P1): editing 时 minWidth 60% 撑起 textarea ·
           // 避免气泡太窄. 非编辑态保持 maxWidth 75% 短句居右紧凑.
           maxWidth: "75%",
@@ -273,7 +273,7 @@ function UserBubble({
         }}
         title={
           isAutoContinue
-            ? `⏭ 自动接力 ${msg._autoContinue!.round}/${msg._autoContinue!.max} (任务做到一半被叫停, Companion 帮你发 "继续")`
+            ? `自动接力 ${msg._autoContinue!.round}/${msg._autoContinue!.max} (任务做到一半被叫停, Companion 帮你发 "继续")`
             : undefined
         }
       >

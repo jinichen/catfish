@@ -146,9 +146,8 @@
 .hermes-bootstrap__title {
   min-width: 0;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.35;
-  letter-spacing: -0.005em;
 }
 
 .hermes-bootstrap__phase {
@@ -158,7 +157,7 @@
   background: rgba(107, 119, 117, 0.09);
   background: color-mix(in srgb, var(--catfish-text-muted) 9%, transparent);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 550;
   line-height: 1.4;
 }
@@ -233,7 +232,7 @@
   background: color-mix(in srgb, var(--catfish-text) 5%, transparent);
   border-radius: 6px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.4;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -422,7 +421,6 @@
   margin-bottom: 4px;
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: -0.005em;
   color: var(--catfish-text);
 }
 .dashboard-skills__sub {
@@ -447,7 +445,6 @@
 .dashboard-skills__hint {
   font-size: 12px;
   color: var(--catfish-text-muted);
-  font-style: italic;
   padding: 8px 0;
 }
 
@@ -458,13 +455,7 @@
   margin-bottom: var(--space-3);
   padding-bottom: var(--space-3);
   /* 用 subtle 渐变替 1px border (跟 Wiki history 同 pattern) */
-  background: linear-gradient(
-    to right,
-    transparent 0%,
-    rgba(14, 95, 102, 0.08) 20%,
-    rgba(14, 95, 102, 0.08) 80%,
-    transparent 100%
-  ) bottom / 100% 1px no-repeat;
+  border-bottom: 1px solid var(--catfish-border);
 }
 .dashboard-skills__stat-label {
   font-size: 11px;
@@ -483,8 +474,6 @@
   font-size: 11px;
   color: var(--catfish-text-muted);
   margin-bottom: var(--space-2);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   font-weight: 600;
 }
 
@@ -499,10 +488,8 @@
   background: rgba(107, 119, 117, 0.06);  /* 更冷 muted 跟 wiki-kind-badge--query 同色系 */
 }
 .dashboard-skills__subgroup-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--catfish-text-muted);
   margin-bottom: 8px;
   display: inline-flex;
@@ -514,7 +501,7 @@
 }
 .dashboard-skills__lock {
   display: inline-block;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--catfish-text-muted);
   transform: rotate(45deg);
 }
@@ -590,7 +577,7 @@
   display: inline-block;
   width: 10px;
   color: var(--catfish-text-muted);
-  font-size: 9px;
+  font-size: 11px;
   transition: transform 200ms ease;
 }
 .dashboard-skills__ns-header--open .dashboard-skills__ns-caret {
@@ -747,8 +734,6 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--catfish-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   margin: 10px 0 4px;
 }
 .install-dialog__input {
@@ -772,7 +757,6 @@
   color: var(--status-err);
   font-size: 11px;
   margin-top: 4px;
-  font-style: italic;
 }
 .install-dialog__actions {
   display: flex;
@@ -812,8 +796,6 @@
   font-size: 11px;
   color: var(--catfish-text-muted);
   cursor: pointer;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   font-weight: 600;
   padding: 4px 0;
 }
@@ -959,7 +941,7 @@ body {
   flex-direction: column;
   padding: 18px 10px 14px;
   color: var(--catfish-rail-text);
-  background: linear-gradient(180deg, var(--catfish-rail) 0%, var(--catfish-rail-deep) 100%);
+  background: var(--catfish-rail);
   border-right: 1px solid rgba(5, 18, 24, 0.34);
   box-shadow: inset -1px 0 rgba(255, 255, 255, 0.035);
   user-select: none;
@@ -1092,7 +1074,7 @@ body {
     justify-content: center;
     gap: 4px;
     padding: 7px 4px;
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .app-rail__identity {
@@ -1119,8 +1101,7 @@ button {
   padding: 22px;
   border: 1px solid color-mix(in srgb, var(--catfish-border) 76%, var(--catfish-cyan) 24%);
   border-radius: 16px;
-  background:
-    linear-gradient(145deg, color-mix(in srgb, var(--catfish-bg-elevated) 96%, var(--catfish-cyan) 4%), var(--catfish-bg-elevated));
+  background: var(--catfish-bg-elevated);
   box-shadow: var(--shadow-sm);
 }
 
@@ -1164,8 +1145,7 @@ button {
   height: 46px;
   border-radius: 14px;
   color: white;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--catfish-cyan) 75%, #ffffff 25%), var(--catfish-cyan));
-  box-shadow: 0 9px 24px color-mix(in srgb, var(--catfish-cyan) 28%, transparent);
+  background: var(--catfish-cyan);
 }
 
 .codex-backend__mark svg {
@@ -1177,15 +1157,13 @@ button {
 .codex-backend__eyebrow {
   margin-bottom: 2px;
   color: var(--catfish-cyan);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 750;
-  letter-spacing: 0.16em;
 }
 
 .codex-backend h3 {
   margin: 0;
   font-size: 17px;
-  letter-spacing: -0.01em;
 }
 
 .codex-backend__identity p {
@@ -1247,7 +1225,7 @@ button {
 }
 
 .codex-backend__check strong {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -1287,7 +1265,7 @@ button {
 
 .codex-backend__details > div:first-child { padding-left: 0; }
 .codex-backend__details > div:last-child { border-right: 0; }
-.codex-backend__details span { color: var(--catfish-text-muted); font-size: 10px; }
+.codex-backend__details span { color: var(--catfish-text-muted); font-size: 11px; }
 .codex-backend__details strong {
   overflow: hidden;
   color: var(--catfish-text);
@@ -1329,7 +1307,7 @@ button {
 }
 
 .codex-backend__message strong { color: var(--catfish-text); font-size: 11px; font-weight: 600; }
-.codex-backend__message small { max-width: 560px; font-size: 10px; line-height: 1.45; }
+.codex-backend__message small { max-width: 560px; font-size: 11px; line-height: 1.45; }
 .codex-backend__actions { flex: 0 0 auto; gap: 7px; }
 
 .codex-backend__button {
@@ -1338,7 +1316,7 @@ button {
   border: 1px solid transparent;
   border-radius: 8px;
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
   transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, opacity 120ms ease;
 }
 
@@ -1515,7 +1493,6 @@ button {
   gap: 8px;
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.005em;
   color: var(--catfish-text);
 }
 
@@ -1585,7 +1562,6 @@ button {
   padding: 6px 14px;
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.005em;
   cursor: pointer;
   transition:
     background-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -1727,7 +1703,7 @@ button {
 
 .toolcall__caret {
   color: var(--catfish-text-muted);
-  font-size: 10px;
+  font-size: 11px;
   transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
   display: inline-block;
 }
@@ -1739,7 +1715,6 @@ button {
   font-weight: 600;
   font-size: 13px;
   color: var(--catfish-text);
-  letter-spacing: -0.005em;
 }
 
 .toolcall__args-preview {
@@ -1754,7 +1729,6 @@ button {
 
 .toolcall__running-label {
   font-size: 11px;
-  font-style: italic;
   color: var(--catfish-orange);
   font-family: var(--font-sans);
 }
@@ -1779,10 +1753,9 @@ button {
 .toolcall__section { margin-bottom: var(--space-2); }
 .toolcall__section:last-child { margin-bottom: 0; }
 
-/* Section label: lowercase italic 替代 UPPERCASE letter-spacing (README 头号反例) */
+/* Section label: 小字弱色, 不大写不斜体不拉字距 (11/24 unslop) */
 .toolcall__section-label {
   font-size: 11px;
-  font-style: italic;
   font-weight: 500;
   color: var(--catfish-text-muted);
   font-family: var(--font-sans);
@@ -1820,7 +1793,6 @@ button {
   color: var(--catfish-text-muted);
   margin-right: 4px;
   font-size: 11px;
-  font-style: italic;
 }
 .toolcall__approval-btn {
   background: transparent;
@@ -2631,7 +2603,6 @@ button {
   color: var(--catfish-text-muted);
   cursor: pointer;
   transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
-  letter-spacing: -0.005em;
 }
 .wiki-segmented__btn:hover:not([data-active="true"]) {
   color: var(--catfish-cyan);
@@ -2664,7 +2635,6 @@ button {
   font-size: 11px;
   font-weight: 600;
   color: var(--catfish-text-muted);
-  letter-spacing: -0.005em;
   transition: background-color 180ms ease;
 }
 .wiki-group__header:hover {
@@ -2672,7 +2642,7 @@ button {
 }
 .wiki-group__caret {
   display: inline-block;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--catfish-text-muted);
   transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -2691,7 +2661,6 @@ button {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: -0.01em;
   color: var(--catfish-text);
 }
 .wiki-tree { padding: 6px 8px 16px; color: var(--catfish-text); font-size: 14px; }
@@ -2987,7 +2956,6 @@ button {
 .wiki-preview__relation-label { color: var(--catfish-text-muted); font-size: 12px; }
 .wiki-preview__wikilink--dangling {
   color: var(--status-err);
-  font-style: italic;
   border-color: rgba(217, 83, 79, 0.35);
   border-style: dashed;
 }
@@ -3008,7 +2976,6 @@ button {
   font-size: 13px;
   color: var(--catfish-text-muted);
   margin-right: 8px;
-  font-style: italic;
 }
 
 .wiki-preview__textarea {
@@ -3053,8 +3020,6 @@ button {
   border-radius: 3px;
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   vertical-align: 2px;
 }
 .wiki-kind-badge--entity {
@@ -3115,13 +3080,7 @@ button {
   margin-top: 28px;
   padding-top: 18px;
   /* subtle 顶部分隔 — 用 bg gradient 替 1px dashed (cliche AI border) */
-  background: linear-gradient(
-    to right,
-    transparent 0%,
-    rgba(14, 95, 102, 0.08) 20%,
-    rgba(14, 95, 102, 0.08) 80%,
-    transparent 100%
-  ) top / 100% 1px no-repeat;
+  border-top: 1px solid var(--catfish-border);
 }
 .wiki-preview__history-toggle {
   background: transparent;
@@ -3146,7 +3105,7 @@ button {
 }
 .wiki-preview__history-caret {
   display: inline-block;
-  font-size: 10px;
+  font-size: 11px;
   transition: transform 200ms ease;
   color: var(--catfish-text-muted);
 }
@@ -3156,7 +3115,6 @@ button {
 .wiki-preview__history-hint {
   font-size: 12px;
   opacity: 0.65;
-  font-style: italic;
 }
 .wiki-preview__history-body {
   margin-top: 10px;
@@ -3241,7 +3199,7 @@ button {
   font-size: 12px;
   white-space: nowrap;
 }
-.wiki-graph__count b { color: var(--catfish-cyan); font-size: 13px; font-weight: 700; }
+.wiki-graph__count b { color: var(--catfish-cyan); font-size: 13px; font-weight: 600; }
 .wiki-graph__count em { font-style: normal; }
 .wiki-graph__header > div > span:not(.wiki-graph__count) {
   min-width: 0;
@@ -3291,9 +3249,7 @@ button {
   flex: 1;
   position: relative;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--catfish-cyan) 7%, transparent), transparent 44%),
-    var(--catfish-bg);
+  background: var(--catfish-bg);
 }
 .wiki-graph__stage::after {
   content: "";
@@ -3463,7 +3419,6 @@ button {
   padding: 24px;
   text-align: center;
   color: var(--catfish-text-muted);
-  font-style: italic;
   font-size: 13px;
   background: var(--catfish-bg);
   border: 1px dashed var(--catfish-border);
@@ -3480,11 +3435,9 @@ button {
   height: 100%;
 }
 .briefing-2col__sidebar-label {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--catfish-text-muted);
   padding: 2px 8px 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 .briefing-2col__group-header {
   font-size: 11px;
@@ -3567,7 +3520,6 @@ button {
   color: var(--catfish-text-muted);
   font-size: 13px;
   padding: 40px 20px;
-  font-style: italic;
 }
 .briefing-2col__detail-header {
   border-left: 3px solid var(--catfish-border);
@@ -3589,7 +3541,7 @@ button {
   line-height: 1.4;
 }
 .briefing-2col__badge-warn {
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 6px;
   border-radius: 3px;
   color: #a16207;
@@ -3597,7 +3549,7 @@ button {
   border: 1px solid #a1620740;
 }
 .briefing-2col__badge-done {
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 6px;
   border-radius: 3px;
   color: #16a34a;
@@ -3610,8 +3562,6 @@ button {
 .briefing-2col__section-title {
   font-size: 11px;
   color: var(--catfish-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   margin-bottom: 6px;
   font-weight: 600;
 }
@@ -3657,7 +3607,7 @@ button {
   color: var(--catfish-text);
 }
 .briefing-2col__option-ailean {
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 6px;
   border-radius: 8px;
   background: var(--catfish-bg);
@@ -3744,16 +3694,44 @@ button {
   gap: 8px;
 }
 .briefing-2col__chat-empty {
-  padding: 24px 12px;
-  text-align: center;
+  padding: 8px 0 0;
   color: var(--catfish-text-muted);
   font-size: 13px;
   line-height: 1.6;
 }
+.briefing-2col__chat-empty-title {
+  color: var(--catfish-text);
+  font-size: 14px;
+  font-weight: 500;
+}
+.briefing-2col__starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.briefing-2col__starter {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md);
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.briefing-2col__starter:hover {
+  border-color: var(--catfish-border-strong);
+  background: var(--catfish-cyan-tint);
+}
+.briefing-2col__starter:active {
+  transform: scale(0.98);
+}
 .briefing-2col__chat-empty-hint {
-  font-size: 11px;
-  margin-top: 6px;
-  opacity: 0.75;
+  max-width: 520px;
+  margin-top: 12px;
+  font-size: 12px;
 }
 .briefing-2col__msg {
   font-size: 13px;
@@ -3916,7 +3894,7 @@ button {
   margin-right: 6px;
   padding: 0 6px;
   border-radius: 8px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 16px;
   vertical-align: 1px;
   color: var(--catfish-cyan);
@@ -4165,7 +4143,7 @@ button {
   border-radius: 8px;
   font: inherit;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
@@ -4376,7 +4354,7 @@ button {
   border: 0;
   border-radius: 6px;
   font: inherit;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 560;
   line-height: 1;
   cursor: pointer;
@@ -4436,7 +4414,7 @@ button {
 }
 
 .chat-session-row[data-active="true"] .chat-session-row__title-line {
-  font-weight: 640;
+  font-weight: 600;
 }
 
 .chat-session-row__meta {
@@ -4496,8 +4474,8 @@ button {
   color: #fff;
   background: var(--status-err);
   border-color: var(--status-err);
-  font-size: 10px;
-  font-weight: 650;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .chat-session-group__main:has(.chat-session-row__delete[data-confirming="true"])
@@ -4722,7 +4700,7 @@ button {
   border: 1px solid color-mix(in srgb, var(--status-err) 28%, var(--catfish-border));
   border-radius: 7px;
   box-shadow: var(--shadow-md);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 /* 「这次切换要新建会话才生效」——不是错误, 是必须让员工知道的一条事实,
@@ -4739,7 +4717,7 @@ button {
   border: 1px solid var(--status-warn, var(--catfish-border));
   border-radius: 7px;
   box-shadow: var(--shadow-md);
-  font-size: 9px;
+  font-size: 11px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -4752,7 +4730,7 @@ button {
 .chat-model-picker__hint-action {
   align-self: flex-end;
   padding: 3px 9px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--catfish-bg-elevated);
   /* fallback 用 #0E5F66 —— 跟这份样式表里其它 --catfish-accent 的兜底值一致
@@ -4783,7 +4761,7 @@ button {
 .chat-task-picker__label,
 .chat-task-picker__status {
   color: var(--catfish-text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .chat-task-picker__select {
@@ -4877,7 +4855,7 @@ button {
 
 .chat-task-picker__error {
   color: var(--status-err);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .chat-workspace__panel {
@@ -4918,13 +4896,13 @@ button {
 .chat-sidebar__title {
   color: var(--catfish-text);
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.25;
 }
 
 .chat-sidebar__count {
   color: var(--catfish-text-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1.3;
 }
@@ -4978,7 +4956,7 @@ button {
   background: var(--catfish-cyan);
   border: 2px solid #f8fafb;
   border-radius: 999px;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 720;
   line-height: 1;
 }
@@ -5103,7 +5081,7 @@ button {
   background: transparent;
   border: 1px solid currentColor;
   border-radius: 6px;
-  font-size: 10px;
+  font-size: 11px;
   cursor: pointer;
 }
 
@@ -5121,7 +5099,7 @@ button {
   margin-top: 3px;
   color: var(--catfish-text);
   font-size: 12px;
-  font-weight: 640;
+  font-weight: 600;
 }
 
 .chat-sidebar__footer {
@@ -5138,7 +5116,7 @@ button {
 
 .chat-sidebar__footer-status {
   min-width: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -5164,9 +5142,8 @@ button {
 .chat-session-section__label {
   margin: 0 7px 6px;
   color: #869499;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 720;
-  letter-spacing: 0.08em;
 }
 
 .chat-session-section__rows {
@@ -5192,7 +5169,7 @@ button {
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid #dbe4e6;
   border-radius: 999px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 680;
 }
 
@@ -5257,7 +5234,7 @@ button {
   gap: 6px;
   margin: 5px 0 0 14px;
   color: #819095;
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
@@ -5413,7 +5390,7 @@ button {
   margin-bottom: 7px;
   color: var(--catfish-text);
   font-size: 20px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 
@@ -5706,7 +5683,7 @@ button {
 }
 .wiki-tree__caret {
   flex: 0 0 12px;
-  font-size: 8px;
+  font-size: 11px;
   color: var(--catfish-text-muted);
   transition: transform 150ms ease;
 }

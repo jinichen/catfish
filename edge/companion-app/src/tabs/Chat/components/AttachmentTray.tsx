@@ -6,6 +6,7 @@
  */
 
 import { useState } from "react";
+import { Paperclip } from "@phosphor-icons/react";
 
 import type { Attachment } from "../../../types/chat";
 
@@ -97,7 +98,7 @@ export default function AttachmentTray({
           flexWrap: "wrap",
         }}
       >
-        <span style={{ fontSize: 14 }}>📎</span>
+        <Paperclip size={14} weight="regular" aria-hidden="true" style={{ flex: "none" }} />
         <span style={{ color: "var(--catfish-text)" }}>{attachments.length} 个文件</span>
         <span style={{ color: "var(--catfish-text-muted)", flex: 1, minWidth: 0 }}>
           {kindBreakdown(attachments)} · 共 {totalSizeLabel(attachments)}

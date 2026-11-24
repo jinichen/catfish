@@ -11,12 +11,18 @@
  *  后面那些文件在界面上根本打不开。现在点它展开全部, 再点收起。
  */
 import { useState } from "react";
+import type { Icon } from "@phosphor-icons/react";
+import { Image, Microphone, Paperclip } from "@phosphor-icons/react";
+import { Ico, fileKindIcon } from "../../components/icons";
 
 import { openFile, revealInFinder } from "../../lib/tauri";
 import { fileManagerName } from "../../lib/platformLabels";
 import { useChatStore, type SessionAttachment } from "../../store/chat";
 
-const ICON_BY_KIND: Record<string, string> = { image: "🖼", file: "📄", audio: "🎙" };
+// 11/24 unslop: 原 🖼 📄 🎙 📎 → Phosphor; 普通文件按扩展名出图标
+const ICON_BY_KIND: Record<string, Icon> = { image: Image, audio: Microphone };
+const iconFor = (a: SessionAttachment): Icon =>
+  ICON_BY_KIND[a.kind] ?? (a.kind === "file" ? fileKindIcon(a.name) : Paperclip);
 const MAX_CHIPS = 12;
 
 export default function SessionAttachmentsBar() {
@@ -62,7 +68,7 @@ export default function SessionAttachmentsBar() {
         color: "var(--catfish-text-muted)",
       }}
     >
-      <span style={{ marginRight: 4 }}>📎 本会话历史附件:</span>
+      <span style={{ marginRight: 4 }}><Ico as={Paperclip} size={14} />本会话历史附件:</span>
       {unique.map((a) => (
         <button
           type="button"
@@ -91,7 +97,7 @@ export default function SessionAttachmentsBar() {
             opacity: a.keptPath ? 1 : 0.55,
           }}
         >
-          <span>{ICON_BY_KIND[a.kind] ?? "📎"}</span>
+          <Ico as={iconFor(a)} size={14} gap={0} />
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</span>
         </button>
       ))}
@@ -106,7 +112,6 @@ export default function SessionAttachmentsBar() {
             border: "none",
             background: "transparent",
             font: "inherit",
-            fontStyle: "italic",
             color: "var(--catfish-cyan)",
             cursor: "pointer",
           }}

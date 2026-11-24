@@ -4,7 +4,7 @@
  * 定位: globals.css 是历史全量样式 (4200+ 行, 不动它防回归);
  *       本文件是一层"品牌化打磨": 光影 / 渐变 / 动效 / 焦点环 / 滚动条,
  *       同名单类选择器写在后面即可覆盖, 不抬 specificity 不用 !important.
- * 消费 tokens.css 8/7 新增 token: --gradient-* / --shadow-* / --focus-ring /
+ * 消费 tokens.css token: --shadow-* / --focus-ring /
  *       --transition-* / --radius-xl / --catfish-border-strong.
  * ───────────────────────────────────────────────────────────────────── */
 
@@ -60,36 +60,17 @@ progress {
   accent-color: var(--catfish-cyan);
 }
 
-/* 工作区主底: 右上角一抹极淡的品牌青环境光, 打破大面纯色的"平".
- * 8/8 评审修正: 只有仪表盘用 .app-main, 其余 4 个 tab 的主容器是
- * .app-workspace__main — 老选择器在那 4 页整个打空. 两个都写. */
+/* 工作区主底: 纯色 (11/24 unslop: 去掉右上角的青色光晕, 颜色只留给内容) */
 .app-main,
 .app-workspace__main {
-  background:
-    radial-gradient(
-      1100px 700px at 88% -8%,
-      color-mix(in srgb, var(--catfish-cyan-bright) 7%, transparent),
-      transparent 62%
-    ),
-    var(--catfish-bg);
+  background: var(--catfish-bg);
 }
 
-/* ═══ 2. 左侧主导航 rail: 更沉的底 + 发光的激活态 ═══ */
+/* ═══ 2. 左侧主导航 rail: 深色实底, 激活项 = 实色块 + 一道发丝高光 (11/24 unslop: 去渐变 / 光晕 / 悬停位移) ═══ */
 
 .app-rail {
-  background: var(--gradient-rail);
+  background: var(--catfish-rail);
   border-right: 1px solid rgba(4, 16, 22, 0.42);
-  box-shadow:
-    inset -1px 0 rgba(255, 255, 255, 0.04),
-    4px 0 24px rgba(5, 20, 26, 0.18);
-}
-
-.app-rail__brand img {
-  transition: transform var(--transition-med), filter var(--transition-med);
-}
-.app-rail__brand:hover img {
-  transform: scale(1.07) rotate(-4deg);
-  filter: drop-shadow(0 8px 16px rgba(3, 21, 25, 0.35));
 }
 
 .app-rail__item {
@@ -97,22 +78,17 @@ progress {
   transition:
     color var(--transition-fast),
     background var(--transition-fast),
-    border-color var(--transition-fast),
-    box-shadow var(--transition-fast),
-    transform var(--transition-fast);
+    border-color var(--transition-fast);
 }
 .app-rail__item:hover:not([data-active="true"]) {
   color: var(--catfish-rail-text);
   background: var(--catfish-rail-hover);
-  transform: translateX(2px);
 }
 .app-rail__item[data-active="true"] {
   color: #fff;
-  background: var(--gradient-brand);
+  background: var(--catfish-rail-active);
   border-color: rgba(255, 255, 255, 0.10);
-  box-shadow:
-    var(--shadow-brand),
-    inset 0 1px rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.10);
 }
 /* P50 (9/10): 协同 tab 的待点头红点。位置相对 .app-rail__item (它已是定位容器则不动) */
 .app-rail__item {
@@ -128,8 +104,9 @@ progress {
   border-radius: 8px;
   background: var(--status-error, #dc2626);
   color: #fff;
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   line-height: 16px;
   text-align: center;
 }
@@ -183,13 +160,13 @@ progress {
   z-index: 5;
 }
 
-/* 会话分组标签 (今天 / 本周): 小型大写 + 宽字距 — 科技感的克制版 */
+/* 会话分组标签 (今天 / 本周): 安静的小字, 不大写不拉字距 */
 .chat-session-section__label {
-  font-size: 10px;
-  font-weight: 640;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--catfish-cyan-bright) 45%, var(--catfish-text-muted));
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--catfish-text-muted);
 }
 
 /* 数字一律等宽对齐 (token 数 / 条数 / 时间) — 工程仪表感 */
@@ -200,39 +177,28 @@ progress {
   font-variant-numeric: tabular-nums;
 }
 
-/* ═══ 3. 会话侧栏: 渐变主按钮 + 卡片化选中态 ═══ */
+/* ═══ 3. 会话侧栏: 实色主按钮 + 卡片化选中态 ═══ */
 
 .chat-sidebar__new-button {
-  background: var(--gradient-brand);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--catfish-cyan);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-brand);
+  box-shadow: none;
   transition:
-    transform var(--transition-fast),
-    box-shadow var(--transition-fast),
-    filter var(--transition-fast);
+    background var(--transition-fast),
+    transform var(--transition-fast);
 }
 .chat-sidebar__new-button:hover {
-  transform: translateY(-1px);
-  filter: brightness(1.06);
-  box-shadow:
-    0 8px 22px rgba(14, 97, 105, 0.34),
-    inset 0 1px rgba(255, 255, 255, 0.18);
+  background: var(--catfish-cyan-dim);
 }
 .chat-sidebar__new-button:active {
-  transform: translateY(0);
-  filter: brightness(0.97);
+  transform: scale(0.97);
 }
 
 .chat-session-row {
   transition:
     background var(--transition-fast),
-    border-color var(--transition-fast),
-    box-shadow var(--transition-fast),
-    transform var(--transition-fast);
-}
-.chat-session-row:hover {
-  transform: translateX(1px);
+    border-color var(--transition-fast);
 }
 .chat-session-row[data-active="true"] {
   background: color-mix(in srgb, var(--catfish-cyan) 9%, var(--catfish-bg-elevated));
@@ -283,7 +249,7 @@ progress {
   color: #fff;
   background: var(--status-err);
   border-color: transparent;
-  box-shadow: 0 3px 10px rgba(185, 28, 28, 0.28);
+  box-shadow: none;
   transform: none;
   opacity: 1;
 }
@@ -320,35 +286,30 @@ progress {
 }
 
 .chat-composer__primary-button {
-  background: var(--gradient-brand);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--catfish-cyan);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-brand);
+  box-shadow: none;
   transition:
+    background var(--transition-fast),
     transform var(--transition-fast),
-    box-shadow var(--transition-fast),
-    filter var(--transition-fast),
     opacity var(--transition-fast);
 }
 .chat-composer__primary-button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  filter: brightness(1.06);
+  background: var(--catfish-cyan-dim);
 }
 .chat-composer__primary-button:active:not(:disabled) {
-  transform: translateY(0);
-  filter: brightness(0.97);
+  transform: scale(0.97);
 }
 
 .chat-composer__tool-button {
   border-radius: var(--radius-sm);
   transition:
     color var(--transition-fast),
-    background var(--transition-fast),
-    transform var(--transition-fast);
+    background var(--transition-fast);
 }
 .chat-composer__tool-button:hover {
   background: color-mix(in srgb, var(--catfish-cyan) 10%, transparent);
-  transform: translateY(-1px);
 }
 
 /* 消息进场: 轻微上浮淡入 (仅动 transform/opacity, 不打扰布局) */
@@ -368,12 +329,9 @@ progress {
   animation: catfish-msg-in 240ms var(--transition-med, ease-out) both;
 }
 
-/* 空状态标题: 品牌渐变文字, 招呼语更有精神 */
+/* 空状态标题: 实色正文 (11/24 unslop: 去渐变字) */
 .chat-empty-state__title {
-  background: var(--gradient-brand);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--catfish-text);
 }
 
 /* ═══ 5. Markdown 输出: 代码块 / 行内码 / 表格 / 引用 ═══ */
@@ -406,7 +364,7 @@ progress {
 }
 .markdown-body th {
   background: color-mix(in srgb, var(--catfish-cyan) 7%, var(--catfish-bg-elevated));
-  font-weight: 640;
+  font-weight: 600;
 }
 .markdown-body th,
 .markdown-body td {
@@ -453,18 +411,6 @@ progress {
 
 /* ═══ 6. 早安 (briefing) 双栏: 任务行卡片化 + 口径选项 ═══ */
 
-/* 8/8 评审修正: 详情面板中部空腔 — 空态提示收进一张居中小卡,
- * 让"这里等你说话"读作有意设计而不是没做完 */
-.briefing-2col__chat-empty {
-  max-width: 420px;
-  margin: 0 auto;
-  padding: var(--space-6) var(--space-6);
-  background: color-mix(in srgb, var(--catfish-cyan) 5%, var(--catfish-bg-elevated));
-  border: 1px solid var(--catfish-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-}
-
 .briefing-2col__task-row {
   border: 1px solid transparent;
   border-left: 2px solid transparent;
@@ -473,12 +419,10 @@ progress {
   transition:
     background var(--transition-fast),
     border-color var(--transition-fast),
-    box-shadow var(--transition-fast),
-    transform var(--transition-fast);
+    box-shadow var(--transition-fast);
 }
 .briefing-2col__task-row:hover {
   background: color-mix(in srgb, var(--catfish-cyan) 6%, transparent);
-  transform: translateX(2px);
 }
 .briefing-2col__task-row--selected {
   background: var(--catfish-bg-elevated);
@@ -492,13 +436,10 @@ progress {
   transition:
     border-color var(--transition-fast),
     background var(--transition-fast),
-    box-shadow var(--transition-fast),
-    transform var(--transition-fast);
+    box-shadow var(--transition-fast);
 }
 .briefing-2col__option:hover {
   border-color: color-mix(in srgb, var(--catfish-cyan-bright) 45%, var(--catfish-border));
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
 }
 .briefing-2col__option--selected {
   border-color: var(--catfish-cyan-bright);
@@ -532,9 +473,9 @@ progress {
     box-shadow var(--transition-fast);
 }
 .wiki-segmented__btn[data-active="true"] {
-  background: var(--gradient-brand);
+  background: var(--catfish-cyan);
   color: #fff;
-  box-shadow: var(--shadow-brand);
+  box-shadow: none;
 }
 
 /* ═══ 7. 横幅 / 弹窗 / toast ═══ */
@@ -566,7 +507,6 @@ progress {
     animation: none;
   }
   .app-rail__item,
-  .app-rail__brand img,
   .chat-session-row,
   .chat-sidebar__new-button,
   .chat-composer__primary-button,
@@ -575,11 +515,8 @@ progress {
   .briefing-2col__option {
     transition: none;
   }
-  .app-rail__item:hover:not([data-active="true"]),
-  .chat-session-row:hover,
-  .briefing-2col__task-row:hover,
-  .chat-sidebar__new-button:hover,
-  .chat-composer__primary-button:hover:not(:disabled) {
+  .chat-sidebar__new-button:active,
+  .chat-composer__primary-button:active:not(:disabled) {
     transform: none;
   }
 }

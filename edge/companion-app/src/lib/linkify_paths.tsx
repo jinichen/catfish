@@ -27,7 +27,8 @@
 
 import React from "react";
 import { openFile } from "./tauri";
-import { basename, fileEmoji } from "./path_detect";
+import { basename } from "./path_detect";
+import { FileKindIcon } from "../components/icons";
 import { artifactKind } from "./artifactKinds";
 import { useArtifactStore } from "../store/artifacts";
 
@@ -223,7 +224,7 @@ function FilePathLink({ path }: { path: string }) {
         wordBreak: "break-all",
       }}
     >
-      <span aria-hidden style={{ marginRight: 2 }}>{fileEmoji(path)}</span>
+      <FileKindIcon name={path} size={14} gap={2} />
       {basename(path)}
     </span>
   );

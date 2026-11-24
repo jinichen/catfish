@@ -12,6 +12,8 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { lazy, Suspense, useContext, useEffect, useState } from "react";
+import { ClipboardText } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import { CARD_UPDATED_EVENT, cardIdFromToolCall, cardPlacement, cardTitle, cardUpdateFromToolCall } from "../../lib/a2uiCard";
 import { A2uiCardContext } from "../../lib/a2uiCardContext";
@@ -68,7 +70,7 @@ export const openCardInPanel = (cardId: string) => {
 function CardStub({ cardId, title, submitted }: { cardId: string; title: string; submitted: boolean }) {
   return (
     <div className="a2ui-card-stub" data-card-stub={cardId} style={{ ...note, display: "flex", alignItems: "center", gap: 8, color: "var(--catfish-text)", maxWidth: 640 }}>
-      <span aria-hidden="true">📋</span>
+      <Ico as={ClipboardText} gap={0} />
       <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {title}
         <span style={{ color: "var(--catfish-text-muted)" }}> · {submitted ? "已交给小鲶 ✓" : "待你确认"}</span>

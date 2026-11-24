@@ -35,7 +35,7 @@ export default function HandledSilently({ items }: HandledSilentlyProps) {
           listStyle: "none",
         }}
       >
-        📊 catfish 处理记录: {summary} (点开看明细)
+        catfish 处理记录: {summary} (点开看明细)
       </summary>
       <div style={{ marginTop: 6, paddingLeft: 16 }}>
         {items.map((it, i) => (
@@ -43,7 +43,7 @@ export default function HandledSilently({ items }: HandledSilentlyProps) {
             <strong>{typeLabel(it.type)}</strong> · {it.count} 件 · {it.category}
           </div>
         ))}
-        <div style={{ marginTop: 6, fontSize: 10, opacity: 0.7 }}>
+        <div style={{ marginTop: 6, fontSize: 11, opacity: 0.7 }}>
           注: catfish 仅做分类标志, 不替员工真发任何东西. 邮件归档 = 内部 label,
           会议接受 = tentative. 想撤回去对应 tab 操作.
         </div>

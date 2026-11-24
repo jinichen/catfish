@@ -1,5 +1,7 @@
 /** Shows the current preparation phase and measured elapsed time, not an ETA. */
 import { useEffect, useState } from "react";
+import { CalendarBlank, ChartBar, CheckSquare, EnvelopeSimple, FolderOpen, ListChecks } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 
 
 interface Counts {
@@ -50,17 +52,17 @@ export default function LoadingProgress({
   // phase meta
   const meta = {
     profile_loading: {
-      emoji: "📊",
+      Icon: ChartBar,
       title: "分析你的工作模式",
       subtitle: "看历史邮件 / 关键人 / 项目, 知道你常处理什么",
     },
     data_loading: {
-      emoji: "📂",
+      Icon: FolderOpen,
       title: "拉今日数据",
       subtitle: "邮件 / 日历 / TODO / 工作上下文",
     },
     llm_running: {
-      emoji: "🧠",
+      Icon: ListChecks,
       title: "核对来源 · 整理任务",
       subtitle: "先识别任务与优先级；草稿和扫描进入具体任务后按需执行",
     },
@@ -77,14 +79,14 @@ export default function LoadingProgress({
         textAlign: "center",
       }}
     >
-      {/* 头: emoji + 标题 */}
+      {/* 头: 图标 + 标题 */}
       <div
         style={{
-          fontSize: 32,
           marginBottom: 8,
+          color: "var(--catfish-text-muted)",
         }}
       >
-        {meta.emoji}
+        <meta.Icon size={32} weight="regular" aria-hidden />
       </div>
       <div
         style={{
@@ -121,9 +123,9 @@ export default function LoadingProgress({
             marginBottom: 16,
           }}
         >
-          <span>📧 {counts.emails} 邮件</span>
-          <span>📅 {counts.events} 条本周日程</span>
-          <span>☑️ {counts.todos} 条当前待办</span>
+          <span><Ico as={EnvelopeSimple} />{counts.emails} 邮件</span>
+          <span><Ico as={CalendarBlank} />{counts.events} 条本周日程</span>
+          <span><Ico as={CheckSquare} />{counts.todos} 条当前待办</span>
         </div>
       )}
 

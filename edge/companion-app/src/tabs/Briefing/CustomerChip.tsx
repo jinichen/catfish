@@ -14,7 +14,7 @@ export default function CustomerChip({ radar, onAdd }: { radar: CustomerRadarSta
   if (radar.error || radar.cards === null || radar.cards.length > 0) return null;
   return (
     <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, color: "var(--catfish-text-muted)" }}>
-      <span>🤝 {radar.customers > 0 ? `${radar.customers} 个客户, 今天没有要跟的 ✓` : "还没有客户"}</span>
+      <span>{radar.customers > 0 ? `${radar.customers} 个客户, 今天没有要跟的 ✓` : "还没有客户"}</span>
       <button type="button" onClick={onAdd} style={{ ...btn, color: "var(--catfish-cyan)" }}>+ 加客户</button>
     </span>
   );

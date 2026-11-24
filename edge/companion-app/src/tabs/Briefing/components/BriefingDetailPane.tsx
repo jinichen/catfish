@@ -25,6 +25,8 @@
  * 真要再切, 该先给 useTaskChat 那条链补测试, 那是另一件事的排期。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Alarm, Check, Paperclip, Warning, X } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 import { confirmDialog } from "../../../components/dialogs";
 
 import {
@@ -66,6 +68,13 @@ import { ApprovalBanner } from "../../../components/ApprovalBanner";
 
 // P3.3.19 C Phase 3 (6/11): buildTaskSystemPrompt 抽到 lib/taskSystemPrompt.ts.
 // DetailPane + ChatTab task picker 共享同一份. 改 system prompt 必须改 lib 那份.
+
+/** 空对话时的起手式: 点了填进输入框, 不直接发 */
+const STARTERS = [
+  { label: "报个进度", text: "进度更新: " },
+  { label: "帮我起草", text: "帮我起草这条要发出去的内容: " },
+  { label: "下一步做什么", text: "这条下一步该做什么? 有什么要提前准备的?" },
+];
 
 export function DetailPane({
   task,
@@ -168,7 +177,7 @@ export function DetailPane({
           lastErr,
         );
         setAttachError(
-          "⚠️ 会话关联未建成功, 下次刷新此 task 可能找不到当前对话历史. 详细看 console.",
+          "会话关联未建成功, 下次刷新此 task 可能找不到当前对话历史. 详细看 console.",
         );
       }
       return created.id;
@@ -476,7 +485,7 @@ export function DetailPane({
             <span className="briefing-2col__detail-reason">{task.reason}</span>
           )}
           {wasSnoozedYesterday && (
-            <span className="briefing-2col__badge-warn">⏰ 昨天推过</span>
+            <span className="briefing-2col__badge-warn"><Ico as={Alarm} size={12} />昨天推过</span>
           )}
           {/* P3.5.207: effective status. statusFromChat=true 时是 chat 语义推断的
               (员工没点按钮), 加"(chat)" 后缀让员工能区分, 想撤要回 chat 里说. */}
@@ -505,14 +514,31 @@ export function DetailPane({
             <div style={{ opacity: 0.7 }}>加载历史对话…</div>
           </div>
         )}
+        {/* 11/24 unslop: 原来是悬在中间的一张灰卡 + 大片空白。改成贴着标题的起手式:
+         *  三个常用说法点一下填进输入框 (不直接发, 员工可以接着改), 下面一行小字说小鲶已经知道什么。 */}
         {!historyLoading && messages.length === 0 && (
           <div className="briefing-2col__chat-empty">
-            <div>跟 AI 直接说这条待办 — 报进度 / 起草 / 问下一步.</div>
+            <div className="briefing-2col__chat-empty-title">跟小鲶说说这条待办</div>
+            <div className="briefing-2col__starters">
+              {STARTERS.map((s) => (
+                <button
+                  key={s.label}
+                  type="button"
+                  className="briefing-2col__starter"
+                  onClick={() => {
+                    setInput(s.text);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
             <div className="briefing-2col__chat-empty-hint">
-              AI 已经知道: 标题 · 紧急度 · 历史{task.complianceFlags.length > 0 ? " · 合规提示" : ""}
-              {task.politicalFlags.length > 0 ? " · 关键关系" : ""}
-              {task.options.length > 0 ? ` · ${task.options.length} 个早晨口径` : ""}.
-              对话历史会保留, 关 Companion / 切 task 再回来都还在.
+              小鲶已经知道这条的标题、紧急度和历史{task.complianceFlags.length > 0 ? "、合规提示" : ""}
+              {task.politicalFlags.length > 0 ? "、关键关系" : ""}
+              {task.options.length > 0 ? `、${task.options.length} 个早晨口径` : ""}。
+              聊过的内容会留着, 切走再回来还在
             </div>
           </div>
         )}
@@ -520,7 +546,7 @@ export function DetailPane({
           <ChatMsg key={m.id} msg={m} />
         ))}
         {chatError && (
-          <div className="briefing-2col__chat-err">⚠️ {chatError}</div>
+          <div className="briefing-2col__chat-err"><Ico as={Warning} />{chatError}</div>
         )}
         <TaskChatProgress
           status={taskChatStatus}
@@ -561,7 +587,7 @@ export function DetailPane({
         </div>
       )}
       {attachError && (
-        <div className="briefing-2col__chat-attach-error">{attachError}</div>
+        <div className="briefing-2col__chat-attach-error"><Ico as={Warning} />{attachError}</div>
       )}
 
       <div
@@ -579,11 +605,12 @@ export function DetailPane({
         <button
           type="button"
           className="briefing-2col__chat-attach-btn"
+          aria-label="加附件"
           onClick={() => fileInputRef.current?.click()}
           disabled={isStreaming || attachments.length >= MAX_ATTACHMENTS}
           title={`加附件 (图片 / PDF / Excel / Word / CSV / TXT / MD / 音频, 最多 ${MAX_ATTACHMENTS} 个; 也可粘贴 / 拖入)`}
         >
-          📎
+          <Paperclip size={16} weight="regular" aria-hidden />
         </button>
         <input
           ref={fileInputRef}
@@ -652,28 +679,28 @@ export function DetailPane({
               className="briefing-2col__action-btn briefing-2col__action-btn--done"
               onClick={() => void handleStatusChange("done")}
             >
-              ✓ 标记完成
+              <Ico as={Check} />标记完成
             </button>
             <button
               type="button"
               className="briefing-2col__action-btn briefing-2col__action-btn--snooze"
               onClick={() => void handleStatusChange("snoozed")}
             >
-              ⏰ 推迟到明天
+              <Ico as={Alarm} />推迟到明天
             </button>
             <button
               type="button"
               className="briefing-2col__action-btn briefing-2col__action-btn--ignore"
               onClick={() => void handleStatusChange("ignored")}
             >
-              ✗ 不做
+              <Ico as={X} />不做
             </button>
           </>
         )}
       </div>
 
       {backendError && (
-        <div className="briefing-2col__backend-err">⚠️ {backendError}</div>
+        <div className="briefing-2col__backend-err"><Ico as={Warning} />{backendError}</div>
       )}
     </div>
   );

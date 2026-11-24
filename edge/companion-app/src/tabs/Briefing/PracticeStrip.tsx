@@ -25,7 +25,7 @@ export default function PracticeStrip() {
     <div role="status" style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", margin: "0 0 8px",
       borderRadius: "var(--radius-md)", background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border, #e3e3dc)" }}>
       <span style={{ flex: 1 }}>
-        📚 今天有 <b>{stats.dueToday}</b> 条要复习
+        今天有 <b>{stats.dueToday}</b> 条要复习
         {stats.reviewedToday > 0 && <span style={{ color: "var(--catfish-text-muted)" }}> · 今天已复习 {stats.reviewedToday} 道</span>}
       </span>
       <button type="button" className="primary" onClick={openLearnReview}>

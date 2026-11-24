@@ -7,7 +7,9 @@
  * 又跑起来)。这时队列不再自动走, 给一个"现在发"让员工自己决定。
  */
 
+import { Hourglass, Pause, Paperclip } from "@phosphor-icons/react";
 import { useChatStore } from "../../../store/chat";
+import { Ico } from "../../../components/icons";
 import type { Attachment } from "../../../types/chat";
 
 
@@ -43,9 +45,10 @@ function QueuedMessagesStrip({ isStreaming, onSend }: Props) {
         marginBottom: queue.length > 0 ? 4 : 0,
       }}>
         <span style={{ fontWeight: 600 }}>
+          <Ico as={isStreaming ? Hourglass : Pause} size={14} />
           {isStreaming
-            ? `⏳ 排队 ${queue.length} 条 (当前任务跑完自动发)`
-            : `⏸ 排队 ${queue.length} 条 (任务已停止, 不会自动发)`}
+            ? `排队 ${queue.length} 条 (当前任务跑完自动发)`
+            : `排队 ${queue.length} 条 (任务已停止, 不会自动发)`}
         </span>
         {!isStreaming && (
           <button
@@ -110,7 +113,7 @@ function QueuedMessagesStrip({ isStreaming, onSend }: Props) {
               {q.text || "(只有附件)"}
             </span>
             {q.attachments.length > 0 && (
-              <span style={{ opacity: 0.7 }}>📎{q.attachments.length}</span>
+              <span style={{ opacity: 0.7, display: "inline-flex", alignItems: "center" }}><Ico as={Paperclip} size={12} gap={2} />{q.attachments.length}</span>
             )}
             <button
               onClick={() => removeQueued(q.id)}

@@ -51,7 +51,7 @@ function ThumbCard({
           background: "rgba(0,0,0,0.6)",
           color: "white",
           fontSize: 11,
-          fontWeight: 700,
+          fontWeight: 600,
           cursor: "pointer",
           lineHeight: 1,
           padding: 0,
