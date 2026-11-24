@@ -13,7 +13,7 @@
  *      只可能是行尾+行首被吃掉了换行).
  */
 
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
 import rehypeHighlight from "rehype-highlight";
@@ -110,6 +110,123 @@ function reformatPseudoTable(text: string): string {
  */
 export const GFM_PLUGINS: PluggableList = [[remarkGfm, { singleTilde: false }]];
 
+/** 11/24 鸿波「小鲶回复时中间内容上下跳」: 这些渲染函数原来写在 JSX 里, 每次重渲染都是新函数 =
+ *  React 眼里的新组件类型, 整段回复的每个段落 / 列表 / 代码块都被拆掉重建 (dev 探针: markdown-body 下
+ *  的 <p> 全部 -N +N)。拆掉那一下回复变矮, 聊天区的滚动位置被夹到顶上, 再被贴底逻辑拉回来 —— 就是上下跳。
+ *  放到模块级, 类型不变, 新来的字只是原地更新。 */
+const REHYPE_PLUGINS: PluggableList = [rehypeRaw, rehypeHighlight];
+const MD_COMPONENTS: Components = {
+  // 代码块外层 <pre>，只留结构属性 — 视觉 (底色/描边/圆角/内距)
+  // 交给 refresh.css 的 .markdown-body pre, 内联写死会把主题层压死
+  // (8/8 评审: 暗色下这里的 --catfish-bg 比面板还黑, 成了"黑带").
+  pre: ({ children }) => (
+    <pre
+      style={{
+        overflow: "auto",
+        fontSize: 12,
+        margin: "var(--space-2) 0",
+      }}
+    >
+      {children}
+    </pre>
+  ),
+  // inline code：跟代码块区分开，浅底色
+  code: ({ children, className, ...props }) => {
+    const isBlock = className?.startsWith("hljs") || className?.startsWith("language-");
+    if (isBlock) {
+      return (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      );
+    }
+    // 行内 code 视觉交给 refresh.css 的 .markdown-body :not(pre) > code
+    return <code>{children}</code>;
+  },
+  // 表格: 包一层横向滚动, 资质对照表那种 4-5 列表格不至于挤
+  table: ({ children }) => (
+    <div
+      style={{
+        overflowX: "auto",
+        margin: "var(--space-2) 0",
+        maxWidth: "100%",
+      }}
+    >
+      {/* borderCollapse 交给 refresh.css (separate + 圆角裁切) */}
+      <table
+        style={{
+          fontSize: 13,
+          minWidth: "100%",
+        }}
+      >
+        {children}
+      </table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th
+      style={{
+        textAlign: "left",
+        verticalAlign: "top",
+        // 多行内容 (LLM 用 <br> 换行 / 单元格里有 \n) 要保留
+        whiteSpace: "normal",
+        wordBreak: "break-word",
+      }}
+    >
+      {linkifyChildren(children, "th")}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td
+      style={{
+        verticalAlign: "top",
+        whiteSpace: "normal",
+        wordBreak: "break-word",
+      }}
+    >
+      {linkifyChildren(children, "td")}
+    </td>
+  ),
+  // BL-COMPANION-FILE-PATH-CLICKABLE (5/19): 段落 / 列表项里的
+  // 绝对文件路径 (eg "已生成 /Users/.../report.xlsx") 原位换成
+  // 可点击 <a>, 点 → Tauri openFile. 不递归进 <code>/<a>.
+  p: ({ children }) => <p>{linkifyChildren(children, "p")}</p>,
+  li: ({ children }) => <li>{linkifyChildren(children, "li")}</li>,
+  // <br> 单独 style 一下, 让表格里的换行显得自然
+  br: () => <br />,
+  // 只有真正的外部链接才外开。当前应用/localhost 链接留在当前页面，
+  // 避免把 Companion 自己重新开进 Safari，触发缺少 Tauri bridge 的白屏。
+  a: ({ children, href }) => {
+    const external = isExternalLink(href);
+    return (
+      <a
+        href={href}
+        target={external ? "_blank" : undefined}
+        rel={external ? "noopener noreferrer" : undefined}
+        onClick={(e) => {
+          if (!href) return;
+          if (!external) {
+            e.preventDefault();
+            return;
+          }
+          e.preventDefault();
+          void (async () => {
+            try {
+              const { open } = await import("@tauri-apps/plugin-shell");
+              await open(href);
+            } catch {
+              try { window.open(href, "_blank", "noopener,noreferrer"); } catch { /* ignore */ }
+            }
+          })();
+        }}
+        style={{ color: "var(--catfish-cyan-dim)", cursor: "pointer" }}
+      >
+        {children}
+      </a>
+    );
+  },
+};
+
 export function Markdown({ text }: Props) {
   const normalized = normalizeLLMTable(text);
   return (
@@ -118,118 +235,8 @@ export function Markdown({ text }: Props) {
         remarkPlugins={GFM_PLUGINS}
         // 注意 plugin 顺序: rehype-raw 先 (把 raw HTML 转成 hast 节点),
         // rehype-highlight 后 (给 code 块染色). 两个都需要.
-        rehypePlugins={[rehypeRaw, rehypeHighlight]}
-        components={{
-          // 代码块外层 <pre>，只留结构属性 — 视觉 (底色/描边/圆角/内距)
-          // 交给 refresh.css 的 .markdown-body pre, 内联写死会把主题层压死
-          // (8/8 评审: 暗色下这里的 --catfish-bg 比面板还黑, 成了"黑带").
-          pre: ({ children }) => (
-            <pre
-              style={{
-                overflow: "auto",
-                fontSize: 12,
-                margin: "var(--space-2) 0",
-              }}
-            >
-              {children}
-            </pre>
-          ),
-          // inline code：跟代码块区分开，浅底色
-          code: ({ children, className, ...props }) => {
-            const isBlock = className?.startsWith("hljs") || className?.startsWith("language-");
-            if (isBlock) {
-              return (
-                <code className={className} {...props}>
-                  {children}
-                </code>
-              );
-            }
-            // 行内 code 视觉交给 refresh.css 的 .markdown-body :not(pre) > code
-            return <code>{children}</code>;
-          },
-          // 表格: 包一层横向滚动, 资质对照表那种 4-5 列表格不至于挤
-          table: ({ children }) => (
-            <div
-              style={{
-                overflowX: "auto",
-                margin: "var(--space-2) 0",
-                maxWidth: "100%",
-              }}
-            >
-              {/* borderCollapse 交给 refresh.css (separate + 圆角裁切) */}
-              <table
-                style={{
-                  fontSize: 13,
-                  minWidth: "100%",
-                }}
-              >
-                {children}
-              </table>
-            </div>
-          ),
-          th: ({ children }) => (
-            <th
-              style={{
-                textAlign: "left",
-                verticalAlign: "top",
-                // 多行内容 (LLM 用 <br> 换行 / 单元格里有 \n) 要保留
-                whiteSpace: "normal",
-                wordBreak: "break-word",
-              }}
-            >
-              {linkifyChildren(children, "th")}
-            </th>
-          ),
-          td: ({ children }) => (
-            <td
-              style={{
-                verticalAlign: "top",
-                whiteSpace: "normal",
-                wordBreak: "break-word",
-              }}
-            >
-              {linkifyChildren(children, "td")}
-            </td>
-          ),
-          // BL-COMPANION-FILE-PATH-CLICKABLE (5/19): 段落 / 列表项里的
-          // 绝对文件路径 (eg "已生成 /Users/.../report.xlsx") 原位换成
-          // 可点击 <a>, 点 → Tauri openFile. 不递归进 <code>/<a>.
-          p: ({ children }) => <p>{linkifyChildren(children, "p")}</p>,
-          li: ({ children }) => <li>{linkifyChildren(children, "li")}</li>,
-          // <br> 单独 style 一下, 让表格里的换行显得自然
-          br: () => <br />,
-          // 只有真正的外部链接才外开。当前应用/localhost 链接留在当前页面，
-          // 避免把 Companion 自己重新开进 Safari，触发缺少 Tauri bridge 的白屏。
-          a: ({ children, href }) => {
-            const external = isExternalLink(href);
-            return (
-              <a
-                href={href}
-                target={external ? "_blank" : undefined}
-                rel={external ? "noopener noreferrer" : undefined}
-                onClick={(e) => {
-                  if (!href) return;
-                  if (!external) {
-                    e.preventDefault();
-                    return;
-                  }
-                  e.preventDefault();
-                  void (async () => {
-                    try {
-                      const { open } = await import("@tauri-apps/plugin-shell");
-                      await open(href);
-                    } catch {
-                      try { window.open(href, "_blank", "noopener,noreferrer"); } catch { /* ignore */ }
-                    }
-                  })();
-                }}
-                style={{ color: "var(--catfish-cyan-dim)", cursor: "pointer" }}
-              >
-                {children}
-              </a>
-            );
-          },
-        }}
+        rehypePlugins={REHYPE_PLUGINS}
+        components={MD_COMPONENTS}
       >
         {normalized}
       </ReactMarkdown>

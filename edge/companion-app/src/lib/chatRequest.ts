@@ -39,6 +39,7 @@ import { fetchIdentityBundle } from "./tauri";
 // 5/20 拆 805 → ~550: wire format (toWire + formatFileAttachment) 抽到 chatWire.ts
 import { toWire } from "./chatWire";
 import { FACT_EVIDENCE_RULES } from "./factEvidence";
+import { CHAT_UI_RULES } from "./chatUiRules";
 import { useAgentStore } from "../store/agent";
 import { useChatStore } from "../store/chat";
 import { useTeachingStore } from "../store/teaching";
@@ -120,7 +121,7 @@ export async function prepareChatRequest(opts: {
     model: effectiveModel,
     messages: [
       ...toWire(messages),
-      { role: "system", content: FACT_EVIDENCE_RULES },
+      { role: "system", content: `${FACT_EVIDENCE_RULES}\n\n${CHAT_UI_RULES}` },
     ],
     stream: true,
   };

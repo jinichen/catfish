@@ -90,6 +90,18 @@ const UNIX_PATH_RE = new RegExp(
   "gi",
 );
 
+/** 11/24 鸿波「为什么右边的预览没出来」: 小鲶交出 `~/.catfish/outputs/2026-11-24/ITSS 简介.docx`,
+ *  文件名里有空格, 上面那条到空格就断了, 右栏不弹、路径也点不开。
+ *  包在反引号 / 引号 / 「」里的整段允许带空格 (不跨行)。 */
+const QUOTED_PATH_RE = new RegExp(
+  "[`\"'「『]" +
+    "((?:~?/|[A-Za-z]:\\\\)[^`\"'「」『』\\n<>]*?\\.(?:" +
+    EXT_PATTERN +
+    "))" +
+    "[`\"'」』]",
+  "gi",
+);
+
 const WINDOWS_PATH_RE = new RegExp(
   "(?<![A-Za-z0-9])" +
     "([A-Za-z]:\\\\[^\\s\"'`<>|]+\\.(?:" +
@@ -129,7 +141,8 @@ export function extractFilePaths(text: string): string[] {
     }
   };
 
-  collect(UNIX_PATH_RE);
+  collect(QUOTED_PATH_RE);
+  if (result.length < 10) collect(UNIX_PATH_RE);
   if (result.length < 10) collect(WINDOWS_PATH_RE);
 
   return result;

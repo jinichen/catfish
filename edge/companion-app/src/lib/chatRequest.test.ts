@@ -75,6 +75,7 @@ vi.mock("./chatWire", () => ({ toWire: (m: unknown) => m }));
 
 import { prepareChatRequest } from "./chatRequest";
 import { FACT_EVIDENCE_RULES } from "./factEvidence";
+import { CHAT_UI_RULES } from "./chatUiRules";
 
 const BASE = {
   useHermes: false,
@@ -92,8 +93,10 @@ describe("prepareChatRequest", () => {
       hermesCfg: { enabled: true, url: "http://h", has_key: true },
     });
     expect(r.body.messages).toEqual([
-      ...messages, { role: "system", content: FACT_EVIDENCE_RULES },
+      ...messages, { role: "system", content: `${FACT_EVIDENCE_RULES}\n\n${CHAT_UI_RULES}` },
     ]);
+    // 11/24: 「打开某个文件」在对话窗口里是右边预览, 别拉起 Word
+    expect(CHAT_UI_RULES).toContain("不要用 open");
     expect(JSON.stringify(messages)).toBe(original);
   });
   beforeEach(() => {
