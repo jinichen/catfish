@@ -5906,3 +5906,13 @@ button {
 .room-msg__reply:focus-visible {
   opacity: 1;
 }
+
+/* 11/24 群聊「找群」: 焦点环画在外框上, 里面的 input 不再叠一圈 */
+.room-find:focus-within {
+  border-color: var(--catfish-cyan-bright) !important;
+  box-shadow: var(--focus-ring);
+}
+.room-find input:focus-visible {
+  border: none;
+  box-shadow: none;
+}

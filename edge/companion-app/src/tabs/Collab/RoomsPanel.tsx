@@ -26,13 +26,14 @@ import {
   failedNotice, roomAssist, roomDecline, roomDelete, roomDisband, roomGet, roomJoin, roomLeave, roomRead, roomRemove, roomSend, roomTasks, roomTransfer,
   roomUpdate,
   type AssistKind,
-  type RoomDetail, type RoomMember, type RoomMessage, type RoomSummary,
+  type RoomDetail, type RoomMember, type RoomMessage,
 } from "../../lib/tauri_colleague_rooms";
 import { muted } from "./formsUi";
 import FormComposer from "./FormComposer";
 import FormFill from "./FormFill";
 import FormProgress from "./FormProgress";
 import RoomComposer from "./RoomComposer";
+import RoomList, { ENDED_LABEL, ROOM_LIST_WIDTH } from "./RoomList";
 import RoomFormMessage from "./RoomFormMessage";
 import RoomReviseMessage from "./RoomReviseMessage";
 import ReviseMergePanel from "./ReviseMergePanel";
@@ -54,9 +55,6 @@ export const TEXT_MAX = 4000;
 
 const STATE_LABEL: Record<string, string> = {
   invited: "已邀请", joined: "已加入", declined: "没加入", left: "已退出", removed: "被移出",
-};
-const ENDED_LABEL: Record<string, string> = {
-  declined: "你没加入这个群", left: "你已退出这个群", removed: "你已被群主移出这个群", disbanded: "群主已解散这个群",
 };
 
 export function labelOf(members: RoomMember[], email: string | undefined): string {
@@ -85,10 +83,7 @@ export function waitingNotice(waiting: RoomMember[]): string {
 }
 
 /** 群列表里最后一条的预览: 任务状态 / 自动转发的文字里已经有名字了 */
-export function lastPreview(last: { name: string; text: string; kind?: string }): string {
-  const text = last.text.replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, ""); // 「🐟 小鲶: …」列表里不显示开头的 emoji
-  return last.kind === "status" || last.kind === "auto" || last.kind === "deadline" || last.kind === "form_status" || last.kind === "revise_status" ? text : `${last.name}: ${text}`;
-}
+export { lastPreview } from "./RoomList";
 
 /** 截止 / 时间写短: 「2026-11-06」→「11/6」,「2026-11-06T15:00」→「11/6 15:00」(今年以外带年份) */
 export function shortWhen(iso: string | null | undefined, now: Date = new Date()): string {
@@ -122,23 +117,6 @@ const oneLine = {
   flexShrink: 0,
 };
 
-const listButton = (on: boolean) => ({
-  textAlign: "left" as const, cursor: "pointer", font: "inherit", color: "inherit", width: "100%",
-  border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-sm, 6px)", padding: "8px 10px",
-  background: on ? "var(--catfish-bg-subtle, rgba(0,0,0,0.05))" : "transparent",
-  display: "flex", flexDirection: "column" as const, gap: 2,
-});
-
-function Badge({ n, at }: { n: number; at?: boolean }) {
-  if (!n) return null;
-  return (
-    <span style={{ fontSize: 11, lineHeight: "16px", minWidth: 16, padding: "0 4px", borderRadius: 8, textAlign: "center",
-                   background: at ? "var(--status-warn, #d97706)" : "var(--status-error, #dc2626)", color: "white" }}>
-      {at ? "@" : ""}{n > 99 ? "99+" : n}
-    </span>
-  );
-}
-
 export default function RoomsPanel() {
   const { rooms, loaded, syncError } = useColleagueRooms();
   const [open, setOpen] = useState<string | null>(null);
@@ -168,23 +146,11 @@ export default function RoomsPanel() {
     <div style={{ ...cardStyle, flex: 1, minHeight: 0, height: "auto", overflow: "hidden", display: "flex", flexDirection: "column", gap: 8 }}>
       {syncError && <span style={muted}>暂时收不到群消息: {syncError}</span>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "200px minmax(0, 1fr)", gridTemplateRows: "minmax(0, 1fr)",
+      <div style={{ display: "grid", gridTemplateColumns: `${ROOM_LIST_WIDTH}px minmax(0, 1fr)`, gridTemplateRows: "minmax(0, 1fr)",
                     gap: "var(--space-3)", flex: 1, minHeight: 0 }}>
-        {/* 左: 群列表 (自己滚) */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, minHeight: 0 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-            <strong style={{ fontSize: 13 }} title="消息只存在每个成员自己的电脑上, 中央只转交加密内容、看不到原文, 取走即清空, 不保存记录; 每一条都是你点了才发">
-              群聊
-            </strong>
-            <span style={{ display: "flex", gap: 4 }}>
-              <Btn kind="ghost" onClick={() => setCreating(true)}>＋ 建群</Btn>
-            </span>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowY: "auto", minHeight: 0, flex: 1 }}>
-            {loaded && rooms.length === 0 && <span style={muted}>还没有群。点「建群」, 拉几位同事进来。</span>}
-            {rooms.map((r) => <RoomRow key={r.room_id} r={r} on={r.room_id === open} onClick={() => { setNotice(undefined); setOpen(r.room_id); }} />)}
-          </div>
-        </div>
+        {/* 左: 群列表 (自己滚; 群多时有「找群」) */}
+        <RoomList rooms={rooms} loaded={loaded} open={open} onCreate={() => setCreating(true)}
+                  onOpen={(id) => { setNotice(undefined); setOpen(id); }} />
         {open ? <RoomView key={open} roomId={open} notice={notice} onNotice={setNotice} onKeep={() => setKeeping(true)} /> : (
           <div style={{ ...muted, alignSelf: "center", justifySelf: "center" }}>选一个群, 或者建一个新群。</div>
         )}
@@ -194,26 +160,6 @@ export default function RoomsPanel() {
       {creating && <RoomComposer onClose={() => setCreating(false)}
                                  onDone={(id, n) => { setCreating(false); setNotice(n); setOpen(id); }} />}
     </div>
-  );
-}
-
-function RoomRow({ r, on, onClick }: { r: RoomSummary; on: boolean; onClick: () => void }) {
-  const sub = r.my_state === "invited" ? "邀请你加入" : r.my_state !== "joined" ? ENDED_LABEL[r.my_state] :
-    r.last ? lastPreview(r.last) : `${r.joined} 人已加入`;
-  return (
-    <button type="button" onClick={onClick} style={listButton(on)}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "center" }}>
-        <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {r.name}
-        </span>
-        <span style={{ display: "flex", gap: 4 }}>
-          {r.my_state === "invited" && <Badge n={1} />}
-          <Badge n={r.mentioned} at />
-          <Badge n={r.unread - r.mentioned} />
-        </span>
-      </div>
-      <span style={{ ...muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub}</span>
-    </button>
   );
 }
 
