@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Paperclip } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 import { alertDialog } from "../../../components/dialogs";
 
 import { emailExportAttachment, openFile } from "../../../lib/tauri";
@@ -38,7 +40,7 @@ function CollapsibleAddresses({ addrs, previewN = 3 }: { addrs: string[]; previe
           border: "1px solid var(--catfish-border)",
           borderRadius: 3,
           padding: "0 6px",
-          fontSize: 10,
+          fontSize: 11,
           color: "var(--catfish-cyan)",
           cursor: "pointer",
         }}
@@ -77,7 +79,7 @@ function AttachmentRow({ msgId, filename, sizeBytes }: { msgId: string; filename
         gap: 8,
         width: "100%",
         minWidth: 0,
-        padding: "5px 10px",
+        padding: "4px 12px",
         border: `1px solid ${hover ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
         borderRadius: 6,
         background: hover ? "var(--catfish-cyan-tint)" : "var(--catfish-bg)",
@@ -88,7 +90,7 @@ function AttachmentRow({ msgId, filename, sizeBytes }: { msgId: string; filename
         textAlign: "left",
       }}
     >
-      <span aria-hidden="true" style={{ flex: "0 0 auto" }}>📎</span>
+      <Ico as={Paperclip} gap={0} />
       <span style={{ flex: "1 1 auto", minWidth: 0, display: "flex" }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{head}</span>
         {tail && <span style={{ flex: "0 0 auto", whiteSpace: "nowrap" }}>{tail}</span>}

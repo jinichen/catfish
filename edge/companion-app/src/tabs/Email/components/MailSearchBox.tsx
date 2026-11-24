@@ -11,18 +11,18 @@ export default function MailSearchBox({ value, onChange, shown, total }: {
         type="search"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="🔍 搜主题 / 发件人 / 账号 (更早的也搜)"
+        placeholder="搜主题 / 发件人 / 账号 (更早的也搜)"
         aria-label="搜邮件"
         style={{
-          width: "100%", padding: "4px 8px", fontSize: 12,
+          width: "100%", padding: "4px 8px", fontSize: 12, minHeight: 28,
           border: "1px solid var(--catfish-border)", borderRadius: 4,
           background: "var(--catfish-bg)", color: "var(--catfish-text)",
           fontFamily: "inherit", boxSizing: "border-box",
         }}
       />
       {value && (
-        <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginTop: 4 }}>
-          🔍 列表里筛到 {shown} / {total}
+        <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4 }}>
+          列表里筛到 {shown} / {total}
         </div>
       )}
     </>

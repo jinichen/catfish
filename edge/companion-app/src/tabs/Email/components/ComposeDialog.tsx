@@ -12,6 +12,8 @@
  * 正文框填满剩下的空间, 按钮始终在底下; 说明压成一两行; 点框外不关 (写了一半误点就丢了), 右上角 × 关。
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { Warning, X } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 
 import { emailAccountsFetch } from "../../../lib/tauri_briefing";
 import type { EmailAccountItem, PickedAttachment } from "../../../lib/tauri_cron";
@@ -65,8 +67,8 @@ export default function ComposeDialog({ title, subject, body, initialTo = "", at
               {title}
             </strong>
             <button type="button" aria-label="关闭" onClick={onClose}
-                    style={{ border: "none", background: "transparent", color: "var(--catfish-text-muted)", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>
-              ×
+                    style={{ border: "none", background: "transparent", color: "var(--catfish-text-muted)", cursor: "pointer", padding: 4, lineHeight: 0 }}>
+              <X size={16} weight="regular" aria-hidden="true" />
             </button>
           </div>
           {notes}
@@ -74,7 +76,7 @@ export default function ComposeDialog({ title, subject, body, initialTo = "", at
             <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", alignItems: "center", fontSize: 12, padding: "6px 10px",
                           borderRadius: 6, border: "1px solid var(--status-warn)" }}>
               <span style={{ color: "var(--status-warn)", fontWeight: 600 }}>
-                ⚠ 附件 {fmtMb(total)}, 超过上限 {limitMb} MB, 收件方邮箱多半收不了
+                <Ico as={Warning} />附件 {fmtMb(total)}, 超过上限 {limitMb} MB, 收件方邮箱多半收不了
               </span>
               <AttachLimitInput compact />
               {dropNote && (

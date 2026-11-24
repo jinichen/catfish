@@ -18,7 +18,7 @@ export default function OlderMailResults({ result, search, selectedId, showRecip
     <>
       <li style={{ ...noteStyle, borderTop: "1px solid var(--catfish-border)", background: "var(--catfish-bg-elevated, var(--catfish-bg))" }}>
         {searching
-          ? "🔍 正在搜更早的邮件…"
+          ? "正在搜更早的邮件…"
           : error
             ? `更早的邮件没搜成: ${error}`
             : older.length

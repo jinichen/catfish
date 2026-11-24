@@ -54,12 +54,12 @@ describe("写邮件的附件", () => {
     pick.mockResolvedValueOnce([docx]);
     renderCompose();
     await act(async () => {
-      fireEvent.click(screen.getByText("📎 添加附件"));
+      fireEvent.click(screen.getByText("添加附件"));
     });
-    expect(screen.getByText("📎 结算单-已修正.docx")).toBeTruthy();
+    expect(screen.getByText("结算单-已修正.docx")).toBeTruthy();
     expect(screen.getAllByText(/120 KB/).length).toBeGreaterThan(0);
     await act(async () => {
-      fireEvent.click(screen.getByText("💾 仅保存草稿"));
+      fireEvent.click(screen.getByText("仅保存草稿"));
     });
     expect(createDraft).toHaveBeenCalledWith(
       expect.objectContaining({ attachments: ["/Users/x/结算单-已修正.docx"], keepAttachments: [] }),
@@ -70,20 +70,20 @@ describe("写邮件的附件", () => {
     pick.mockResolvedValueOnce([docx]);
     renderCompose();
     await act(async () => {
-      fireEvent.click(screen.getByText("📎 添加附件"));
+      fireEvent.click(screen.getByText("添加附件"));
     });
     fireEvent.click(screen.getByLabelText("移除附件 结算单-已修正.docx"));
-    expect(screen.queryByText("📎 结算单-已修正.docx")).toBeNull();
+    expect(screen.queryByText("结算单-已修正.docx")).toBeNull();
   });
 
   it("合计超过上限: 当场提醒, 存草稿 / 发送按钮不可点", async () => {
     pick.mockResolvedValueOnce([{ ...docx, size: MAX_ATTACHMENTS_BYTES + 1 }]);
     renderCompose();
     await act(async () => {
-      fireEvent.click(screen.getByText("📎 添加附件"));
+      fireEvent.click(screen.getByText("添加附件"));
     });
     expect(screen.getByText(/多数邮箱会退信/)).toBeTruthy();
-    expect((screen.getByText("💾 仅保存草稿") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText("仅保存草稿") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("改草稿: 旧草稿的附件默认保留, 去掉的不再带", async () => {
@@ -94,10 +94,10 @@ describe("写邮件的附件", () => {
         { filename: "不要了.pdf", size_bytes: 1024 },
       ],
     });
-    expect(screen.getByText("📎 原来的.docx")).toBeTruthy();
+    expect(screen.getByText("原来的.docx")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("移除附件 不要了.pdf"));
     await act(async () => {
-      fireEvent.click(screen.getByText("💾 仅保存草稿"));
+      fireEvent.click(screen.getByText("仅保存草稿"));
     });
     expect(createDraft).toHaveBeenCalledWith(
       expect.objectContaining({ replaces: "imap|Drafts|1|5", keepAttachments: ["原来的.docx"], attachments: [] }),

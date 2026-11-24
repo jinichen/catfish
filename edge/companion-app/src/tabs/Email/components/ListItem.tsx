@@ -4,6 +4,9 @@
  */
 
 import { useEffect } from "react";
+import { ArrowBendUpLeft, Warning } from "@phosphor-icons/react";
+
+import { Ico } from "../../../components/icons";
 
 import { withMark } from "../../../lib/phishingMarks";
 import type { EmailDigestItem, PhishingScanResult, PoliticalScanResult } from "../../../lib/tauri";
@@ -60,20 +63,19 @@ function ListItem({
       <div
         style={{
           display: "flex",
-          alignItems: "baseline",
-          gap: 6,
-          marginBottom: 3,
+          alignItems: "center",
+          gap: 4,
+          marginBottom: 4,
         }}
       >
         {!item.is_read && (
           <span
             style={{
-              width: 6,
-              height: 6,
+              width: 8,
+              height: 8,
               borderRadius: "50%",
               background: "var(--catfish-cyan)",
               flex: "0 0 auto",
-              marginTop: 4,
             }}
             aria-label="未读"
           />
@@ -99,8 +101,9 @@ function ListItem({
             title={actionEntry.deadline ? `截止 ${actionEntry.deadline}` : "要办事"}
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(168, 85, 247, 0.15)",
               color: "rgb(126, 34, 206)",
               borderRadius: 3,
@@ -117,8 +120,9 @@ function ListItem({
             title={actionEntry.deadline ? `截止 ${actionEntry.deadline}` : "要回信"}
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(59, 130, 246, 0.15)",
               color: "rgb(29, 78, 216)",
               borderRadius: 3,
@@ -138,8 +142,9 @@ function ListItem({
           <span
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(239, 68, 68, 0.15)",
               color: "rgb(185, 28, 28)",
               borderRadius: 3,
@@ -153,8 +158,9 @@ function ListItem({
           <span
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(251, 191, 36, 0.18)",
               color: "rgb(180, 130, 20)",
               borderRadius: 3,
@@ -168,8 +174,9 @@ function ListItem({
           <span
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "transparent",
               color: "var(--catfish-text-muted)",
               opacity: 0.6,
@@ -184,24 +191,26 @@ function ListItem({
           <span
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(220,38,38,0.2)",
               color: "rgb(185,28,28)",
               borderRadius: 3,
-              fontWeight: 700,
+              fontWeight: 600,
             }}
             title={`${phishing.flags.length} 条规则触发, LLM: ${phishing.llmVerdict ?? "未跑"}`}
           >
-            ⚠ 钓鱼
+            <Ico as={Warning} size={12} gap={2} />钓鱼
           </span>
         )}
         {phishing && phishing.highestSeverity === "medium" && (
           <span
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(251,146,60,0.18)",
               color: "rgb(194,65,12)",
               borderRadius: 3,
@@ -209,7 +218,7 @@ function ListItem({
             }}
             title={`${phishing.flags.length} 条规则触发, LLM: ${phishing.llmVerdict ?? "未跑"}`}
           >
-            ⚠ 可疑
+            <Ico as={Warning} size={12} gap={2} />可疑
           </span>
         )}
         {/* P3.5.197 (7/7 鸿波军规审判): marketing badge — low=灰. 营销/推广/订阅
@@ -219,8 +228,9 @@ function ListItem({
           <span
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(107,114,128,0.15)",
               color: "rgb(75,85,99)",
               borderRadius: 3,
@@ -228,7 +238,7 @@ function ListItem({
             }}
             title={`LLM 判为营销/推广邮件${phishing.llmReason ? ` — ${phishing.llmReason}` : ""}`}
           >
-            📢 营销
+            营销
           </span>
         )}
         {/* P3.5.204 (7/9 鸿波 catch "回复过的邮件怎么没有标志"): 已回复 badge —
@@ -240,8 +250,9 @@ function ListItem({
           <span
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(42, 139, 63, 0.15)",
               color: "rgb(42, 139, 63)",
               borderRadius: 3,
@@ -251,7 +262,7 @@ function ListItem({
                内部编号 + 协议名对员工没有任何意义, 只说结论. */
             title="这封邮件你已经回过了"
           >
-            ↩ 已回复
+            <Ico as={ArrowBendUpLeft} size={12} gap={2} />已回复
           </span>
         )}
         {/* P3.3.53.2: 政治敏感 badge (仅 detail 打开过的, 引擎开 + 命中). */}
@@ -259,24 +270,26 @@ function ListItem({
           <span
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(220,38,38,0.2)",
               color: "rgb(185,28,28)",
               borderRadius: 3,
-              fontWeight: 700,
+              fontWeight: 600,
             }}
             title={`${political.flags.length} 条规则触发, 请咨询信安 / 党办`}
           >
-            ⚠ 合规
+            <Ico as={Warning} size={12} gap={2} />合规
           </span>
         )}
         {political && political.engineEnabled && political.highestSeverity === "medium" && (
           <span
             style={{
               flex: "0 0 auto",
-              fontSize: 9,
-              padding: "1px 5px",
+              fontSize: 11,
+              lineHeight: "16px",
+              padding: "0 6px",
               background: "rgba(234,179,8,0.18)",
               color: "rgb(133,77,14)",
               borderRadius: 3,
@@ -284,7 +297,7 @@ function ListItem({
             }}
             title={`${political.flags.length} 条规则触发, 请复核`}
           >
-            ⚠ 待复核
+            <Ico as={Warning} size={12} gap={2} />待复核
           </span>
         )}
         <span style={{ flex: "0 0 auto", color: "var(--catfish-text-muted)", fontSize: 11 }}>
@@ -306,7 +319,7 @@ function ListItem({
         style={{
           color: "var(--catfish-text-muted)",
           opacity: 0.7,
-          fontSize: 10,
+          fontSize: 11,
           marginTop: 2,
         }}
       >

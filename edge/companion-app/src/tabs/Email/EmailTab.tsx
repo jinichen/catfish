@@ -500,7 +500,9 @@ export default function EmailTab() {
                 cursor: newComposing ? "default" : "pointer",
                 opacity: newComposing ? 0.4 : 1,
                 fontSize: 11,
-                padding: "2px 8px",
+                minHeight: 24,
+                padding: "0 8px",
+                flex: "none",
                 fontFamily: "inherit",
                 // P3.5.204.e (7/9 鸿波 catch "按钮上的图标不要了, 太浪费空间"):
                 // 左栏窄 (grid 1fr 主区拿大头), padding + emoji + 中文塞不下, 触发
@@ -531,7 +533,9 @@ export default function EmailTab() {
                 color: syncError ? "rgb(200, 80, 80)" : "var(--catfish-text-muted)",
                 cursor: syncing || loading ? "wait" : "pointer",
                 fontSize: 11,
-                padding: "2px 8px",
+                minHeight: 24,
+                padding: "0 8px",
+                flex: "none",
                 fontFamily: "inherit",
                 whiteSpace: "nowrap",  // P3.5.204.e: 同"新建", 防窄栏换行
               }}
@@ -540,8 +544,8 @@ export default function EmailTab() {
             </button>
           </div>
           {/* toolbar: 只剩 仅未读 toggle. Mail.app 按钮 5/18 已删 (catfish 自己读完整, 不需要 bounce 出去) */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, marginBottom: 6 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, marginBottom: 8 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", minHeight: 24, whiteSpace: "nowrap", flex: "none" }}>
               <input
                 type="checkbox"
                 checked={unreadOnly}
@@ -607,7 +611,7 @@ export default function EmailTab() {
                 员工手里只有一个 dmg, 根本没有那个目录, 这条提示等于没给。
                 (而且 catfish-email 长期就没被打包过, 见 hermes_install.rs
                  的 install_catfish_email。) 改成员工真能做的两件事。 */}
-            <div style={{ marginTop: 6, fontSize: 11, opacity: 0.7 }}>
+            <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>
               {emailFailureHint()}
             </div>
           </div>
@@ -637,9 +641,9 @@ export default function EmailTab() {
               }}
             >
               {search
-                ? `🔍 列表里没匹配 "${search}"`
-                : actionFilter !== "全部" ? `✅ 没有「要${actionFilter === "办" ? "办事" : "回信"}」的邮件`
-                : unreadOnly ? "🌊 没有未读邮件, 都处理完了" : EMPTY_FOLDER_TEXT[folder]}
+                ? `列表里没匹配 "${search}"`
+                : actionFilter !== "全部" ? `没有「要${actionFilter === "办" ? "办事" : "回信"}」的邮件`
+                : unreadOnly ? "没有未读邮件, 都处理完了" : EMPTY_FOLDER_TEXT[folder]}
             </li>
           )}
           {filteredItems.map((m) => (
@@ -702,7 +706,7 @@ export default function EmailTab() {
               gap: 10,
             }}
           >
-            <div>👈 左边选一封邮件看详情</div>
+            <div>左边选一封邮件看详情</div>
             <div style={{ fontSize: 11 }}>或 点顶部"新建"写一封新邮件</div>
           </div>
         )}

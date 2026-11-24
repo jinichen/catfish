@@ -33,15 +33,18 @@ export default function ActionFilterChips({
             title={o.title}
             onClick={() => onChange(o.key)}
             style={{
-              fontSize: 10,
-              padding: "1px 7px",
-              borderRadius: 9,
+              fontSize: 11,
+              minHeight: 24,
+              padding: "0 10px",
+              borderRadius: 12,
+              whiteSpace: "nowrap",
+              flex: "none",
               cursor: "pointer",
               fontFamily: "inherit",
               border: active
                 ? "1px solid var(--catfish-cyan)"
                 : "1px solid var(--catfish-border)",
-              background: active ? "rgba(34, 211, 238, 0.12)" : "transparent",
+              background: active ? "var(--catfish-cyan-tint)" : "transparent",
               color: active ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
               fontWeight: active ? 600 : 400,
             }}

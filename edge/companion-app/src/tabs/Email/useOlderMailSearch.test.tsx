@@ -40,7 +40,7 @@ describe("搜更早的邮件", () => {
     render(<Harness onSelect={pick} />);
     fireEvent.change(screen.getByLabelText("搜邮件"), { target: { value: "盘" } });
     fireEvent.change(screen.getByLabelText("搜邮件"), { target: { value: "盘点" } });
-    expect(screen.getByText("🔍 正在搜更早的邮件…")).toBeTruthy();
+    expect(screen.getByText("正在搜更早的邮件…")).toBeTruthy();
     expect(api.search).not.toHaveBeenCalled();
     await act(async () => { vi.advanceTimersByTime(OLDER_SEARCH_DEBOUNCE_MS); });
     expect(api.search).toHaveBeenCalledTimes(1);

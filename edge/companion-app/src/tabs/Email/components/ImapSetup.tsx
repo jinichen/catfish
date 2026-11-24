@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 
 import {
   RETENTION_LABELS,
@@ -211,7 +213,7 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
         </div>
         {retention !== "never" && (
           <div style={{ marginTop: 4, color: "var(--status-danger)", fontSize: 11 }}>
-            ⚠ 服务器上那份会被删掉, 不可恢复。只有原文已存到本机、并重新读出来核对过的邮件才会删;
+            <Ico as={Warning} />服务器上那份会被删掉, 不可恢复。只有原文已存到本机、并重新读出来核对过的邮件才会删;
             启用归档之前就在服务器上的旧邮件不会被删。
           </div>
         )}
@@ -314,7 +316,7 @@ export default function ImapSetup({ onConfigured }: { onConfigured?: () => void 
           </select>
           {retention !== "never" && (
             <div style={{ marginTop: 4, color: "var(--status-danger)", fontSize: 11 }}>
-              ⚠ 服务器上那份会被删掉, 不可恢复。只有原文已存到本机、并重新读出来
+              <Ico as={Warning} />服务器上那份会被删掉, 不可恢复。只有原文已存到本机、并重新读出来
               核对过的邮件才会删; 启用归档之前就在服务器上的旧邮件不会被删。
             </div>
           )}

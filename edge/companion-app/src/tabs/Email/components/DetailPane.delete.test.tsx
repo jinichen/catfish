@@ -52,10 +52,10 @@ describe("删除按钮", () => {
     await act(async () => {
       render(<DetailPane msg={msg as never} list={[]} onAskCatfish={() => {}} onDeleted={() => {}} />);
     });
-    const btn = screen.getByText("🗑 删除") as HTMLButtonElement;
+    const btn = screen.getByText("删除") as HTMLButtonElement;
     const before = { minWidth: btn.style.minWidth, ws: btn.style.whiteSpace };
     await act(async () => { fireEvent.click(btn); });
-    expect(btn.textContent).toBe("🗑 确认删除");
+    expect(btn.textContent).toBe("确认删除");
     expect(btn.style.minWidth).toBe(before.minWidth);
     expect(before.minWidth).toBe("100px");
     expect(btn.style.whiteSpace).toBe("nowrap");

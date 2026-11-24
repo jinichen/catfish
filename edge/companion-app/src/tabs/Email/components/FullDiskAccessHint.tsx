@@ -15,6 +15,9 @@
  * **独占一行还有个好处: 说得下人话。** chip 只能塞四五个字, 员工看不懂
  * 要做什么。这里能把"去哪点、点完要重启"完整写出来。
  */
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
+
 export default function FullDiskAccessHint() {
   return (
     <div
@@ -25,11 +28,11 @@ export default function FullDiskAccessHint() {
         background: "var(--catfish-hint-amber-bg)",
         border: "1px solid var(--catfish-hint-amber-border)",
         borderRadius: "var(--radius-sm)",
-        padding: "6px 8px",
-        marginBottom: 6,
+        padding: "8px 12px",
+        marginBottom: 8,
       }}
     >
-      ⚠ 有邮箱账号读不到 —— 缺「完全磁盘访问权限」。
+      <Ico as={Warning} />有邮箱账号读不到 —— 缺「完全磁盘访问权限」。
       <br />
       系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 打开「鲶鱼 Companion」→ 重启。
       <br />

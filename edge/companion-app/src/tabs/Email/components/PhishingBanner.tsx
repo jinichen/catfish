@@ -8,6 +8,8 @@
  * 点了先按标注改显示 (不等重扫), 后台按新标注重扫这个发件人在列表里的那几封。
  */
 import { useEffect, useState } from "react";
+import { ShieldWarning, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 
 import { senderAddress, withMark } from "../../../lib/phishingMarks";
 import type { EmailDigestItem, PhishingScanResult } from "../../../lib/tauri";
@@ -48,8 +50,8 @@ function useMarkAction(msg: Msg, list: EmailDigestItem[]) {
 }
 
 const linkBtn = (color: string) => ({
-  border: `1px solid ${color}`, background: "transparent", color, borderRadius: 4, padding: "3px 10px",
-  fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+  border: `1px solid ${color}`, background: "transparent", color, borderRadius: 4, padding: "4px 12px",
+  fontSize: 12, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" as const, flex: "none",
 });
 
 export default function PhishingBanner({ result, msg, list }: { result: PhishingScanResult | null; msg: Msg; list: EmailDigestItem[] }) {
@@ -82,8 +84,8 @@ export default function PhishingBanner({ result, msg, list }: { result: Phishing
       background: high ? "rgba(220,38,38,0.08)" : "rgba(251,146,60,0.08)",
       border: high ? "1px solid rgba(220,38,38,0.4)" : "1px solid rgba(251,146,60,0.4)",
     }}>
-      <div style={{ fontWeight: 700, color, marginBottom: 6 }}>
-        {userFlagged ? "⚠ 你标过这个发件人是钓鱼" : high ? "⚠ catfish 标记此邮件有钓鱼嫌疑" : "⚠ catfish 标记此邮件可疑"}
+      <div style={{ fontWeight: 600, color, marginBottom: 8 }}>
+        <Ico as={Warning} />{userFlagged ? "你标过这个发件人是钓鱼" : high ? "catfish 标记此邮件有钓鱼嫌疑" : "catfish 标记此邮件可疑"}
       </div>
       {!userFlagged && ruleFlags.length > 0 && (
         <div style={{ marginBottom: 4, color: "var(--catfish-text)" }}>
@@ -132,8 +134,8 @@ export function MarkPhishingButton({ result, msg, list }: { result: PhishingScan
       <button type="button" disabled={busy} onClick={() => void run("phishing")}
               title={`觉得这封是钓鱼: 以后 ${addr} 的来信一律按钓鱼报; 标注只存在你这台电脑上, 邮箱设置里能撤销`}
               style={{ background: "var(--catfish-bg)", color: "var(--catfish-text-muted)", border: "1px solid var(--catfish-border)",
-                       borderRadius: 4, padding: "8px 12px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
-        {busy ? "标记中…" : "⚠ 标为钓鱼"}
+                       borderRadius: 4, padding: "8px 12px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", flex: "none" }}>
+        {busy ? "标记中…" : <><Ico as={ShieldWarning} />标为钓鱼</>}
       </button>
     </span>
   );

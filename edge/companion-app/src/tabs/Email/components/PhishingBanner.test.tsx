@@ -29,12 +29,12 @@ describe("PhishingBanner", () => {
   it("不是钓鱼: 存标注 (带上这个发件人的两封), 红条换成一行, 后台重扫", async () => {
     api.emailPhishingMark.mockResolvedValue({ marks: safeMarks, store: {} });
     render(<PhishingBanner result={flagged} msg={msg} list={list} />);
-    expect(screen.getByText("⚠ catfish 标记此邮件有钓鱼嫌疑")).toBeTruthy();
+    expect(screen.getByText("catfish 标记此邮件有钓鱼嫌疑")).toBeTruthy();
     fireEvent.click(screen.getByText("不是钓鱼"));
     await screen.findByText(/你标过「不是钓鱼」/);
     expect(api.emailPhishingMark).toHaveBeenCalledWith(NIC, "safe", "OpenSSH 漏洞预警", ["m1", "m2"]);
     await waitFor(() => expect(api.emailPhishingScanNow).toHaveBeenCalled());
-    expect(screen.queryByText("⚠ catfish 标记此邮件有钓鱼嫌疑")).toBeNull();
+    expect(screen.queryByText("catfish 标记此邮件有钓鱼嫌疑")).toBeNull();
   });
 
   it("撤销: 标注去掉", async () => {
@@ -50,9 +50,9 @@ describe("PhishingBanner", () => {
     const safe = { ...flagged, highestSeverity: "none", flags: [] } as PhishingScanResult;
     render(<><PhishingBanner result={safe} msg={msg} list={list} /><MarkPhishingButton result={safe} msg={msg} list={list} /></>);
     expect(screen.queryByText(/钓鱼嫌疑/)).toBeNull();
-    fireEvent.click(screen.getByText("⚠ 标为钓鱼"));
-    await screen.findByText("⚠ 你标过这个发件人是钓鱼");
-    expect(screen.queryByText("⚠ 标为钓鱼")).toBeNull();
+    fireEvent.click(screen.getByText("标为钓鱼"));
+    await screen.findByText("你标过这个发件人是钓鱼");
+    expect(screen.queryByText("标为钓鱼")).toBeNull();
     expect(screen.getByText("撤销标注")).toBeTruthy();
   });
 
@@ -61,6 +61,6 @@ describe("PhishingBanner", () => {
     render(<PhishingBanner result={flagged} msg={msg} list={list} />);
     fireEvent.click(screen.getByText("不是钓鱼"));
     await screen.findByText(/没改成: 写不进/);
-    expect(screen.getByText("⚠ catfish 标记此邮件有钓鱼嫌疑")).toBeTruthy();
+    expect(screen.getByText("catfish 标记此邮件有钓鱼嫌疑")).toBeTruthy();
   });
 });

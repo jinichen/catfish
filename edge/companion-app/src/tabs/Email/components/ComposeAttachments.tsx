@@ -7,6 +7,8 @@
  * - 合计超过 25 MB 当场提醒 (多数邮箱会退信; 命令行那边也会拦)
  */
 import { useState } from "react";
+import { Paperclip, X } from "@phosphor-icons/react";
+import { FileKindIcon, Ico } from "../../../components/icons";
 
 import { emailPickAttachments, type PickedAttachment } from "../../../lib/tauri";
 
@@ -74,7 +76,8 @@ export default function ComposeAttachments({
 
   const chip = (key: string, label: string, size: number, note: string | null, onRemove: () => void) => (
     <span key={key} style={chipStyle} title={label}>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {label}</span>
+      <FileKindIcon name={label} gap={0} />
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
       <span style={{ color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>
         {fmtSize(size)}{note ? ` · ${note}` : ""}
       </span>
@@ -85,7 +88,7 @@ export default function ComposeAttachments({
         disabled={disabled}
         style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, color: "var(--catfish-text-muted)" }}
       >
-        ×
+        <X size={12} weight="regular" aria-hidden="true" />
       </button>
     </span>
   );
@@ -110,7 +113,7 @@ export default function ComposeAttachments({
             fontFamily: "inherit",
           }}
         >
-          📎 添加附件
+          <Ico as={Paperclip} />添加附件
         </button>
         {kept.map((a) =>
           chip(`kept:${a.filename}`, a.filename, a.size_bytes, "原有", () => onChangeKept(kept.filter((k) => k.filename !== a.filename))),

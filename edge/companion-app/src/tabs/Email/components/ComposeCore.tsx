@@ -39,6 +39,8 @@
  * + 只暴露 onSendSuccess callback (parent 不能自己触发发送).
  */
 import { useEffect, useRef, useState } from "react";
+import { ArrowClockwise, FloppyDisk, HourglassSimple, Paperclip, PaperPlaneTilt, Stop } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 
 import { useChatStore } from "../../../store/chat";
 
@@ -577,10 +579,10 @@ export default function ComposeCore({
               }
             >
               {draftingLlm
-                ? "■ 停止拟稿"
+                ? <><Ico as={Stop} />停止拟稿</>
                 : draftLlmDone
-                  ? "🔄 重拟"
-                  : `💡 让${agentName}帮我拟稿`}
+                  ? <><Ico as={ArrowClockwise} />重拟</>
+                  : `让${agentName}帮我拟稿`}
             </button>
           );
         })()}
@@ -591,7 +593,7 @@ export default function ComposeCore({
         )}
         {draftRetry && (
           <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-            ⏳ {draftRetry}
+            <Ico as={HourglassSimple} />{draftRetry}
           </span>
         )}
         {/* 8/6: 让员工看得见这次拟稿到底参考了什么 —— 不显的话"读了资料"
@@ -600,7 +602,7 @@ export default function ComposeCore({
             于是 429 那次根本看不出检索成没成, 白丢一条诊断信息. */}
         {draftCtxNote && (
           <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-            📎 {draftCtxNote}
+            <Ico as={Paperclip} />{draftCtxNote}
           </span>
         )}
       </div>}
@@ -622,7 +624,7 @@ export default function ComposeCore({
             whiteSpace: "pre-wrap",
           }}
         >
-          ❓ 小鲶写不了这份草稿, 先答它几个问题 (这段话不会发给对方):
+          小鲶写不了这份草稿, 先答它几个问题 (这段话不会发给对方):
           {"\n"}{draftQuestions}
         </div>
       )}
@@ -649,7 +651,7 @@ export default function ComposeCore({
 
       {forwardOf && (
         <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", lineHeight: 1.6 }} aria-label="转发说明">
-          ↪️ 原邮件的正文 (发件人、时间、原排版) 会接在你写的附言后面一起转发
+          原邮件的正文 (发件人、时间、原排版) 会接在你写的附言后面一起转发
           {forwardOf.attachments.length > 0
             ? `, 原来的 ${forwardOf.attachments.length} 个附件也一起带上: ${forwardOf.attachments.map((a) => a.filename).join("、")}`
             : "。"}
@@ -716,9 +718,10 @@ export default function ComposeCore({
             fontSize: 13,
             cursor: sending ? "wait" : "pointer",
             fontFamily: "inherit",
+            whiteSpace: "nowrap",
           }}
         >
-          × 取消
+          取消
         </button>
         <button
           type="button"
@@ -733,10 +736,11 @@ export default function ComposeCore({
             fontSize: 13,
             cursor: drafting ? "wait" : "pointer",
             fontFamily: "inherit",
+            whiteSpace: "nowrap",
           }}
           title="保存到 Mail.app Drafts, 不发送. 等会儿去 Mail.app 改完自己发."
         >
-          {drafting ? "保存中…" : "💾 仅保存草稿"}
+          {drafting ? "保存中…" : <><Ico as={FloppyDisk} />仅保存草稿</>}
         </button>
         <button
           type="button"
@@ -755,6 +759,7 @@ export default function ComposeCore({
             cursor: sending ? "wait" : !composeTo.trim() ? "not-allowed" : "pointer",
             fontFamily: "inherit",
             marginLeft: "auto",
+            whiteSpace: "nowrap",
           }}
           title={
             sendConfirmPending
@@ -765,8 +770,8 @@ export default function ComposeCore({
           {sending
             ? "发送中…"
             : sendConfirmPending
-              ? "✉ 再次点击确认 (3s)"
-              : "✉ 发送"}
+              ? <><Ico as={PaperPlaneTilt} />再次点击确认 (3s)</>
+              : <><Ico as={PaperPlaneTilt} />发送</>}
         </button>
       </div>
     </div>

@@ -60,14 +60,14 @@ describe("转发", () => {
     await act(async () => {
       render(<DetailPane msg={msg as never} list={[]} onAskCatfish={() => {}} onDeleted={() => {}} />);
     });
-    await act(async () => { fireEvent.click(screen.getByText("↪️ 转发")); });
+    await act(async () => { fireEvent.click(screen.getByText("转发")); });
     expect((screen.getByLabelText("收件人") as HTMLInputElement).value).toBe("");
     expect((screen.getByDisplayValue("转发: 关于补充医疗保险理赔的通知") as HTMLInputElement)).toBeTruthy();
     expect(screen.getByLabelText("转发说明").textContent).toContain("理赔指引.pdf");
     expect(screen.queryByText(/让小鲶.*拟稿|帮我拟稿/)).toBeNull();       // 转发不出「按回复拟稿」
     fireEvent.change(screen.getByLabelText("收件人"), { target: { value: "zhang@example.com" } });
     fireEvent.change(screen.getByPlaceholderText(/附言/), { target: { value: "张工, 请看附件" } });
-    await act(async () => { fireEvent.click(screen.getByText("💾 仅保存草稿")); });
+    await act(async () => { fireEvent.click(screen.getByText("仅保存草稿")); });
     const args = api.create.mock.calls[0][0];
     expect(args.forward).toBe(msg.id);
     expect(args.inReplyTo).toBeUndefined();
@@ -81,8 +81,8 @@ describe("转发", () => {
     await act(async () => {
       render(<DetailPane msg={msg as never} list={[]} onAskCatfish={() => {}} onDeleted={() => {}} />);
     });
-    await act(async () => { fireEvent.click(screen.getByText("✏️ 回复")); });
-    await act(async () => { fireEvent.click(screen.getByText("💾 仅保存草稿")); });
+    await act(async () => { fireEvent.click(screen.getByText("回复")); });
+    await act(async () => { fireEvent.click(screen.getByText("仅保存草稿")); });
     const args = api.create.mock.calls[0][0];
     expect(args.forward).toBeUndefined();
     expect(args.inReplyTo).toBe(msg.id);

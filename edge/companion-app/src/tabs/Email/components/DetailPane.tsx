@@ -8,6 +8,8 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { ArrowBendUpLeft, ArrowBendUpRight, ChatCircle, PencilSimple, Trash, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 
 import {
   emailDeleteMessage,
@@ -345,16 +347,17 @@ function DetailPane({
             >
               <div
                 style={{
-                  fontWeight: 700,
+                  fontWeight: 600,
                   color: political.highestSeverity === "high"
                     ? "rgb(185,28,28)"
                     : "rgb(133,77,14)",
                   marginBottom: 6,
                 }}
               >
+                <Ico as={Warning} />
                 {political.highestSeverity === "high"
-                  ? "⚠ catfish 标记此邮件含合规红线提醒"
-                  : "⚠ catfish 标记此邮件需要复核"}
+                  ? "catfish 标记此邮件含合规红线提醒"
+                  : "catfish 标记此邮件需要复核"}
               </div>
               {political.flags.length > 0 && (
                 <div style={{ marginBottom: 4, color: "var(--catfish-text)" }}>
@@ -401,7 +404,7 @@ function DetailPane({
           <div
             style={{
               marginTop: 8,
-              padding: "6px 8px",
+              padding: "8px 12px",
               fontSize: 11,
               lineHeight: 1.5,
               borderRadius: "var(--radius-sm)",
@@ -410,7 +413,7 @@ function DetailPane({
               border: "1px solid var(--catfish-hint-amber-border)",
             }}
           >
-            📦 服务器上已经没有这封了，你看到的是本地档案。
+            服务器上已经没有这封了，你看到的是本地档案。
             <br />
             删除、标记已读这些需要连服务器的操作对它无效。
           </div>
@@ -448,7 +451,7 @@ function DetailPane({
         {/* 行动按钮 */}
         <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
           {isDraft ? (<>
-            <DraftSendButton id={msg.id} onSent={onDeleted} />
+            <DraftSendButton id={msg.id} onSent={onDeleted} quiet={composing} />
             <button
               type="button"
               onClick={handleOpenCompose}
@@ -459,9 +462,10 @@ function DetailPane({
                 border: "1px solid var(--catfish-border)", borderRadius: 4,
                 padding: "8px 16px", fontSize: 13, fontFamily: "inherit",
                 cursor: composing ? "default" : "pointer", opacity: composing ? 0.4 : 1,
+                whiteSpace: "nowrap", flex: "none",
               }}
             >
-              ✏️ 修改草稿
+              <Ico as={PencilSimple} />修改草稿
             </button>
           </>) : (<>
           <button
@@ -470,19 +474,22 @@ function DetailPane({
             style={{
               // P3.5.58: 已回复时按钮降级为次要色 (淡灰底+绿字), 让 user 视觉感知"这封
               // 不是主要待办了". 不强禁 — user 可能想问后续是否要再回 (例如对方又问问题).
-              background: replyStatus.replied
+              // 11/24 unslop: 写回复 / 转发时下面的「发送」才是主按钮, 这里退成描边 (一屏只留一个实色青)
+              background: replyStatus.replied || composing
                 ? "var(--catfish-bg)"
                 : "var(--catfish-cyan)",
-              color: replyStatus.replied ? "rgb(21, 128, 61)" : "#fff",
+              color: replyStatus.replied ? "rgb(21, 128, 61)" : composing ? "var(--catfish-text)" : "#fff",
               border: replyStatus.replied
                 ? "1px solid rgba(34, 197, 94, 0.4)"
-                : "none",
+                : composing ? "1px solid var(--catfish-border)" : "1px solid var(--catfish-cyan)",
               borderRadius: 4,
               padding: "8px 16px",
               fontSize: 13,
               fontWeight: 500,
               cursor: "pointer",
               fontFamily: "inherit",
+              whiteSpace: "nowrap",
+              flex: "none",
             }}
             title={
               replyStatus.replied
@@ -490,9 +497,10 @@ function DetailPane({
                 : "让小鲶在工作台 chat 里多轮聊这封怎么回"
             }
           >
+            <Ico as={ChatCircle} />
             {replyStatus.replied
-              ? `💬 已回复, 再看一下?`
-              : "💬 让小鲶处理这封"}
+              ? `已回复, 再看一下?`
+              : "让小鲶处理这封"}
           </button>
           <button
             type="button"
@@ -512,10 +520,12 @@ function DetailPane({
               cursor: composing ? "default" : "pointer",
               opacity: composing ? 0.4 : 1,
               fontFamily: "inherit",
+              whiteSpace: "nowrap",
+              flex: "none",
             }}
             title="打开 compose 面板, 编辑回复内容 + 选择保存草稿或发送 (人工 confirm 才发)"
           >
-            ✏️ 回复
+            <Ico as={ArrowBendUpLeft} />回复
           </button>
           <button
             type="button"
@@ -531,10 +541,12 @@ function DetailPane({
               cursor: composing ? "default" : "pointer",
               opacity: composing ? 0.4 : 1,
               fontFamily: "inherit",
+              whiteSpace: "nowrap",
+              flex: "none",
             }}
             title="转发给别人: 原文和附件一起带上, 你可以写几句附言 (人工确认才发)"
           >
-            ↪️ 转发
+            <Ico as={ArrowBendUpRight} />转发
           </button>
           </>)}
           {/* 11/07 没报的信员工觉得是钓鱼: 「标为钓鱼」(按发件地址记), 跟删除一起靠右。
@@ -574,11 +586,7 @@ function DetailPane({
                   : "把这封邮件移到客户端 Trash 文件夹 (软删, 30 天内可恢复)"
             }
           >
-            {deleting
-              ? "删除中…"
-              : confirmPending
-                ? "🗑 确认删除"
-                : "🗑 删除"}
+            {deleting ? "删除中…" : <><Ico as={Trash} />{confirmPending ? "确认删除" : "删除"}</>}
           </button>
           </span>
           {deleteError && (

@@ -6,7 +6,8 @@
 import { useEffect, useState } from "react";
 import { emailSendMessage } from "../../../lib/tauri_briefing";
 
-export default function DraftSendButton({ id, onSent }: { id: string; onSent: () => void }) {
+/** quiet: 下面开着改草稿的面板时退成描边按钮 —— 那边的「发送」才是这一屏的主按钮 (11/24 unslop) */
+export default function DraftSendButton({ id, onSent, quiet = false }: { id: string; onSent: () => void; quiet?: boolean }) {
   const [armed, setArmed] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,15 +45,17 @@ export default function DraftSendButton({ id, onSent }: { id: string; onSent: ()
         disabled={sending}
         title="发出这封草稿。发出后不可撤回。"
         style={{
-          background: armed ? "rgb(21, 128, 61)" : "var(--catfish-cyan)",
-          color: "#fff",
-          border: "none",
+          background: armed ? "rgb(21, 128, 61)" : quiet ? "var(--catfish-bg)" : "var(--catfish-cyan)",
+          color: quiet && !armed ? "var(--catfish-text)" : "#fff",
+          border: quiet && !armed ? "1px solid var(--catfish-border)" : "1px solid transparent",
           borderRadius: 4,
           padding: "8px 16px",
           fontSize: 13,
           fontWeight: 600,
           cursor: sending ? "wait" : "pointer",
           fontFamily: "inherit",
+          whiteSpace: "nowrap",
+          flex: "none",
         }}
       >
         {sending ? "发送中…" : armed ? "再次点击确认发送 (3s)" : "发送这封草稿"}

@@ -11,9 +11,9 @@ export type MailFolder = "Inbox" | "Drafts" | "Sent";
 
 /** 列表为空时的说法。原来一律「收件箱为空」, 草稿箱空了也这么说 (9/27)。 */
 export const EMPTY_FOLDER_TEXT: Record<MailFolder, string> = {
-  Inbox: "📭 收件箱为空",
-  Drafts: "📝 草稿箱里没有草稿",
-  Sent: "📤 已发送里没有邮件",
+  Inbox: "收件箱为空",
+  Drafts: "草稿箱里没有草稿",
+  Sent: "已发送里没有邮件",
 };
 
 const FOLDERS: Array<[MailFolder, string]> = [
@@ -42,14 +42,16 @@ export default function FolderTabs({
             onClick={() => onChange(folder)}
             style={{
               flex: 1,
-              padding: "3px 0",
+              minHeight: 28,
+              padding: "4px 0",
               fontSize: 12,
               fontFamily: "inherit",
               borderRadius: 4,
               cursor: "pointer",
               border: `1px solid ${active ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
-              background: active ? "var(--catfish-cyan)" : "transparent",
-              color: active ? "#fff" : "var(--catfish-text-muted)",
+              // 11/24 unslop: 选中的页签不再实色青 —— 一屏只留一个实色主按钮 (详情里的「让小鲶处理这封」)
+              background: active ? "var(--catfish-cyan-tint)" : "transparent",
+              color: active ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
               fontWeight: active ? 600 : 400,
             }}
           >
