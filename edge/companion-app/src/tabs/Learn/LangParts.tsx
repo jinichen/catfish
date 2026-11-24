@@ -5,21 +5,24 @@
  */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
+import { ChatCircleDots, Microphone, Repeat, SpeakerHigh, Stop } from "@phosphor-icons/react";
+
+import { Ico } from "../../components/icons";
 import { speak, speechAvailable, stopSpeaking } from "../../lib/speak";
 import {
   LANG_BCP47, LANG_NAMES, speechCancel, speechStart, speechStopAndTranscribeLang, type LearnEvent,
 } from "../../lib/tauri_learn";
 import { useVoiceSupport, voiceMissing } from "../../lib/voiceSupport";
 import { inputStyle } from "../Collab/roomLinkUi";
-import { ghostBtn, primaryBtn } from "./QuestionCard";
+import { ghostBtn, primaryBtn, smallBtn } from "./QuestionCard";
 
 type Ev<K extends LearnEvent["kind"]> = Extract<LearnEvent, { kind: K }>;
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
 const box: CSSProperties = {
-  border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "12px 14px",
-  display: "flex", flexDirection: "column", gap: 6, background: "var(--catfish-bg-elevated)",
+  border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "12px 16px",
+  display: "flex", flexDirection: "column", gap: 8, background: "var(--catfish-bg-elevated)",
 };
-const small: CSSProperties = { ...ghostBtn, fontSize: 12, padding: "2px 8px" };
+const small = smallBtn;
 /** 日语 / 韩语 / 中文按字对照 (后端 learning_lang.tokens 同口径) */
 const CJK = new Set(["ja", "ko", "zh"]);
 
@@ -59,10 +62,10 @@ export function LangStart({ code, disabled, onStart }: { code: string; disabled:
       <input aria-label="情景" value={scene} onChange={(e) => setScene(e.target.value)} disabled={disabled}
         placeholder="情景 (可选), 例: 跟海外客户确认交付时间" style={inputStyle} />
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button type="button" style={primaryBtn(disabled)} disabled={disabled} onClick={() => onStart("dialogue", scene)}>💬 情景对话</button>
-        <button type="button" style={ghostBtn} disabled={disabled} onClick={() => onStart("shadow", scene)}>🔁 跟读</button>
+        <button type="button" style={primaryBtn(disabled)} disabled={disabled} onClick={() => onStart("dialogue", scene)}><Ico as={ChatCircleDots} />情景对话</button>
+        <button type="button" style={ghostBtn} disabled={disabled} onClick={() => onStart("shadow", scene)}><Ico as={Repeat} />跟读</button>
       </div>
-      <span style={muted}>对话: 小鲶扮角色跟你聊, 每句帮你改; 跟读: 小鲶读一句你读一句, 对照哪些词没读出来。都用🎤说, 也可以打字。</span>
+      <span style={muted}>对话: 小鲶扮角色跟你聊, 每句帮你改; 跟读: 小鲶读一句你读一句, 对照哪些词没读出来。都可以用嘴说, 也可以打字。</span>
       <VoiceMissing code={code} />
     </div>
   );
@@ -77,7 +80,7 @@ export function VoiceMissing({ code }: { code: string }) {
 export function LangScene({ ev }: { ev: Ev<"lang_scene"> }) {
   return (
     <div style={{ ...muted, borderTop: "1px solid var(--catfish-border)", paddingTop: 8 }}>
-      {ev.activity === "dialogue" ? "💬 情景对话" : "🔁 跟读"}: {ev.setting}{ev.role_name ? ` · 小鲶扮: ${ev.role_name}` : ""}
+      {ev.activity === "dialogue" ? "情景对话" : "跟读"}: {ev.setting}{ev.role_name ? ` · 小鲶扮: ${ev.role_name}` : ""}
     </div>
   );
 }
@@ -93,16 +96,16 @@ export function LangLine({ ev, code, autoSpeak }: { ev: Ev<"lang_line">; code: s
     return (
       <div style={{ alignSelf: "flex-end", maxWidth: "75%", background: "var(--catfish-bg-cream)", borderRadius: "var(--radius-md)",
         padding: "8px 12px", fontSize: 14, whiteSpace: "pre-wrap" }}>
-        {ev.text}{ev.secs ? <div style={muted}>🎤 {Math.round(ev.secs)} 秒</div> : null}
+        {ev.text}{ev.secs ? <div style={muted}>说了 {Math.round(ev.secs)} 秒</div> : null}
       </div>
     );
   }
   return (
     <div style={{ ...box, maxWidth: "85%" }}>
       <div style={{ fontSize: 15, lineHeight: 1.7 }}>{ev.text}</div>
-      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        {speechAvailable() && <button type="button" style={small} onClick={() => speak(ev.text, 0.95, bcp)}>🔊 听</button>}
-        {speechAvailable() && <button type="button" style={small} onClick={() => speak(ev.text, 0.7, bcp)}>🐢 慢点</button>}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {speechAvailable() && <button type="button" style={small} onClick={() => speak(ev.text, 0.95, bcp)}><Ico as={SpeakerHigh} size={14} />听</button>}
+        {speechAvailable() && <button type="button" style={small} onClick={() => speak(ev.text, 0.7, bcp)}>慢点</button>}
         {ev.zh && <button type="button" style={small} onClick={() => setZh(!zh)}>{zh ? "收起中文" : "看中文"}</button>}
       </div>
       {zh && ev.zh && <div style={muted}>{ev.zh}</div>}
@@ -112,13 +115,13 @@ export function LangLine({ ev, code, autoSpeak }: { ev: Ev<"lang_line">; code: s
 
 export function LangFix({ ev, code }: { ev: Ev<"lang_fix">; code: string }) {
   return (
-    <div style={{ fontSize: 13, borderLeft: "3px solid var(--status-warn)", padding: "4px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
-      <span style={muted}>✏️ 可以这样说</span>
+    <div style={{ fontSize: 13, borderLeft: "3px solid var(--status-warn)", padding: "4px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={muted}>可以这样说</span>
       {ev.items.map((x, i) => (
         <div key={i}>
           {x.said && <span style={{ textDecoration: "line-through", color: "var(--catfish-text-muted)" }}>{x.said}</span>}
           {x.said && " → "}<b>{x.better}</b>
-          {speechAvailable() && <button type="button" style={{ ...small, marginLeft: 6 }} onClick={() => speak(x.better, 0.9, LANG_BCP47[code] ?? "en-US")}>🔊</button>}
+          {speechAvailable() && <button type="button" style={{ ...small, marginLeft: 8 }} aria-label="听" title="听" onClick={() => speak(x.better, 0.9, LANG_BCP47[code] ?? "en-US")}><Ico as={SpeakerHigh} size={14} gap={0} /></button>}
           {x.why && <div style={muted}>{x.why}</div>}
         </div>
       ))}
@@ -140,7 +143,7 @@ export function LangSay({ code, disabled, onSay, onEnd }: { code: string; disabl
   return (
     <div style={{ ...box, borderColor: "var(--catfish-cyan)" }} aria-label="外语回答">
       <textarea aria-label="用外语说" rows={3} value={text} disabled={disabled || rec.state !== "idle"} onChange={(e) => setText(e.target.value)}
-        placeholder={`用${LANG_NAMES[code] ?? "外语"}回答 (${noVoice ? "打字" : "点🎤说"}; 不会说就写中文, 小鲶教你怎么说)`} style={{ ...inputStyle, resize: "vertical" }} />
+        placeholder={`用${LANG_NAMES[code] ?? "外语"}回答 (${noVoice ? "打字" : "点「说」用嘴说"}; 不会说就写中文, 小鲶教你怎么说)`} style={{ ...inputStyle, resize: "vertical" }} />
       {rec.state === "recording" && <span style={{ fontSize: 12, color: "var(--status-err)" }}>● 录音中… 说完再点「说完了」</span>}
       {rec.state === "transcribing" && <span style={muted}>转文字中…</span>}
       {rec.err && <span style={{ fontSize: 12, color: "var(--status-err)" }}>{rec.err}</span>}
@@ -149,7 +152,7 @@ export function LangSay({ code, disabled, onSay, onEnd }: { code: string; disabl
         <button type="button" style={ghostBtn} disabled={disabled || rec.state !== "idle"} onClick={onEnd}>结束这段, 复盘</button>
         {!noVoice && (
           <button type="button" style={rec.state === "recording" ? { ...ghostBtn, color: "var(--status-err)", borderColor: "var(--status-err)" } : ghostBtn}
-            disabled={disabled || rec.state === "transcribing"} onClick={() => void toggle()}>{rec.state === "recording" ? "⏹ 说完了" : "🎤 说"}</button>
+            disabled={disabled || rec.state === "transcribing"} onClick={() => void toggle()}>{rec.state === "recording" ? <><Ico as={Stop} />说完了</> : <><Ico as={Microphone} />说</>}</button>
         )}
         <button type="button" style={primaryBtn(disabled || !text.trim() || rec.state !== "idle")} disabled={disabled || !text.trim() || rec.state !== "idle"}
           onClick={send}>发送</button>
@@ -189,13 +192,13 @@ export function ShadowSet({ ev, code, results, disabled, onRead, onEnd }: {
                 return <span key={j} style={key && missed.has(key) ? { color: "var(--status-err)", textDecoration: "underline" } : undefined}>{w}</span>;
               }) : s.text}
             </div>
-            <div style={muted}>{s.zh}{s.note ? ` · 💡 ${s.note}` : ""}</div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-              {speechAvailable() && <button type="button" style={small} onClick={() => speak(s.text, 0.9, bcp)}>🔊 听</button>}
-              {speechAvailable() && <button type="button" style={small} onClick={() => speak(s.text, 0.65, bcp)}>🐢 慢点</button>}
+            <div style={muted}>{s.zh}{s.note ? ` · ${s.note}` : ""}</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {speechAvailable() && <button type="button" style={small} onClick={() => speak(s.text, 0.9, bcp)}><Ico as={SpeakerHigh} size={14} />听</button>}
+              {speechAvailable() && <button type="button" style={small} onClick={() => speak(s.text, 0.65, bcp)}>慢点</button>}
               {!noVoice && <button type="button" disabled={disabled || rec.state === "transcribing" || (rec.state === "recording" && active !== i)}
                 style={rec.state === "recording" && active === i ? { ...small, color: "var(--status-err)", borderColor: "var(--status-err)" } : small}
-                onClick={() => void toggle(i)}>{rec.state === "recording" && active === i ? "⏹ 读完了" : rec.state === "transcribing" && active === i ? "对照中…" : "🎤 跟读"}</button>}
+                onClick={() => void toggle(i)}>{rec.state === "recording" && active === i ? <><Ico as={Stop} size={14} />读完了</> : rec.state === "transcribing" && active === i ? "对照中…" : <><Ico as={Microphone} size={14} />跟读</>}</button>}
               {r && (
                 <span style={{ fontSize: 12, color: r.score >= 0.9 ? "var(--status-ok)" : r.score >= 0.6 ? "var(--status-warn)" : "var(--status-err)" }}>
                   对上 {Math.round(r.score * 100)}%{r.missed.length ? ` · 没听出来: ${r.missed.join(" ")}` : ""}
@@ -220,13 +223,13 @@ export function LangRecap({ ev, code }: { ev: Ev<"lang_recap">; code: string }) 
   const bcp = LANG_BCP47[code] ?? "en-US";
   return (
     <div style={{ ...box, borderColor: "var(--catfish-cyan)" }}>
-      <div style={{ fontWeight: 600 }}>📝 复盘</div>
+      <div style={{ fontWeight: 600 }}>复盘</div>
       <div style={{ fontSize: 13 }}>{ev.summary}</div>
       {ev.expressions.length > 0 && <span style={muted}>值得记住的说法</span>}
       {ev.expressions.map((x, i) => (
         <div key={i} style={{ fontSize: 13 }}>
           <b>{x.text}</b> <span style={muted}>{x.zh}</span>
-          {speechAvailable() && <button type="button" style={{ ...small, marginLeft: 6 }} onClick={() => speak(x.text, 0.9, bcp)}>🔊</button>}
+          {speechAvailable() && <button type="button" style={{ ...small, marginLeft: 8 }} aria-label="听" title="听" onClick={() => speak(x.text, 0.9, bcp)}><Ico as={SpeakerHigh} size={14} gap={0} /></button>}
         </div>
       ))}
       {ev.mistakes.length > 0 && <span style={muted}>要紧的错</span>}

@@ -75,13 +75,13 @@ export default function ReviewPanel({ onChanged }: { onChanged?: () => void }) {
   if (!cards) return <div style={{ ...cardStyle, ...muted }}>读取中…</div>;
   return (
     <div style={{ ...cardStyle, height: "auto" }} aria-label="复习">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div style={{ fontSize: 16, fontWeight: 600 }}>🔁 今天的复习</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 16, fontWeight: 600 }}>今天的复习</div>
         <span style={muted}>还剩 {cards.length} 条{done ? ` · 刚复习了 ${done} 条` : ""}{stats ? ` · 卡片一共 ${stats.total} 张` : ""}</span>
       </div>
       {!card ? (
         <div style={{ fontSize: 14, padding: "24px 0", textAlign: "center" }}>
-          🎉 今天的复习做完了。<div style={muted}>学完的内容会自动做成复习卡, 会议纪要上也可以点「记住这几条」。</div>
+          今天的复习做完了。<div style={muted}>学完的内容会自动做成复习卡, 会议纪要上也可以点「记住这几条」。</div>
         </div>
       ) : (
         <>
@@ -112,7 +112,7 @@ export default function ReviewPanel({ onChanged }: { onChanged?: () => void }) {
                 </div>
               )}
               {!objective && (
-                <div style={{ borderLeft: "3px solid var(--catfish-cyan)", padding: "6px 10px", background: "var(--catfish-cyan-tint)", fontSize: 14 }}>
+                <div style={{ borderLeft: "3px solid var(--catfish-cyan)", padding: "8px 12px", background: "var(--catfish-cyan-tint)", fontSize: 14 }}>
                   {shown.answer}
                 </div>
               )}
@@ -130,7 +130,7 @@ export default function ReviewPanel({ onChanged }: { onChanged?: () => void }) {
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
                     {RATINGS.map((r) => (
                       <button key={r} type="button" disabled={busy} onClick={() => void rate(r)}
-                        style={{ ...ghostBtn, display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                        style={{ ...ghostBtn, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "8px 12px",
                           borderColor: r === "good" ? "var(--catfish-cyan)" : "var(--catfish-border)" }}>
                         <span>{RATING_LABEL[r]}</span>
                         <span style={muted}>{previews?.[r] ?? ""}</span>

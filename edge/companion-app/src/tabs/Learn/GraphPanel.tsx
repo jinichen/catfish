@@ -5,13 +5,16 @@
  */
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 
+import { CheckCircle, FileText, GraduationCap, Microphone, Plus, type Icon } from "@phosphor-icons/react";
+
+import { Ico } from "../../components/icons";
 import { GRAPH_ACCEPT, learnGraphDelete, learnGraphImport, learnGraphView, type GraphView } from "../../lib/tauri_learn";
 import { cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import { stageFiles } from "../Collab/RoomsDelivery";
-import { ghostBtn, primaryBtn } from "./QuestionCard";
+import { primaryBtn, smallBtn } from "./QuestionCard";
 
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
-const KIND: Record<string, string> = { learn: "🎓", file: "📄", meeting: "🎙" };
+const KIND: Record<string, Icon> = { learn: GraduationCap, file: FileText, meeting: Microphone };
 const MAX_BYTES = 50 * 1024 * 1024;
 const POLL_MS = 2000;
 
@@ -73,7 +76,7 @@ export default function GraphPanel({ onChanged }: { onChanged?: () => void }) {
   return (
     <div style={{ ...cardStyle, height: "auto" }} aria-label="我学过的要点">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 16, fontWeight: 600 }}>📚 我学过的要点</div>
+        <div style={{ fontSize: 16, fontWeight: 600 }}>我学过的要点</div>
         <span style={muted}>{g.points} 条要点 · {g.chains} 条推理</span>
       </div>
       <div style={muted}>
@@ -86,14 +89,14 @@ export default function GraphPanel({ onChanged }: { onChanged?: () => void }) {
         <input ref={file} type="file" accept={GRAPH_ACCEPT} style={{ display: "none" }} aria-label="选资料" onChange={(e) => void pick(e)} />
         <button type="button" style={primaryBtn(!!busy || running)} disabled={!!busy || running} onClick={() => file.current?.click()}
           title="Word / PDF / PPT / Excel / 文本; 小鲶读一遍提炼要点和推理 (内容会经网关给大模型)">
-          {busy === "import" ? "上传中…" : "＋ 导入资料"}
+          {busy === "import" ? "上传中…" : <><Ico as={Plus} />导入资料</>}
         </button>
       </div>
-      {running && <div style={muted}>🐟 小鲶在读「{g.running}」, 提炼要点和推理 (长资料要几分钟; 可以先切去干别的)…</div>}
+      {running && <div style={muted}>小鲶在读「{g.running}」, 提炼要点和推理 (长资料要几分钟; 可以先切去干别的)…</div>}
       {g.last?.error && <ErrorLine>「{g.last.name}」没读成: {g.last.error}</ErrorLine>}
       {g.last && !g.last.error && g.last.name && (
         <div style={{ fontSize: 12, color: "var(--status-ok)" }}>
-          ✓ 「{g.last.name}」: 新增 {g.last.added} 条要点, {g.last.linked} 条跟已有的是同一条 (合并了), {g.last.chains} 条推理
+          <Ico as={CheckCircle} />「{g.last.name}」: 新增 {g.last.added} 条要点, {g.last.linked} 条跟已有的是同一条 (合并了), {g.last.chains} 条推理
         </div>
       )}
       {error && <ErrorLine>{error}</ErrorLine>}
@@ -105,10 +108,10 @@ export default function GraphPanel({ onChanged }: { onChanged?: () => void }) {
       {sources.map((s) => (
         <details key={s.source} open style={{ borderTop: "1px solid var(--catfish-border)", paddingTop: 8 }}>
           <summary style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-            <span style={{ fontWeight: 600, fontSize: 13 }}>{KIND[s.kind] ?? "•"} {s.label} <span style={muted}>· {s.points.length} 条</span></span>
+            <span style={{ fontWeight: 600, fontSize: 13 }}><Ico as={KIND[s.kind] ?? FileText} />{s.label} <span style={muted}>· {s.points.length} 条</span></span>
             {s.kind !== "learn" && (
               <button type="button" disabled={!!busy || running} onClick={(e) => { e.preventDefault(); void remove(s.source); }}
-                style={{ ...ghostBtn, fontSize: 12, padding: "2px 8px",
+                style={{ ...smallBtn,
                   ...(confirm === s.source ? { color: "var(--status-err)", borderColor: "var(--status-err)" } : null) }}
                 title="只删这份材料的出处; 别的材料也提到的要点留着">
                 {confirm === s.source ? "再点一次删除" : "删这份"}

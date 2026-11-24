@@ -4,7 +4,10 @@
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
+import { Books, Cards, Microphone, PencilSimpleLine } from "@phosphor-icons/react";
+
 import { AskSources } from "../../components/AskSources";
+import { Ico } from "../../components/icons";
 import { Markdown } from "../../lib/markdown";
 import {
   learnAction, learnAnswer, learnAttempt, learnDelete, learnDrill, learnGet, learnLang, learnPractice, learnRetry, learnSay, LANG_NAMES, PHASE_LABEL,
@@ -112,6 +115,9 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
   }
   const lastLine = [...evs].reverse().find((e) => e.kind === "lang_line" || e.kind === "lang_scene" || e.kind === "lang_recap");
   const lastRoleLineId = [...evs].reverse().find((e) => e.kind === "lang_line" && e.who === "role")?.id;
+  // 一屏一个实色主按钮: 有题要交 / 等「开始学」/ 练习的「交答案」「下一题」时, 底下的「发送」退成描边
+  const otherPrimary = !!s.pending || (s.phase === "plan_review" && !busy)
+    || (s.phase === "practice" && (!!activePid || (!busy && !s.last_error && !s.stalled)));
 
   return (
     <div style={{ ...cardStyle, height: "auto", gap: "var(--space-3)" }}>
@@ -122,26 +128,26 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
             {s.plan ? ` · 路线图 ${s.visited?.length ?? 0}/${s.plan.nodes.length}` : ""}</div>
           <PracticeSummaryLine p={s.practice} />
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
           {s.plan && s.phase !== "practice" && s.phase !== "probe" && s.phase !== "plan_review" && (
-            <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnPractice(id))}>✍️ 去练习</button>
+            <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnPractice(id))}><Ico as={PencilSimpleLine} />去练习</button>
           )}
           {s.phase === "practice" || s.phase === "drill" ? (
             <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnAction(id, "teach"))}>回去接着学</button>
           ) : s.phase !== "probe" && s.phase !== "plan_review" && s.phase !== "lang" ? (
             <button type="button" style={ghostBtn} disabled={busy} title="小鲶扮评审老师, 按资料出一套现场会问的题, 你口头回答, 逐条对照评分点"
-              onClick={() => void act(() => learnDrill(id, "start"))}>🎤 答辩陪练</button>
+              onClick={() => void act(() => learnDrill(id, "start"))}><Ico as={Microphone} />答辩陪练</button>
           ) : null}
           {s.phase === "drill" && (s.drill?.done ?? false) && (
-            <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnDrill(id, "start"))}>🎤 再来一轮</button>
+            <button type="button" style={ghostBtn} disabled={busy} onClick={() => void act(() => learnDrill(id, "start"))}><Ico as={Microphone} />再来一轮</button>
           )}
           {taught && (
             <button type="button" style={ghostBtn} disabled={busy} title="把讲过的要点做成复习卡, 明天开始按遗忘规律复习"
-              onClick={() => void act(() => learnAction(id, "cards"))}>🔁 做成复习卡{s.cards ? ` (已有 ${s.cards})` : ""}</button>
+              onClick={() => void act(() => learnAction(id, "cards"))}><Ico as={Cards} />做成复习卡{s.cards ? ` (已有 ${s.cards})` : ""}</button>
           )}
           {taught && (
             <button type="button" style={ghostBtn} disabled={busy} title="把讲过的提炼成要点和推理, 存进「我学过的要点」"
-              onClick={() => void act(() => learnAction(id, "ingest"))}>📚 沉淀要点</button>
+              onClick={() => void act(() => learnAction(id, "ingest"))}><Ico as={Books} />沉淀要点</button>
           )}
           <button type="button" style={{ ...ghostBtn, ...(confirmDel ? { color: "var(--status-err)", borderColor: "var(--status-err)" } : null) }}
             title="讲解、做过的题都会删掉 (已经做成的复习卡留着)" onClick={() => void remove()} disabled={running}>
@@ -152,11 +158,11 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
       {s.plan && (
         <details open style={{ fontSize: 13 }}>
           <summary style={{ cursor: "pointer", ...muted }}>学习路线 (鼠标停在知识点上看要先懂什么)</summary>
-          <div style={{ marginTop: 6 }}><PlanMap plan={s.plan} current={s.current} visited={s.visited} /></div>
+          <div style={{ marginTop: 8 }}><PlanMap plan={s.plan} current={s.current} visited={s.visited} /></div>
         </details>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {evs.map((ev) => {
           switch (ev.kind) {
             case "say":
@@ -166,7 +172,7 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
               ) : (
                 <div key={ev.id} style={{ fontSize: 14, lineHeight: 1.7 }}>
                   <Markdown text={ev.text} />
-                  <AskSources sources={ev.sources} style={muted} localIcon="🔎 " />
+                  <AskSources sources={ev.sources} style={muted} />
                 </div>
               );
             case "question":
@@ -177,7 +183,7 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
               return (
                 <details key={ev.id} style={{ fontSize: 13 }} open={s.phase === "plan_review"}>
                   <summary style={{ cursor: "pointer", fontWeight: 600 }}>摸底结果: {ev.goal}</summary>
-                  <ul style={{ margin: "6px 0", paddingLeft: 20 }}>
+                  <ul style={{ margin: "8px 0", paddingLeft: 20 }}>
                     {ev.strands.map((st, i) => (
                       <li key={i}><b>{st.strand}</b>{st.solid ? ` —— 稳拿: ${st.solid}` : ""}{st.gap ? `; 卡在: ${st.gap}` : ""}
                         {st.misconceptions ? `; 误解: ${st.misconceptions}` : ""}</li>
@@ -189,10 +195,10 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
             case "plan":
               return (
                 <div key={ev.id} style={{ fontSize: 13 }}>
-                  <div style={{ fontWeight: 600 }}>{ev.revised ? "🗺 小鲶改了路线图" : "🗺 学习路线"}</div>
+                  <div style={{ fontWeight: 600 }}>{ev.revised ? "小鲶改了路线图" : "学习路线"}</div>
                   {ev.approach && <Markdown text={ev.approach} />}
                   {ev.id === lastPlan && s.phase === "plan_review" && !busy && (
-                    <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                    <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
                       <button type="button" style={primaryBtn(false)} onClick={() => sendSay(true)}>就这样, 开始学</button>
                       <span style={muted}>要改就在下面说 (例: 「分级我会了, 不用讲」)</span>
                     </div>
@@ -201,8 +207,8 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
               );
             case "finish":
               return (
-                <div key={ev.id} style={{ border: "1px solid var(--catfish-cyan)", borderRadius: "var(--radius-md)", padding: "10px 14px" }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>🎓 这次学完了</div>
+                <div key={ev.id} style={{ border: "1px solid var(--catfish-cyan)", borderRadius: "var(--radius-md)", padding: "12px 16px" }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>这次学完了</div>
                   <Markdown text={ev.summary} />
                   <div style={muted}>还想接着学, 在下面说就行。</div>
                 </div>
@@ -230,7 +236,7 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
                 <ShadowSet key={ev.id} ev={ev} code={code} results={shadowResults} disabled={busy}
                   onRead={(idx, heard, sec) => void act(() => learnLang(id, "shadow", { idx, heard, secs: sec }))}
                   onEnd={() => void act(() => learnLang(id, "end"))} />
-              ) : <div key={ev.id} style={muted}>🔁 跟读了 {ev.sentences.length} 句</div>;
+              ) : <div key={ev.id} style={muted}>跟读了 {ev.sentences.length} 句</div>;
             case "lang_recap":
               return <LangRecap key={ev.id} ev={ev} code={code} />;
             default:
@@ -275,7 +281,7 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
               onSubmit={(a: LearnAnswer) => void act(() => learnAnswer(id, a))} />
           ) : null;
         })()}
-        {running && <div style={muted}>🐟 小鲶在想 (查资料、出题、讲解, 一般十几秒到一分钟; 可以先切去干别的, 回来就在)…</div>}
+        {running && <div style={muted}>小鲶在想 (查资料、出题、讲解, 一般十几秒到一分钟; 可以先切去干别的, 回来就在)…</div>}
         {!running && s.last_error && (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <ErrorLine>{s.last_error}</ErrorLine>
@@ -293,9 +299,9 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
       </div>
 
       {s.phase === "drill" || s.phase === "lang" ? (
-        <label style={{ ...muted, display: "flex", gap: 6, alignItems: "center" }}>
+        <label style={{ ...muted, display: "flex", gap: 8, alignItems: "center" }}>
           <input type="checkbox" checked={voiceOn} onChange={(e) => setVoiceOn(e.target.checked)} />
-          🔊 {s.phase === "drill" ? "评审提问" : "小鲶的台词"}自动读出来 (用电脑自带的语音, 不联网)
+          {s.phase === "drill" ? "评审提问" : "小鲶的台词"}自动读出来 (用电脑自带的语音, 不联网)
         </label>
       ) : (
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
@@ -303,7 +309,7 @@ export default function LearnSession({ id, onChanged }: { id: string; onChanged:
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); sendSay(); } }}
           placeholder={s.pending ? "插话 / 提问 (这道题会先跳过)" : s.phase === "plan_review" ? "想怎么改路线图" : "跟小鲶说"}
           style={{ ...inputStyle, resize: "vertical", flex: 1 }} />
-        <button type="button" style={primaryBtn(busy || !say.trim())} disabled={busy || !say.trim()} onClick={() => sendSay()}>发送</button>
+        <button type="button" style={otherPrimary ? { ...ghostBtn, opacity: busy || !say.trim() ? 0.5 : 1 } : primaryBtn(busy || !say.trim())} disabled={busy || !say.trim()} onClick={() => sendSay()}>发送</button>
       </div>
       )}
     </div>

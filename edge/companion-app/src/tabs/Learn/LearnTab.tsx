@@ -14,14 +14,15 @@ import { COL_CARD } from "../Meeting/meetingHelpers";
 import LearnSession from "./LearnSession";
 import GraphPanel from "./GraphPanel";
 import ReviewPanel from "./ReviewPanel";
-import { primaryBtn } from "./QuestionCard";
+import { accentBtn, primaryBtn } from "./QuestionCard";
 
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
 const REVIEW = "__review__";
 const GRAPH = "__graph__";
 const EXAMPLES = ["准备 CCRC 应急处理二级的答辩", "弄懂 ITSS 二级要提交哪些材料、为什么", "公司的差旅报销规定"];
 
-function NewLearning({ onCreated }: { onCreated: (id: string) => void }) {
+/** primary: 右栏没有打开别的 (空状态) 时「开始」才是实色主按钮; 右栏有自己的主按钮时它退成青色描边 */
+function NewLearning({ onCreated, primary }: { onCreated: (id: string) => void; primary: boolean }) {
   const [goal, setGoal] = useState("");
   const [mode, setMode] = useState<LearnMode>("quick");
   const [lang, setLang] = useState("en");
@@ -42,24 +43,26 @@ function NewLearning({ onCreated }: { onCreated: (id: string) => void }) {
     }
   };
   const modeBtn = (m: LearnMode, label: string, hint: string) => (
-    <button type="button" onClick={() => setMode(m)} title={hint}
-      style={{ flex: 1, padding: "6px 8px", fontSize: 12, borderRadius: "var(--radius-sm)", cursor: "pointer", fontFamily: "inherit",
+    <button type="button" role="radio" aria-checked={mode === m} onClick={() => setMode(m)} title={hint}
+      style={{ minHeight: 32, padding: "4px 8px", fontSize: 13, borderRadius: "var(--radius-sm)", cursor: "pointer", fontFamily: "inherit",
+        whiteSpace: "nowrap", minWidth: 0,
         border: `1px solid ${mode === m ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
         background: mode === m ? "var(--catfish-bg-cream)" : "transparent", color: "var(--catfish-text)" }}>{label}</button>
   );
   return (
     <div style={{ ...cardStyle, ...COL_CARD }}>
-      <div style={{ fontWeight: 600 }}>🎓 学点什么</div>
+      <div style={{ fontWeight: 600 }}>学点什么</div>
       <textarea aria-label="想学会什么" rows={3} value={goal} onChange={(e) => setGoal(e.target.value)} disabled={busy}
         placeholder="想学会什么? 越具体越好, 例: 准备 CCRC 应急处理二级的答辩" style={{ ...inputStyle, resize: "vertical" }} />
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {EXAMPLES.map((x) => (
           <button key={x} type="button" onClick={() => setGoal(x)} disabled={busy}
-            style={{ fontSize: 11, padding: "2px 8px", borderRadius: 999, border: "1px solid var(--catfish-border)",
+            style={{ fontSize: 12, minHeight: 24, padding: "4px 12px", borderRadius: 999, textAlign: "left", border: "1px solid var(--catfish-border)",
               background: "transparent", color: "var(--catfish-text-muted)", cursor: "pointer", fontFamily: "inherit" }}>{x}</button>
         ))}
       </div>
-      <div style={{ display: "flex", gap: 6 }}>
+      {/* 11/24: 四个练法原来挤一行 (左栏窄时「答辩陪练」被压断), 改成两列 */}
+      <div role="radiogroup" aria-label="怎么学" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
         {modeBtn("quick", "快速", "讲得短、多检查, 适合记规定、准备答辩")}
         {modeBtn("deep", "深入", "每步先让你猜再讲, 讲清为什么, 适合真正弄懂")}
         {modeBtn("defense", "答辩陪练", "小鲶扮评审老师按资料出题, 你口头回答, 逐条对照评分点")}
@@ -76,7 +79,7 @@ function NewLearning({ onCreated }: { onCreated: (id: string) => void }) {
       {mode === "language" && voiceMissing(lang, voice) && (
         <span style={{ fontSize: 12, color: "var(--status-warn)" }}>{voiceMissing(lang, voice)}</span>
       )}
-      <button type="button" style={primaryBtn(busy || !goal.trim())} disabled={busy || !goal.trim()} onClick={() => void start()}>
+      <button type="button" style={(primary ? primaryBtn : accentBtn)(busy || !goal.trim())} disabled={busy || !goal.trim()} onClick={() => void start()}>
         {mode === "defense" ? "开始 (小鲶先出一套评审会问的题)" : mode === "language" ? "开始" : "开始 (小鲶先问几道题摸摸底)"}
       </button>
       <span style={muted}>小鲶会查你的知识库、本机文件、邮件, 需要时上网查官方文件; 学习记录只存在这台电脑上。</span>
@@ -118,19 +121,19 @@ export default function LearnTab() {
 
   return (
     <div style={{ maxWidth: 1600, margin: "0 auto", padding: "var(--space-4) var(--space-4) 0", height: "100%", boxSizing: "border-box" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 340px) minmax(0, 1fr)", gap: "var(--space-4)", height: "100%" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 360px) minmax(0, 1fr)", gap: "var(--space-4)", height: "100%" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", minHeight: 0, overflowY: "auto", paddingBottom: "var(--space-4)" }}>
-          <NewLearning onCreated={(id) => void refresh(id)} />
+          <NewLearning primary={!selected} onCreated={(id) => void refresh(id)} />
           <button type="button" onClick={() => setSelected(REVIEW)} aria-label="去复习"
             style={{ ...cardStyle, ...COL_CARD, cursor: "pointer", textAlign: "left", fontFamily: "inherit", color: "var(--catfish-text)",
               borderColor: selected === REVIEW ? "var(--catfish-cyan)" : "var(--catfish-border)", gap: 4 }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>🔁 复习</div>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>复习</div>
             <div style={muted}>{due === null ? "…" : due.due ? `今天要复习 ${due.due} 条` : due.total ? "今天没有要复习的" : "还没有复习卡 (学完会自动做)"}</div>
           </button>
           <button type="button" onClick={() => setSelected(GRAPH)} aria-label="看学过的要点"
             style={{ ...cardStyle, ...COL_CARD, cursor: "pointer", textAlign: "left", fontFamily: "inherit", color: "var(--catfish-text)",
               borderColor: selected === GRAPH ? "var(--catfish-cyan)" : "var(--catfish-border)", gap: 4 }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>📚 我学过的要点</div>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>我学过的要点</div>
             <div style={muted}>{points === null ? "…" : points ? `${points} 条 (带推理)` : "学完 / 导入资料后沉淀在这里"}</div>
           </button>
           <div style={{ ...cardStyle, ...COL_CARD, gap: "var(--space-1)" }}>
@@ -138,7 +141,7 @@ export default function LearnTab() {
             {list.length === 0 && <div style={muted}>还没有</div>}
             {list.map((m) => (
               <button key={m.id} type="button" onClick={() => setSelected(m.id)}
-                style={{ textAlign: "left", padding: "8px 10px", border: "none", borderRadius: "var(--radius-sm)", cursor: "pointer",
+                style={{ textAlign: "left", padding: "8px 12px", border: "none", borderRadius: "var(--radius-sm)", cursor: "pointer",
                   background: m.id === selected ? "var(--catfish-bg-cream)" : "transparent", color: "var(--catfish-text)", fontFamily: "inherit" }}>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{m.goal}</div>
                 <div style={muted}>{new Date(m.updated * 1000).toLocaleDateString()} · {PHASE_LABEL[m.phase]}

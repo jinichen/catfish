@@ -100,7 +100,7 @@ describe("练习", () => {
     await mount();
     await act(async () => { fireEvent.click(screen.getByText(/做成复习卡 \(已有 3\)/)); });
     expect(api.action).toHaveBeenCalledWith("lrn_1", "cards");
-    await act(async () => { fireEvent.click(screen.getByText("✍️ 去练习")); });
+    await act(async () => { fireEvent.click(screen.getByText("去练习")); });
     expect(api.practice).toHaveBeenCalledWith("lrn_1");
     await act(async () => { fireEvent.click(screen.getByText("删除")); });
     expect(api.del).not.toHaveBeenCalled();

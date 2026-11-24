@@ -9,6 +9,9 @@
  * 改的时候编辑框旁边也有「▶ 听这句」, 边听边改。再点 = 停; 一次只放一句。
  */
 import { useEffect, useState } from "react";
+import { CheckCircle } from "@phosphor-icons/react";
+
+import { Ico } from "../../components/icons";
 
 import {
   formatClock, meetingHotwordsRemember, meetingTranscriptEdit, speakerName,
@@ -78,23 +81,23 @@ export default function TranscriptView({ meetingId, transcript, names, colors }:
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
         转写原文 · 点 ▶ 听那一句, 识别错的字点右边的「改」{edited > 0 && ` · 已改 ${edited} 句, 重新生成纪要时会用改后的`}
       </div>
       {suggest.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", fontSize: 12 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 12 }}>
           <span>记成常用热词 (以后新会议自动带上, 识别更准):</span>
           {suggest.map((w) => (
             <button key={w} type="button" onClick={() => void remember(w)}
-                    style={{ ...linkBtn, fontSize: 12, padding: "2px 8px", border: "1px solid var(--catfish-cyan)", borderRadius: 4,
+                    style={{ ...linkBtn, fontSize: 12, padding: "4px 8px", minHeight: 24, border: "1px solid var(--catfish-cyan)", borderRadius: 4,
                              color: "var(--catfish-cyan)" }}>＋ {w}</button>
           ))}
           <button type="button" style={linkBtn} onClick={() => setSuggest([])}>不用</button>
         </div>
       )}
       {remembered.length > 0 && (
-        <div style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ 已记成常用热词: {remembered.join("、")}</div>
+        <div style={{ fontSize: 12, color: "var(--status-ok)" }}><Ico as={CheckCircle} />已记成常用热词: {remembered.join("、")}</div>
       )}
       {/* 11/17: 转写有了自己的一页, 框高跟着窗口走 (原来固定 420, 大窗口下半屏空着); 最少 300 */}
       <div style={{ maxHeight: "max(300px, calc(100vh - 300px))", overflowY: "auto", fontSize: 13, lineHeight: 1.6 }}>
@@ -104,7 +107,7 @@ export default function TranscriptView({ meetingId, transcript, names, colors }:
                         background: isPlaying(i) ? "var(--catfish-bg-cream, rgba(14,95,102,0.12))" : undefined }}>
             <button type="button" aria-label={isPlaying(i) ? `停止第 ${i + 1} 句` : `听第 ${i + 1} 句`} title={isPlaying(i) ? "停" : "听这一句"}
                     onClick={() => void play(i)}
-                    style={{ ...linkBtn, fontSize: 11, padding: "2px 4px", color: isPlaying(i) ? "var(--catfish-cyan)" : "var(--catfish-text-muted)" }}>
+                    style={{ ...linkBtn, fontSize: 11, padding: "4px", color: isPlaying(i) ? "var(--catfish-cyan)" : "var(--catfish-text-muted)" }}>
               {isPlaying(i) ? "■" : "▶"}
             </button>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -115,7 +118,7 @@ export default function TranscriptView({ meetingId, transcript, names, colors }:
                   <textarea aria-label="改这一句" value={draft} rows={2} autoFocus onChange={(e) => setDraft(e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Escape") setEditing(null); }}
                             style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit", fontSize: 13 }} />
-                  <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <Btn kind="ghost" onClick={() => void play(i)}>{isPlaying(i) ? "■ 停" : "▶ 听这句"}</Btn>
                     <Btn kind="primary" disabled={saving} onClick={() => void save(i)}>{saving ? "保存中…" : "保存"}</Btn>
                     <Btn kind="ghost" disabled={saving} onClick={() => setEditing(null)}>取消</Btn>
@@ -127,7 +130,7 @@ export default function TranscriptView({ meetingId, transcript, names, colors }:
                   {seg.text}
                   {seg.orig_text && (
                     <span title={`识别出来的原话: ${seg.orig_text}`}
-                          style={{ marginLeft: 6, fontSize: 10, color: "var(--catfish-cyan)", border: "1px solid var(--catfish-cyan)",
+                          style={{ marginLeft: 8, fontSize: 11, color: "var(--catfish-cyan)", border: "1px solid var(--catfish-cyan)",
                                    borderRadius: 3, padding: "0 4px", whiteSpace: "nowrap" }}>改过</span>
                   )}
                 </>

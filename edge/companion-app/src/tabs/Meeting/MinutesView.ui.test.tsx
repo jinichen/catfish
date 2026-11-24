@@ -146,10 +146,10 @@ describe("让小鲶改纪要 (11/17)", () => {
     await mount();
     expect(screen.getByText("比如")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("让小鲶改纪要"), { target: { value: "说话人2 是王总" } });
-    await act(async () => { fireEvent.click(screen.getByText("🐟 让小鲶改")); });
+    await act(async () => { fireEvent.click(screen.getByText("让小鲶改")); });
     expect(api.revise).toHaveBeenCalledWith("mtg_1", "说话人2 是王总", null, []);
     expect(screen.getByText(/小鲶改了: 待办/)).toBeTruthy();
-    expect(screen.getByText("🐟 待办负责人改成了王总, 补了一条。")).toBeTruthy();
+    expect(screen.getByText("待办负责人改成了王总, 补了一条。")).toBeTruthy();
     const row = screen.getByText(/· 交材料 \(王总\)/);
     expect(row.textContent).toBe("· 交材料 (王总)原来: 说话人2");
     expect(screen.getByText("＋ 约客户")).toBeTruthy();
@@ -158,7 +158,7 @@ describe("让小鲶改纪要 (11/17)", () => {
     expect(api.save).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(screen.getByText("采用")); });
     expect(api.save).toHaveBeenCalledWith("mtg_1", proposal.fields, null);
-    expect(screen.getByText("✓ 已采用小鲶改的版本")).toBeTruthy();
+    expect(screen.getByText("已采用小鲶改的版本")).toBeTruthy();
   });
 
   it("接着说: 在上一版提议上改, 带上之前的要求; 「不要」原样不动", async () => {
@@ -185,7 +185,7 @@ describe("让小鲶改纪要 (11/17)", () => {
     const box = screen.getByLabelText("让小鲶改纪要");
     fireEvent.change(box, { target: { value: "补上合同履约" } });
     await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
-    expect(screen.getByText("🐟 转写里没找到合同履约的讨论")).toBeTruthy();
+    expect(screen.getByText("转写里没找到合同履约的讨论")).toBeTruthy();
     expect(screen.queryByText(/小鲶改了/)).toBeNull();
     fireEvent.change(box, { target: { value: "再试" } });
     await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
@@ -248,7 +248,7 @@ describe("让小鲶改: 切走再回来不丢 (11/18)", () => {
     cleanup();                                   // 切到工作台: 会议页整个卸载
     await mount();                               // 切回来
     expect(screen.getByText(/小鲶改了: 待办/)).toBeTruthy();
-    expect(screen.getByText("🐟 负责人换成王总了。")).toBeTruthy();
+    expect(screen.getByText("负责人换成王总了。")).toBeTruthy();
   });
 
   it("上网查过 (11/18): 网页单独列出来 (标题 + 网站), 本机资料照旧一行", async () => {
@@ -307,10 +307,10 @@ describe("记住这几条 (11/18)", () => {
     api.minutes = { json: { ...base, decisions: ["一个月内交整改方案"] }, markdown: "# 周会", path: "/x" };
     cards.mockResolvedValueOnce({ added: 3, skipped: 0 }).mockResolvedValueOnce({ added: 0, skipped: 3 });
     await mount();
-    await act(async () => { fireEvent.click(screen.getByText("🔁 记住这几条")); });
+    await act(async () => { fireEvent.click(screen.getByText("记住这几条")); });
     expect(cards).toHaveBeenCalledWith("mtg_1");
     expect(screen.getByText(/做了 3 张复习卡, 明天开始在「学习 → 复习」里复习/)).toBeTruthy();
-    await act(async () => { fireEvent.click(screen.getByText("🔁 记住这几条")); });
+    await act(async () => { fireEvent.click(screen.getByText("记住这几条")); });
     expect(screen.getByText(/这些要点已经有复习卡了/)).toBeTruthy();
   });
 });

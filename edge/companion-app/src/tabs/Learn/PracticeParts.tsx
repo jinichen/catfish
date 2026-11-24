@@ -12,7 +12,7 @@ import { ghostBtn, hardBreaks, primaryBtn } from "./QuestionCard";
 type Ev<K extends LearnEvent["kind"]> = Extract<LearnEvent, { kind: K }>;
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
 const box: CSSProperties = {
-  border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "12px 14px",
+  border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "12px 16px",
   display: "flex", flexDirection: "column", gap: 8, background: "var(--catfish-bg-elevated)",
 };
 
@@ -30,7 +30,7 @@ const RUNG: Record<string, string> = { R1: "第 1 级 · 指方向", R2: "第 2 
 export function ProblemView({ ev, conclude, titles }: { ev: Ev<"problem">; conclude?: Ev<"conclude">; titles: Map<string, string> }) {
   return (
     <div style={{ ...box, borderColor: conclude ? "var(--catfish-border)" : "var(--catfish-cyan)" }}>
-      <span style={muted}>✍️ 练习 · {MODE_LABEL[ev.p.mode] ?? ev.p.mode}{conclude ? ` · 考的是: ${ev.p.targets.map((t) => titles.get(t) ?? t).join("、")}` : ""}</span>
+      <span style={muted}>练习 · {MODE_LABEL[ev.p.mode] ?? ev.p.mode}{conclude ? ` · 考的是: ${ev.p.targets.map((t) => titles.get(t) ?? t).join("、")}` : ""}</span>
       <Markdown text={hardBreaks(ev.p.statement)} />
       {conclude && (
         <>
@@ -63,17 +63,17 @@ export function PracticeEvent({ ev }: { ev: LearnEvent }) {
       return <div style={{ ...muted, alignSelf: "flex-end" }}>要了一个提示</div>;
     case "hint":
       return (
-        <div style={{ fontSize: 13, borderLeft: "3px solid var(--status-warn)", padding: "4px 10px" }}>
-          <span style={muted}>💡 提示 ({RUNG[ev.rung] ?? ev.rung})</span>
+        <div style={{ fontSize: 13, borderLeft: "3px solid var(--status-warn)", padding: "4px 12px" }}>
+          <span style={muted}>提示 ({RUNG[ev.rung] ?? ev.rung})</span>
           <Markdown text={ev.text} />
         </div>
       );
     case "give_up":
       return <div style={{ ...muted, alignSelf: "flex-end" }}>这题不做了</div>;
     case "cards":
-      return <div style={muted}>🔁 做了 {ev.added} 张复习卡{ev.skipped ? ` (${ev.skipped} 张跟已有的重复, 没加)` : ""}, 明天开始复习。</div>;
+      return <div style={muted}>做了 {ev.added} 张复习卡{ev.skipped ? ` (${ev.skipped} 张跟已有的重复, 没加)` : ""}, 明天开始复习。</div>;
     case "graph":
-      return <div style={muted}>📚 沉淀了 {ev.added} 条新要点{ev.linked ? `, ${ev.linked} 条跟以前学过的是同一条 (合并了)` : ""}{ev.chains ? `, ${ev.chains} 条推理` : ""}。</div>;
+      return <div style={muted}>沉淀了 {ev.added} 条新要点{ev.linked ? `, ${ev.linked} 条跟以前学过的是同一条 (合并了)` : ""}{ev.chains ? `, ${ev.chains} 条推理` : ""}。</div>;
     default:
       return null;
   }

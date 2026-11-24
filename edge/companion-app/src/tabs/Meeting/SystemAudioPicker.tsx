@@ -78,8 +78,8 @@ export default function SystemAudioPicker({
 
   const pickable = src?.mode === "tap" || src?.mode === "sck";
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <label style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 13, cursor: "pointer" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, cursor: "pointer" }}>
         <input type="checkbox" checked={on} onChange={(e) => toggle(e.target.checked)} style={{ marginTop: 2 }} />
         <span>
           线上会议 (腾讯会议 / AONE 等): 同时录对方的声音
@@ -87,14 +87,14 @@ export default function SystemAudioPicker({
         </span>
       </label>
       {on && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingLeft: 22 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 22 }}>
           {loading && !src && <div style={muted}>正在看哪些程序在用声音…</div>}
           {error && <div style={{ ...muted, color: "var(--status-error, #dc2626)" }}>{error}</div>}
           {src && !usable && <div style={{ ...muted, color: "var(--status-error, #dc2626)" }}>{src.hint}</div>}
           {pickable && src && (
             <>
               <div style={muted}>录哪个程序的声音</div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <select style={{ ...inputStyle, flex: 1, minWidth: 0 }} value={key} onChange={(e) => setKey(e.target.value)}>
                   {src.apps.map((a) => (
                     <option key={sysAppKey(a)} value={sysAppKey(a)}>
@@ -117,7 +117,7 @@ export default function SystemAudioPicker({
           )}
           {src?.mode === "loopback" && <div style={muted}>{src.hint}</div>}
           {usable && (
-            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, color: "var(--catfish-text-muted)" }}>
+            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: "var(--catfish-text-muted)" }}>
               这台电脑前说话的人数 (含自己)
               <input
                 type="number"

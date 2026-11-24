@@ -10,6 +10,8 @@
  */
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 
+import { Warning } from "@phosphor-icons/react";
+
 import { Markdown } from "../../lib/markdown";
 import {
   meetingMinutesRevise, meetingMinutesSave, type ActionItem, type Minutes, type MinutesFields,
@@ -17,15 +19,16 @@ import {
 import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import { emptyState, loadRevise, minutesSig, saveRevise, subscribeRevise, type ReviseState } from "./reviseStore";
 import { AskSources } from "../../components/AskSources";
+import { Ico } from "../../components/icons";
 import { diffItems, diffList, itemText, markdownHunks, reviseSuggestions, type DiffRow } from "./reviseDiff";
 
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
 const chip: CSSProperties = {
   border: "1px solid var(--catfish-border)", background: "transparent", color: "var(--catfish-text-muted)",
-  borderRadius: 999, padding: "2px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+  borderRadius: 999, padding: "4px 12px", minHeight: 24, fontSize: 12, cursor: "pointer", fontFamily: "inherit",
 };
 const rowStyle = (kind: DiffRow<unknown>["kind"]): CSSProperties => ({
-  lineHeight: 1.7, padding: "0 6px", borderRadius: 4,
+  lineHeight: 1.7, padding: "0 8px", borderRadius: 4,
   ...(kind === "added" || kind === "changed" ? { background: "var(--catfish-cyan-tint)", boxShadow: "inset 2px 0 0 var(--catfish-cyan)" } : null),
   ...(kind === "removed" ? { color: "var(--catfish-text-muted)", textDecoration: "line-through" } : null),
 });
@@ -121,7 +124,7 @@ export function ReviseComposer({ api, minutes, names, disabled }: {
   const last = api.turns[api.turns.length - 1];
   const tips = reviseSuggestions(minutes.json, minutes.markdown, names);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: "var(--radius-sm)",
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px", borderRadius: "var(--radius-sm)",
                   border: "1px solid var(--catfish-border)", background: "var(--catfish-bg)" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
         <textarea
@@ -140,12 +143,12 @@ export function ReviseComposer({ api, minutes, names, disabled }: {
           placeholder={api.proposal ? "还要怎么改? 小鲶在这一版上接着改" : "让小鲶改纪要: 说一句要怎么改, 小鲶对照转写改好给你过目"}
           style={{ ...inputStyle, flex: 1, resize: "none", fontSize: 13, lineHeight: 1.6 }}
         />
-        <Btn kind="primary" disabled={disabled || api.busy || !api.draft.trim()} onClick={() => void api.send()}>
-          {api.busy ? "小鲶在改…" : "🐟 让小鲶改"}
+        <Btn kind="ghost" disabled={disabled || api.busy || !api.draft.trim()} onClick={() => void api.send()}>
+          {api.busy ? "小鲶在改…" : "让小鲶改"}
         </Btn>
       </div>
       {!api.proposal && !api.busy && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
           <span style={muted}>比如</span>
           {tips.map((t) => (
             <button key={t} type="button" style={chip} disabled={disabled} onClick={() => api.setDraft(t)}>{t}</button>
@@ -156,8 +159,8 @@ export function ReviseComposer({ api, minutes, names, disabled }: {
       {last && !api.busy && (
         <div style={{ fontSize: 13, lineHeight: 1.6 }}>
           <span style={muted}>你: {last.instruction}</span>
-          <div>🐟 {last.reply}</div>
-          <AskSources sources={last.sources} style={muted} localIcon="🔎 " />
+          <div>{last.reply}</div>
+          <AskSources sources={last.sources} style={muted} />
         </div>
       )}
       {api.error && <ErrorLine>{api.error}</ErrorLine>}
@@ -220,11 +223,11 @@ export function RevisePreview({ api, minutes, markdownView }: { api: ReviseApi; 
   const f = p.fields;
   const items = (f.action_items ?? m.action_items) as ActionItem[];
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", padding: "12px 14px",
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", padding: "12px 16px",
                   border: "1px solid var(--catfish-cyan)", borderRadius: "var(--radius-sm)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <strong style={{ fontSize: 13, flex: 1, minWidth: 160 }}>
-          🐟 小鲶改了: {p.changed_labels.join("、") || "没有改动"}
+          小鲶改了: {p.changed_labels.join("、") || "没有改动"}
           <span style={{ ...muted, fontWeight: 400, marginLeft: 8 }}>还没存, 看过再决定</span>
         </strong>
         <Btn kind="ghost" disabled={api.applying} onClick={api.discard}>不要</Btn>
@@ -241,7 +244,7 @@ export function RevisePreview({ api, minutes, markdownView }: { api: ReviseApi; 
           <div style={muted}>按你说的结构整份重新排了 (标准的「摘要 / 决议 / 待办」格式装不下), 采用后按这份显示。</div>
           {p.shrink && (
             <div style={{ fontSize: 12, color: "var(--status-warn)", lineHeight: 1.6 }}>
-              ⚠ 原来 {p.shrink.before} 条 (决议 / 待办 / 待定问题), 改后只看到 {p.shrink.after} 条 —— 小鲶可能删了内容, 核对过再采用;
+              <Ico as={Warning} />原来 {p.shrink.before} 条 (决议 / 待办 / 待定问题), 改后只看到 {p.shrink.after} 条 —— 小鲶可能删了内容, 核对过再采用;
               换个强一点的模型 (对话页选) 再说一次通常好很多。
             </div>
           )}
