@@ -21,6 +21,8 @@ import { Overlay, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, cardStyle, inputStyle, itemStyle } from "../Collab/roomLinkUi";
 import WorkflowEditor, { type Catalog } from "./WorkflowEditor";
 import { ParamsLine, RunLine, ScheduleDialog, StepChain, askXiaonianPrompt, cronText, localTime, useTwoClick } from "./WorkflowParts";
+import { Bell } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 /** 这个工作流的定时任务 (我们建的任务提示里写着 skill_path="…") */
 function schedulesOf(jobs: CronJob[], skillPath: string): CronJob[] {
@@ -226,10 +228,10 @@ export default function WorkflowsCard() {
   return (
     <div style={{ ...cardStyle, height: "auto" }}>
       <div>
-        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>🔗 工作流</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>工作流</h3>
         <div style={{ ...muted, marginTop: 4 }}>
           把反复做的事串成一条, 以后一句话或定时整条跑完。跟小鲶说「每周一帮我把带"资质"的邮件理一下, 建个任务」它就搭好草稿。
-          带 🔔 的步骤是对外的 (发收集表、推送微信…), 跑到时会停下, 在页面顶上点确认才发。
+          带 <Ico as={Bell} size={12} gap={0} title="对外" /> 的步骤是对外的 (发收集表、推送微信…), 跑到时会停下, 在页面顶上点确认才发。
         </div>
       </div>
       {error && <ErrorLine>{error}</ErrorLine>}
@@ -249,8 +251,8 @@ export default function WorkflowsCard() {
             {w.chain?.length > 0 && <StepChain chain={w.chain} />}
             <ParamsLine params={w.params ?? []} />
             <span style={muted}>
-              {sched.length > 0 ? `⏰ ${sched.map((j) => cronText(j.schedule?.expr) || j.schedule_display || "已定时").join("、")}` : "没有定时"}
-              {w.has_outward ? (w.auto_confirm_outward ? " · 🔔 对外步骤直接发" : " · 🔔 对外步骤会停下等你确认") : ""}
+              {sched.length > 0 ? `${sched.map((j) => cronText(j.schedule?.expr) || j.schedule_display || "已定时").join("、")}` : "没有定时"}
+              {w.has_outward ? (w.auto_confirm_outward ? " · 对外步骤直接发" : " · 对外步骤会停下等你确认") : ""}
             </span>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <Btn kind="primary" disabled={!!busy} onClick={() => void (async () => {
@@ -269,7 +271,7 @@ export default function WorkflowsCard() {
               })()}>{busy === w.skill_path ? "跑着…" : "▶ 运行"}</Btn>
               <Btn kind="ghost" disabled={!!busy} onClick={() => setOpen({ kind: "workflow", skillPath: w.skill_path, title: w.title })}>编辑</Btn>
               {sched.length === 0 ? (
-                <Btn kind="ghost" disabled={!!busy} onClick={() => setScheduling(w)}>⏰ 定时</Btn>
+                <Btn kind="ghost" disabled={!!busy} onClick={() => setScheduling(w)}>定时</Btn>
               ) : (
                 <Btn kind="ghost" disabled={!!busy} onClick={() => void (async () => {
                   try {

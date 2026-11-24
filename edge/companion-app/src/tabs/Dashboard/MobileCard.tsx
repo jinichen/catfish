@@ -64,14 +64,14 @@ export default function MobileCard() {
   };
 
   if (!status) {
-    return <div style={{ padding: 12, fontSize: 12 }}>{error ?? "读取中…"}</div>;
+    return <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)", fontSize: 12 }}>{error ?? "读取中…"}</div>;
   }
 
   const limit = status.maxPhones;
   return (
-    <div style={{ padding: 12, fontSize: 12, display: "grid", gap: 12 }}>
+    <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)", fontSize: 12, display: "grid", gap: 12 }}>
       <div>
-        <h3 style={{ margin: 0, fontSize: 15 }}>📱 手机</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>手机</h3>
         <p style={{ ...muted, margin: "4px 0 0" }}>
           在手机上跟这台电脑上的小鲶对话、批准小鲶要做的事 (只能单次批准)、看早安简报。
           内容加密后经中央转发, 中央看不到、不保存; 电脑关机或休眠时手机连不上。

@@ -193,7 +193,7 @@ export default function OutboundLogCard() {
           gap: 12,
         }}
       >
-        <h3 style={{ margin: 0, fontSize: 15 }}>📊 数据外发记录</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>数据外发记录</h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           ~/.catfish/outbound_log.db · sqlite3 也能查
         </span>
@@ -532,6 +532,8 @@ const btnPrimary: React.CSSProperties = {
   background: "var(--catfish-cyan)",
   color: "white",
   cursor: "pointer",
+  whiteSpace: "nowrap",
+  flex: "none",
 };
 
 const btnSecondary: React.CSSProperties = {
@@ -542,6 +544,8 @@ const btnSecondary: React.CSSProperties = {
   background: "transparent",
   color: "var(--catfish-text)",
   cursor: "pointer",
+  whiteSpace: "nowrap",
+  flex: "none",
 };
 
 const thStyle: React.CSSProperties = {

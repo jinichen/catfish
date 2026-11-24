@@ -49,7 +49,7 @@ export default function QuotaCard() {
         padding: "var(--space-4)",
       }}
     >
-      <h3 style={{ marginBottom: "var(--space-3)" }}>本月配额</h3>
+      <h3 style={{ marginBottom: "var(--space-3)", fontSize: 15, fontWeight: 600 }}>本月配额</h3>
 
       {loading && !data && <SkeletonRow />}
       {error && !data && (

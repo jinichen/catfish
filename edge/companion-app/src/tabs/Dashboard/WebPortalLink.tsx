@@ -31,6 +31,7 @@ import { classifyProbeFailure } from "../../lib/probeFailure";
 import { ServerCertificateImport } from "./ServerCertificateImport";
 import { useMe } from "../../hooks/useMe";
 import { useUIStore } from "../../store/ui";
+import { ArrowUpRight, Globe } from "@phosphor-icons/react";
 
 /** BL-ARCH2 fix1 (5/10): Tauri webview 默认吞 `<a target="_blank">`, 必须程序化
  * 调 `@tauri-apps/plugin-shell` 的 `open()` 才能打开系统默认浏览器.
@@ -126,13 +127,13 @@ interface PortalLink {
 const PORTAL_LINKS: PortalLink[] = [
   {
     path: "/market",
-    label: "📦 资源市场",
+    label: "资源市场",
     desc: "Skills (技能脚本) + MCP (连接器) 合并入口, 全公司共享",
     show: () => true,
   },
   {
     path: "/admin",
-    label: "⚙️ 管理控制台",
+    label: "管理控制台",
     // manager 进去落在「我管的部门」, admin+ 落在「今日概况」——
     // web 的 /admin index 按角色分流, 这里不用分两个入口。
     desc: "部门 / 审计 / 模型 / 配额 / 用户 / 系统状态",
@@ -189,7 +190,7 @@ export default function WebPortalLink() {
         // 「服务器配置」「资源市场」跟头部文字叠在一起。橙色提示保留, 但先垫一层
         // 不透明底色, 再把橙色叠在上面。
         background: isOffline
-          ? "linear-gradient(rgba(245, 158, 11, 0.08), rgba(245, 158, 11, 0.08)), var(--catfish-bg-elevated)"
+          ? "color-mix(in srgb, rgb(245, 158, 11) 8%, var(--catfish-bg-elevated))"
           : "var(--catfish-bg-elevated)",
         // toolbar 风 — 只 borderBottom (砍 borderRadius + 四向 border)
         borderBottom: `1px solid ${isOffline ? "rgba(245, 158, 11, 0.4)" : "var(--catfish-border)"}`,
@@ -209,7 +210,7 @@ export default function WebPortalLink() {
           flexWrap: "wrap",
         }}
       >
-        <span style={{ fontSize: 16 }}>🌐</span>
+        <Globe size={16} aria-hidden="true" style={{ flex: "none" }} />
         <strong style={{ fontSize: 13 }}>中央门户</strong>
         <StatusDot status={status} />
         <span
@@ -289,7 +290,7 @@ export default function WebPortalLink() {
               }
             >
               {l.label}
-              <span style={{ opacity: 0.5, fontSize: 10 }}>↗</span>
+              <ArrowUpRight size={12} aria-hidden="true" style={{ opacity: 0.5 }} />
             </a>
           );
         })}

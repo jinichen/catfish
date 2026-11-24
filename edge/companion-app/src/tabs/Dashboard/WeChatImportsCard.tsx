@@ -85,7 +85,7 @@ export default function WeChatImportsCard() {
   return (
     <section style={cardStyle}>
       <div style={rowStyle}>
-        <h3 style={{ margin: 0 }}>导入的微信聊天记录</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>导入的微信聊天记录</h3>
         {library && status?.authorized && <span style={okStyle}>已授权</span>}
         {library && status?.requiresReauthorization && <span style={warnStyle}>模型已更换</span>}
       </div>

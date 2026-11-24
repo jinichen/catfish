@@ -46,7 +46,7 @@ export default function SalesTemplateCard() {
 
   return (
     <div style={card}>
-      <h3 style={{ margin: 0 }}>销售模板</h3>
+      <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>销售模板</h3>
       <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
         客户的阶段, 以及每个阶段客户多少天没来消息算「冷了」(0 = 这个阶段不提醒, 比如成交 / 输单)。小鲶建客户、改阶段和早安「客户跟进」都按这里来。
       </div>

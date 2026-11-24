@@ -93,7 +93,7 @@ export default function WeatherChip({ weather, onChange }: { weather: WeatherCac
   if (weather?.error) {
     return (
       <button type="button" onClick={() => void open()} title={weather.error} style={{ ...linkBtn, fontSize: 11, opacity: 0.8 }}>
-        🌐 天气不可用 · 设城市
+        天气不可用 · 设城市
       </button>
     );
   }

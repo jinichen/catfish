@@ -16,6 +16,8 @@ import { fetchToolPerfSummary, type ToolPerfSummary } from "../../../lib/tool_pe
 // P3.5.59 Phase 2 (6/22 鸿波 catch "把中央端完成"): 中央 gateway 拿 LLM perf
 // (走 gateway_audit 表 latency 分位). dev 模式 gateway 在本机也工作 (JSONL fallback).
 import { fetchMyLlmPerf, type RemoteLlmPerfSummary } from "../../../lib/me";
+import { Globe, LockSimple } from "@phosphor-icons/react";
+import { Ico } from "../../../components/icons";
 
 const POLL_MS = 30_000;
 const DEFAULT_WINDOW_HOURS = 24;
@@ -101,7 +103,7 @@ export default function PerfCard() {
   }, [windowHours]);
 
   return (
-    <div style={{ fontSize: 13, color: "var(--catfish-text)" }}>
+    <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)", fontSize: 13, color: "var(--catfish-text)" }}>
       {/* 顶部时间窗切换 */}
       <div
         style={{
@@ -157,11 +159,11 @@ export default function PerfCard() {
             gap: 8,
           }}
         >
-          🤖 LLM 调用性能
+          LLM 调用性能
           {llmPerf && (
             <span
               style={{
-                fontSize: 10,
+                fontSize: 11,
                 padding: "1px 6px",
                 borderRadius: 3,
                 background: llmPerf.source === "pg"
@@ -179,13 +181,13 @@ export default function PerfCard() {
                     : "无数据 (gateway 还没记录或时间窗内空)"
               }
             >
-              {llmPerf.source === "pg" ? "🏢 中央 PG" : llmPerf.source === "jsonl" ? "📄 中央 JSONL" : "无数据"}
+              {llmPerf.source === "pg" ? "中央 PG" : llmPerf.source === "jsonl" ? "中央 JSONL" : "无数据"}
             </span>
           )}
           {!llmPerf && localSummary && (
             <span
               style={{
-                fontSize: 10,
+                fontSize: 11,
                 padding: "1px 6px",
                 borderRadius: 3,
                 background: "rgba(168, 162, 158, 0.15)",
@@ -193,7 +195,7 @@ export default function PerfCard() {
               }}
               title="本机 audit.rs 读 ~/.catfish/gateway_audit.jsonl (gateway 在本机 dev 时)"
             >
-              💻 本机 fallback
+              本机 fallback
             </span>
           )}
         </div>
@@ -275,7 +277,7 @@ export default function PerfCard() {
                       }}
                       title={isPrivate ? "私有 (内网, 数据不出端)" : "公网"}
                     >
-                      {isPrivate ? "🔒" : "🌐"} {m.model} ({m.count} ·{" "}
+                      <Ico as={isPrivate ? LockSimple : Globe} size={12} />{m.model} ({m.count} ·{" "}
                       {formatMs(m.p50_ms)})
                     </span>
                   );
@@ -288,7 +290,7 @@ export default function PerfCard() {
         {/* remote 拿到了但 request_count=0 — 时间窗内没数据 */}
         {llmPerf && llmPerf.request_count === 0 && (
           <div style={{ color: "var(--catfish-text-muted)", fontSize: 12 }}>
-            🐠 此时间窗内你没有 LLM 调用记录 (中央 gateway_audit 表查到 0 条).
+            此时间窗内你没有 LLM 调用记录 (中央 gateway_audit 表查到 0 条).
           </div>
         )}
 
@@ -321,7 +323,7 @@ export default function PerfCard() {
         {/* 双源都空 */}
         {!llmPerf && (!localSummary || localSummary.request_count === 0) && !llmError && (
           <div style={{ color: "var(--catfish-text-muted)", fontSize: 12 }}>
-            🐠 暂无 LLM 调用数据 (中央 + 本机都空; gateway 还没运行过或时间窗内空).
+            暂无 LLM 调用数据 (中央 + 本机都空; gateway 还没运行过或时间窗内空).
           </div>
         )}
       </div>
@@ -336,7 +338,7 @@ export default function PerfCard() {
             fontSize: 13,
           }}
         >
-          🔧 工具调用性能 (tool-bridge audit ·{" "}
+          工具调用性能 (tool-bridge audit ·{" "}
           {windowHours === 0 ? "全 tail" : `${windowHours}h`})
         </div>
         {toolError && (
@@ -346,7 +348,7 @@ export default function PerfCard() {
         )}
         {toolPerf && toolPerf.total_calls === 0 && (
           <div style={{ color: "var(--catfish-text-muted)", fontSize: 12 }}>
-            🐠 此时间窗没工具调用 (tool-bridge 还没跑过 / 全在更早).
+            此时间窗没工具调用 (tool-bridge 还没跑过 / 全在更早).
             {toolPerf.lines_scanned > 0 && (
               <span> (scan {toolPerf.lines_scanned} 行)</span>
             )}
@@ -483,7 +485,7 @@ function StatBox({
     >
       <div
         style={{
-          fontSize: 10,
+          fontSize: 11,
           color: "var(--catfish-text-muted)",
           marginBottom: 2,
         }}

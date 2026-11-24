@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { useAgentStore } from "../../store/agent";
+import { ArrowClockwise } from "@phosphor-icons/react";
 
 interface Revision {
   value: string;
@@ -131,7 +132,7 @@ export default function MemoryHistoryCard() {
         }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 600 }}>
             <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
             {agentName}记的具体信息
           </h3>
@@ -144,6 +145,7 @@ export default function MemoryHistoryCard() {
           type="button"
           onClick={refresh}
           title="刷新"
+          aria-label="刷新"
           style={{
             background: "transparent",
             border: "none",
@@ -153,7 +155,7 @@ export default function MemoryHistoryCard() {
             padding: 4,
           }}
         >
-          ↻
+          <ArrowClockwise size={16} aria-hidden="true" />
         </button>
       </div>
 
@@ -174,12 +176,11 @@ export default function MemoryHistoryCard() {
               style={{
                 fontSize: 12,
                 color: "var(--catfish-text-muted)",
-                fontStyle: "italic",
                 padding: "var(--space-3) 0",
               }}
             >
               还没记任何信息 — 你跟我说&nbsp;
-              <em>"EIS 用 http 不是 https"</em> 这种明确的事实时,
+              "EIS 用 http 不是 https" 这种明确的事实时,
               我会自动记一张便签 · 之后改了我也会保留旧版本, 你随时能看.
             </div>
           ) : (
@@ -352,7 +353,7 @@ function KeyRow({
           <span
             style={{
               color: "var(--catfish-cyan)",
-              fontSize: 10,
+              fontSize: 11,
               flexShrink: 0,
               padding: "1px 6px",
               background: "var(--catfish-cyan-tint)",
@@ -363,7 +364,7 @@ function KeyRow({
             {summary.revision_count} 版
           </span>
         )}
-        <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", flexShrink: 0 }}>
+        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flexShrink: 0 }}>
           {expanded ? "↑" : "↓"}
         </span>
       </div>
@@ -382,8 +383,8 @@ function KeyRow({
         >
           {summary.revisions.map((r, i) => (
             <div key={i} style={{ fontSize: 11, lineHeight: 1.5 }}>
-              <div style={{ color: "var(--catfish-text-muted)", fontSize: 10 }}>
-                {i === 0 ? "🟢 最新" : `第 ${summary.revisions.length - i} 版`}
+              <div style={{ color: "var(--catfish-text-muted)", fontSize: 11 }}>
+                {i === 0 ? "最新" : `第 ${summary.revisions.length - i} 版`}
                 {" · "}
                 {humanTime(r.ts)}
               </div>
@@ -394,7 +395,7 @@ function KeyRow({
                 <div
                   style={{
                     color: "var(--catfish-text-muted)",
-                    fontSize: 10,
+                    fontSize: 11,
                     marginTop: 4,
                     paddingLeft: 8,
                     borderLeft: "2px solid var(--catfish-border)",
@@ -426,7 +427,7 @@ function KeyRow({
                   background: "transparent",
                   border: "1px solid var(--catfish-border)",
                   borderRadius: 4,
-                  fontSize: 10,
+                  fontSize: 11,
                   padding: "2px 6px",
                   color: "var(--catfish-text-muted)",
                   cursor: "pointer",
@@ -447,7 +448,7 @@ function KeyRow({
                     background: "var(--status-err)",
                     border: "none",
                     borderRadius: 4,
-                    fontSize: 10,
+                    fontSize: 11,
                     padding: "2px 6px",
                     color: "white",
                     cursor: busy ? "default" : "pointer",
@@ -467,7 +468,7 @@ function KeyRow({
                     background: "transparent",
                     border: "1px solid var(--catfish-border)",
                     borderRadius: 4,
-                    fontSize: 10,
+                    fontSize: 11,
                     padding: "2px 6px",
                     color: "var(--catfish-text-muted)",
                     cursor: busy ? "default" : "pointer",

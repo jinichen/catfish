@@ -51,6 +51,8 @@ import {
   type InstallResult,
   type RemovedMcp,
 } from "../../lib/tauri";
+import { ArrowCounterClockwise, Warning, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 // P3.3.34 (6/12): zip 装入口从 MySkillsCard 挪到这 — 集中 skill 装入口防割裂.
 //   状态机: idle → installing → done / error → (用户点 dismiss) idle.
@@ -256,10 +258,10 @@ export default function SkillsMcpCard() {
               P3.3.35 (6/12): "已装技能库" → "技能库" — 跟"我的技能"对仗 */}
           <h3
             className="dashboard-skills__title"
-            style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+            style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 15, fontWeight: 600 }}
             title="装好可直接用的 skill — 团队审定 / 内置 / marketplaces 装的 / 装的 zip + URL / 部门 publish. 鲶鱼对话时自动可调."
           >
-            🛠 全部技能和工具服务
+            全部技能和工具服务
           </h3>
         </div>
         <div className="dashboard-skills__top-actions">
@@ -307,7 +309,7 @@ export default function SkillsMcpCard() {
             color: "var(--catfish-text)",
           }}
         >
-          ⏳ 装 {installZip.filename} ...
+          正在装 {installZip.filename} ...
         </div>
       )}
       {installZip.phase === "done" && (
@@ -348,7 +350,7 @@ export default function SkillsMcpCard() {
           </div>
           {installZip.warnings.length > 0 && (
             <div style={{ fontSize: 11, color: "#ca8a04" }}>
-              ⚠ 跳了 {installZip.warnings.length} 个非白名单文件: {installZip.warnings.slice(0, 3).join(" · ")}
+              <Ico as={Warning} />跳了 {installZip.warnings.length} 个非白名单文件: {installZip.warnings.slice(0, 3).join(" · ")}
               {installZip.warnings.length > 3 && ` (+ ${installZip.warnings.length - 3})`}
             </div>
           )}
@@ -369,7 +371,7 @@ export default function SkillsMcpCard() {
             gap: 8,
           }}
         >
-          <span style={{ flex: 1 }}>❌ 装失败: {installZip.message}</span>
+          <span style={{ flex: 1 }}><Ico as={XCircle} />装失败: {installZip.message}</span>
           <button
             type="button"
             onClick={dismissInstallZip}
@@ -646,7 +648,7 @@ export default function SkillsMcpCard() {
       {/* undo toast — 绝对定位 bottom-right, 5s 自消 */}
       {undo && (
         <div className="undo-toast">
-          <span className="undo-toast__icon">↻</span>
+          <span className="undo-toast__icon"><ArrowCounterClockwise size={16} aria-hidden="true" style={{ display: "block" }} /></span>
           <span>
             {undo.kind === "skill" ? "已卸载" : "已移除 MCP"}{" "}
             <code>{undo.label}</code>

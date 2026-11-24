@@ -29,6 +29,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { fetchMe, type MeInfo } from "../../lib/me";
 import WeChatQrLoginModal from "./WeChatQrLoginModal";
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 interface BindingEntry {
   platform: string;
@@ -220,7 +222,7 @@ export default function WeChatBindingCard() {
           flexWrap: "wrap",
         }}
       >
-        <h3 style={{ margin: 0 }}>微信账号绑定</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>微信账号绑定</h3>
         {/* BL-WECHAT-CATFISH-BIND v3 (5/26): 一键扫码绑自己微信. 后端走 hermes
             /api/platforms/wechat/qr_login/start → ilink. 替代 hermes setup CLI. */}
         <button
@@ -229,7 +231,7 @@ export default function WeChatBindingCard() {
           style={btnPrimary(false)}
           title="弹出微信扫码登录"
         >
-          📱 扫码绑微信
+          扫码绑微信
         </button>
         {/* 6/1 鸿波: 删副标题 + 🔄 刷新按钮.
             副标题: 跟按钮重复, "共享记忆/配额池" 反向暗示让员工联想.
@@ -269,7 +271,7 @@ export default function WeChatBindingCard() {
       {!isLoading && !hasPending && !hasApproved && (
         <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
           <p style={{ margin: 0, lineHeight: 1.7 }}>
-            点上面 <strong>📱 扫码绑微信</strong> 按钮, 跟着提示扫一下就好.
+            点上面 <strong>扫码绑微信</strong> 按钮, 跟着提示扫一下就好.
           </p>
         </div>
       )}
@@ -286,7 +288,7 @@ export default function WeChatBindingCard() {
             }}
           >
             <strong style={{ fontSize: 13, color: "var(--status-warn, #c98b00)" }}>
-              🔔 等你审批 ({pending!.length})
+              等你审批 ({pending!.length})
             </strong>
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
               点同意 = 这个人下次发消息能直通鲶鱼; 点拒绝 = 静悄悄不处理
@@ -317,7 +319,7 @@ export default function WeChatBindingCard() {
               fontSize: 13,
             }}
           >
-            <strong>🔗 已接入 ({status!.entries.length})</strong>
+            <strong>已接入 ({status!.entries.length})</strong>
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
               {status!.total_bound} 个绑了真员工 ·{" "}
               {status!.total_approved - status!.total_bound} 个走合成身份 (跟真员工隔离)
@@ -397,8 +399,8 @@ export default function WeChatBindingCard() {
                         </span>
                       ) : (
                         <span style={{ color: "var(--status-warn, #c98b00)" }}>
-                          ⚠ 未绑 · 走合成{" "}
-                          <code style={{ fontSize: 10 }}>
+                          <Ico as={Warning} />未绑 · 走合成{" "}
+                          <code style={{ fontSize: 11 }}>
                             {e.user_id}@im.{e.platform}
                           </code>
                         </span>
@@ -505,7 +507,7 @@ function PendingRow({ p, myEmail, busy, onApprove, onReject }: PendingRowProps) 
         </strong>
         <span
           style={{
-            fontSize: 10,
+            fontSize: 11,
             fontFamily: "monospace",
             color: "var(--catfish-text-muted)",
           }}
@@ -581,7 +583,7 @@ function PendingRow({ p, myEmail, busy, onApprove, onReject }: PendingRowProps) 
             padding: "4px 12px",
           }}
         >
-          {isApproving ? "处理中…" : "✅ 同意接入"}
+          {isApproving ? "处理中…" : "同意接入"}
         </button>
         <button
           type="button"
@@ -593,7 +595,7 @@ function PendingRow({ p, myEmail, busy, onApprove, onReject }: PendingRowProps) 
             color: "var(--status-err, #c93a3a)",
           }}
         >
-          {isRejecting ? "…" : "❌ 拒绝"}
+          {isRejecting ? "…" : "拒绝"}
         </button>
       </div>
     </div>
@@ -620,6 +622,8 @@ function btnGhost(disabled: boolean): React.CSSProperties {
     fontSize: 12,
     opacity: disabled ? 0.6 : 1,
     color: "inherit",
+    whiteSpace: "nowrap",
+    flex: "none",
   };
 }
 
@@ -633,5 +637,7 @@ function btnPrimary(busy: boolean): React.CSSProperties {
     fontSize: 12,
     color: "#fff",
     opacity: busy ? 0.6 : 1,
+    whiteSpace: "nowrap",
+    flex: "none",
   };
 }

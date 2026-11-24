@@ -14,6 +14,8 @@
 
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { CheckCircle, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 interface RevisionView {
   revision_id: string;
@@ -168,7 +170,7 @@ export default function SkillRevisionCard() {
           boxSizing: "border-box",
         }}
       >
-        <h3 style={{ margin: 0, fontSize: "var(--text-md)" }}>🔧 Skill 改进提议</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Skill 改进提议</h3>
         <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginTop: 8 }}>
           {error ?? "加载中..."}
         </div>
@@ -197,7 +199,6 @@ export default function SkillRevisionCard() {
           gap: 8,
         }}
       >
-        <span style={{ fontSize: 14 }}>🔧</span>
         <span>
           <strong style={{ color: "var(--catfish-text)" }}>Skill 改进提议</strong> ·
           {/* P3.5.80 (7/28): 原文把 BL-MM11 / BL-MM12 两个内部编号摆给员工看,
@@ -222,8 +223,8 @@ export default function SkillRevisionCard() {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-3)" }}>
-        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>
-          🔧 Skill 改进提议
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>
+          Skill 改进提议
         </h3>
         <span style={{ fontSize: "var(--text-xs)", color: "var(--catfish-text-muted)" }}>
           {totalAll === 0
@@ -365,7 +366,10 @@ export default function SkillRevisionCard() {
           <div style={{ marginTop: 4 }}>
             {data.recent_resolved.slice(0, 10).map((rev) => (
               <div key={rev.revision_id} style={{ marginBottom: 2 }}>
-                {rev.status === "accepted" ? "✅" : "❌"} {rev.skill_path} v
+                {rev.status === "accepted"
+                  ? <Ico as={CheckCircle} title="已采纳" style={{ color: "var(--status-ok)" }} />
+                  : <Ico as={XCircle} title="已拒绝" style={{ color: "var(--status-err)" }} />}
+                {rev.skill_path} v
                 {rev.current_version} → v{rev.proposed_version} · {formatTsAgo(rev.proposed_ts)}
               </div>
             ))}
@@ -405,7 +409,7 @@ function RevisionCardItem({
             v{rev.current_version} → v{rev.proposed_version}
           </code>
         </span>
-        <span style={{ fontSize: 10, color: "var(--catfish-text-muted)" }}>
+        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           {formatTsAgo(rev.proposed_ts)}
         </span>
       </div>
@@ -417,7 +421,7 @@ function RevisionCardItem({
           </div>
           <div style={{ marginTop: 4 }}>
             <strong>改动</strong>:{" "}
-            <pre style={{ whiteSpace: "pre-wrap", fontSize: 10, margin: 0, fontFamily: "inherit" }}>
+            <pre style={{ whiteSpace: "pre-wrap", fontSize: 11, margin: 0, fontFamily: "inherit" }}>
               {rev.diff_summary}
             </pre>
           </div>
@@ -456,7 +460,7 @@ function RevisionCardItem({
             cursor: busy ? "wait" : "pointer",
           }}
         >
-          ✅ 采纳
+          采纳
         </button>
         <button
           type="button"
@@ -472,7 +476,7 @@ function RevisionCardItem({
             cursor: busy ? "wait" : "pointer",
           }}
         >
-          ❌ 拒绝
+          拒绝
         </button>
       </div>
     </div>

@@ -12,6 +12,8 @@ import {
   type MemoryPendingItem,
   type MemoryPendingOp,
 } from "../../lib/tauri";
+import { PencilSimple, Plus, Trash } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 const REFRESH_MS = 30_000;
 const CLIP = 600; // 精简建议要对着原文看有没有丢信息, 别截太短
@@ -20,19 +22,19 @@ const clip = (s: string) => (s.length > CLIP ? `${s.slice(0, CLIP)}…` : s);
 
 function OpLine({ op }: { op: MemoryPendingOp }) {
   const muted = { color: "var(--catfish-text-muted)" };
-  if (op.action === "add") return <div>➕ 新记一条: {clip(op.content)}</div>;
-  if (op.action === "remove") return <div>🗑 删掉: <span style={muted}>{clip(op.entry)}</span></div>;
+  if (op.action === "add") return <div><Ico as={Plus} />新记一条: {clip(op.content)}</div>;
+  if (op.action === "remove") return <div><Ico as={Trash} />删掉: <span style={muted}>{clip(op.entry)}</span></div>;
   if (op.action === "patch") {
     return (
       <div>
-        ✏️ 改一处: 「<s style={muted}>{clip(op.old_text)}</s>」→「{clip(op.content)}」
+        <Ico as={PencilSimple} />改一处: 「<s style={muted}>{clip(op.old_text)}</s>」→「{clip(op.content)}」
         <div style={{ ...muted, fontSize: 11 }}>所在那条: {clip(op.entry)}</div>
       </div>
     );
   }
   return (
     <div>
-      ✏️ 把 <span style={muted}>{clip(op.entry)}</span>
+      <Ico as={PencilSimple} />把 <span style={muted}>{clip(op.entry)}</span>
       <br />
       改成: {clip(op.content)}
     </div>
@@ -89,7 +91,7 @@ export default function MemoryPendingPanel({ onChanged, nearlyFull, refreshKey =
   if (items.length === 0) {
     return nearlyFull ? (
       <div style={{ fontSize: 11, color: "var(--catfish-orange)", padding: "4px 0" }}>
-        记忆快满了 —— 点右上角「🧹 整理记忆」, 小鲶会提精简 / 合并建议; 也可以删掉用不上的条目。
+        记忆快满了 —— 点右上角「整理记忆」, 小鲶会提精简 / 合并建议; 也可以删掉用不上的条目。
       </div>
     ) : null;
   }
@@ -139,7 +141,7 @@ export default function MemoryPendingPanel({ onChanged, nearlyFull, refreshKey =
           key={it.id}
           style={{ padding: "6px 0", borderTop: "1px dotted var(--catfish-border)", opacity: busy === it.id ? 0.4 : 1 }}
         >
-          <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginBottom: 2 }}>
+          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 2 }}>
             {describeTarget(it.target)}
             {it.created_at ? ` · ${new Date(it.created_at * 1000).toLocaleDateString("zh-CN")}` : ""}
           </div>

@@ -34,6 +34,7 @@ import {
   toolBridgeStart,
   toolBridgeStop,
 } from "../../lib/tauri";
+import { ArrowClockwise } from "@phosphor-icons/react";
 
 // BL-COMPANION-SERVICES-DEMOTE (5/17): gateway 不在 SERVICE_ACTIONS 里了 —
 // 边缘 Companion 无权启停中央服务. 表里只剩 3 个真本地服务.
@@ -261,7 +262,7 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
         {row.id === "gateway" ? (
           <span
             style={{
-              fontSize: 10,
+              fontSize: 11,
               color: "var(--catfish-text-muted)",
               padding: "2px 8px",
               border: "1px dashed var(--catfish-border)",
@@ -288,7 +289,7 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
             title={row.id === "hermes" ? "重启小鲶 (正在进行的对话和定时任务会中断, 约半分钟)" : `重启 ${row.name}`}
             style={rowBtnStyle}
           >
-            {restarting ? "…" : "↻"}
+            {restarting ? "…" : <ArrowClockwise size={14} aria-hidden="true" style={{ display: "block" }} />}
           </button>
         )}
       </div>
@@ -306,7 +307,7 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
       {/* BL-FIX18: why 改 inline 副标题, 不再 native tooltip 出界 */}
       <div
         style={{
-          fontSize: 10,
+          fontSize: 11,
           color: "var(--catfish-text-muted)",
           paddingLeft: 18, // 跟 StatusDot 宽 (8px) + gap (10px) 对齐
           lineHeight: 1.4,

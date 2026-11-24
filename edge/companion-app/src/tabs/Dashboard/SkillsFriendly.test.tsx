@@ -47,11 +47,12 @@ describe("定时", () => {
 });
 
 describe("工作流卡片", () => {
-  it("步骤链: 对外那步带 🔔; 参数一行", () => {
+  it("步骤链: 对外那步带铃铛图标; 参数一行", () => {
     render(<StepChain chain={[{ id: "a", label: "搜邮件", block: "action", outward: false, each: false },
                               { id: "b", label: "推送到我的微信", block: "action", outward: true, each: false }]} />);
     expect(screen.getByText("搜邮件")).toBeTruthy();
-    expect(screen.getByText(/🔔 推送到我的微信/)).toBeTruthy();
+    expect(screen.getByText(/推送到我的微信/).querySelector('[aria-label="对外"]')).toBeTruthy();
+    expect(screen.getByText("搜邮件").querySelector('[aria-label="对外"]')).toBeNull();
     render(<ParamsLine params={[{ key: "kw", label: "搜索关键词", type: "list", default: ["资质", "认证", "审核", "证书"], required: false }]} />);
     expect(screen.getByText(/搜索关键词：资质、认证、审核…/)).toBeTruthy();
   });
@@ -85,7 +86,7 @@ describe("工作流卡片", () => {
   it("跑完了说做成了什么", () => {
     render(<RunLine r={{ ...failed, status: "done", error_human: null, error: null, outcome: "建任务《10/13-10/19 摘要》" }}
                     onResume={() => {}} onAsk={() => {}} />);
-    expect(screen.getByText(/✅ 建任务《10\/13-10\/19 摘要》/)).toBeTruthy();
+    expect(screen.getByText(/^建任务《10\/13-10\/19 摘要》$/)).toBeTruthy();
   });
 });
 
@@ -93,7 +94,7 @@ describe("技能库默认页", () => {
   it("办公场景 + 部门技能用中文名; hermes 自带的不在这里; 技术清单收在高级里", async () => {
     render(<SkillsLibraryCard />);
     await act(async () => {});
-    for (const sc of SCENES) expect(screen.getByText(`${sc.icon} ${sc.title}`)).toBeTruthy();
+    for (const sc of SCENES) expect(screen.getByText(sc.title)).toBeTruthy();
     expect(screen.getByText("登录 EIS 一站式信息门户")).toBeTruthy();
     expect(screen.queryByText("apple-notes")).toBeNull();
     expect(screen.getByText(/部门 \/ 团队给的技能 1 个 · 你教会的 2 个/)).toBeTruthy();
@@ -105,7 +106,7 @@ describe("技能库默认页", () => {
   it("点例句 = 带到工作台发给小鲶", async () => {
     render(<SkillsLibraryCard />);
     await act(async () => {});
-    fireEvent.click(screen.getByRole("button", { name: /💬 登录 EIS$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^登录 EIS$/ }));
     expect(startEmailChat).toHaveBeenCalledWith(expect.stringMatching(/^scene-/), "登录 EIS");
   });
 });

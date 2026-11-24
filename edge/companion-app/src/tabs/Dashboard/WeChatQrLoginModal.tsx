@@ -21,6 +21,7 @@ import QRCode from "qrcode";
 import { wechatQrStart, wechatQrPoll, type QrPollStatus } from "../../lib/wechat_qr";
 import { config } from "../../lib/env";
 import { fetchViaProxy } from "../../lib/http_proxy";
+import { CheckCircle, X } from "@phosphor-icons/react";
 
 // P3.5.201 (P38): Modal 侧不再 invoke Rust hermes_kill. plugin.py P38 已排
 // asyncio 3s 后 SIGUSR1 → hermes drain + exit → launchd 拉起. Modal 只做
@@ -321,7 +322,7 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
             marginBottom: 12,
           }}
         >
-          <h3 style={{ margin: 0, fontSize: 15 }}>📱 微信扫码绑定</h3>
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>微信扫码绑定</h3>
           <button
             type="button"
             onClick={onClose}
@@ -334,9 +335,11 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
               fontSize: 18,
               padding: 0,
               lineHeight: 1,
+              display: "inline-flex",
             }}
+            aria-label="关闭"
           >
-            ✕
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
 
@@ -428,7 +431,7 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
 
         {phase.kind === "confirmed" && (
           <div style={{ textAlign: "center", padding: "30px 0" }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>🎉</div>
+            <CheckCircle size={36} aria-hidden="true" style={{ color: "var(--status-ok)", marginBottom: 10 }} />
             <div style={{ fontSize: 14, marginBottom: 6 }}>微信绑定成功</div>
             <div
               style={{
@@ -458,7 +461,7 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
                   看不到, 删了让 UI 直接 waiting. */}
               {phase.restart.kind === "waiting" && (
                 <span>
-                  ⏳ hermes 后台切换账号中 (通常 10-30 秒)…
+                  hermes 后台切换账号中 (通常 10-30 秒)…
                   <br />
                   <span style={{ opacity: 0.7, fontSize: 11 }}>
                     hermes 优雅 drain in-flight 请求 + launchd 自动拉起. chat
@@ -514,4 +517,5 @@ const btnPrimary: React.CSSProperties = {
   borderRadius: 4,
   cursor: "pointer",
   fontSize: 13,
+  whiteSpace: "nowrap",
 };
