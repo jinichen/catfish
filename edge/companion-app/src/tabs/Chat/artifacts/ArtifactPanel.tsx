@@ -65,7 +65,9 @@ export default function ArtifactPanel({ paths }: { paths: string[] }) {
   useLayoutEffect(() => {
     if (!open) return;
     const main = asideRef.current?.parentElement?.querySelector<HTMLElement>(".chat-workspace__main");
-    if (main) main.style.flex = `0 0 ${main.offsetWidth}px`;
+    // 钉在「右栏还没占位时」对话区的宽度 (= 对话区 + 右栏一共能用的宽度)。不能读 main.offsetWidth:
+    // 这个 effect 重跑时 (开发版会跑两遍) 右栏已经挂上, 读到的是被挤窄后的宽度。
+    if (main) main.style.flex = `0 0 ${measure().total}px`;
     let done = false;
     const release = () => {
       if (done || !main) return;
@@ -80,7 +82,7 @@ export default function ArtifactPanel({ paths }: { paths: string[] }) {
       release();
       void shrinkWindowBack();
     };
-  }, [open]);
+  }, [open, measure]);
   const overlay = space !== null && space.docked < ARTIFACT_MIN_WIDTH;
   const maxWidth = useCallback(() => {
     const m = measure();

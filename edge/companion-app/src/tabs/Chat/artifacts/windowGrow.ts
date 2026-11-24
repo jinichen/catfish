@@ -67,6 +67,7 @@ function serial(job: () => Promise<void>): Promise<void> {
 /** 右侧栏打开: 窗口向右长出 widthCss (逻辑像素) */
 export function growWindowFor(widthCss: number): Promise<void> {
   if (!inTauri()) return Promise.resolve();
+  cancelPendingShrink();
   return serial(async () => {
     if (grown) return;
     const { getCurrentWindow, currentMonitor, PhysicalPosition, PhysicalSize } = await import("@tauri-apps/api/window");
@@ -91,8 +92,36 @@ export function growWindowFor(widthCss: number): Promise<void> {
 }
 
 /** 右侧栏关掉: 缩回打开前的宽度 (和位置) */
+/**
+ * 11/24 鸿波「点了预览, 会先左右晃动后再稳定」: 关 → 马上又开 (切右栏内容、开发版 React 把 effect 跑两遍)
+ * 会让窗口「长 → 缩 → 再长」。缩回去稍等一下再做, 这期间又要长就取消, 窗口不动。
+ */
+const SHRINK_DELAY_MS = 120;
+let shrinkTimer: ReturnType<typeof setTimeout> | null = null;
+let shrinkDone: (() => void) | null = null;
+
+function cancelPendingShrink(): void {
+  if (shrinkTimer === null) return;
+  clearTimeout(shrinkTimer);
+  shrinkTimer = null;
+  shrinkDone?.();
+  shrinkDone = null;
+}
+
 export function shrinkWindowBack(): Promise<void> {
   if (!inTauri()) return Promise.resolve();
+  cancelPendingShrink();
+  return new Promise<void>((resolve) => {
+    shrinkDone = resolve;
+    shrinkTimer = setTimeout(() => {
+      shrinkTimer = null;
+      shrinkDone = null;
+      void shrinkNow().then(resolve);
+    }, SHRINK_DELAY_MS);
+  });
+}
+
+function shrinkNow(): Promise<void> {
   return serial(async () => {
     const g = grown;
     grown = null;
@@ -109,6 +138,7 @@ export function shrinkWindowBack(): Promise<void> {
 
 /** 测试用 */
 export function _resetGrown(): void {
+  cancelPendingShrink();
   grown = null;
   queue = Promise.resolve();
 }
