@@ -96,10 +96,9 @@ export default function FeedbackSummaryCard() {
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
             你给{agentName}的反馈
           </h3>
-          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", paddingLeft: 28 }}>
+          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
             好评 / 不好 / 改 历史 (我会看, 越用越懂你)
           </span>
         </div>

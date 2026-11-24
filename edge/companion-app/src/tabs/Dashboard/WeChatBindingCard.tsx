@@ -378,7 +378,7 @@ export default function WeChatBindingCard() {
                             type="button"
                             onClick={() => void handleSetEmail(e, editEmailValue)}
                             disabled={setEmailBusy || !editEmailValue.trim()}
-                            style={btnPrimary(setEmailBusy)}
+                            style={btnAccent(setEmailBusy)}
                           >
                             ✓
                           </button>
@@ -418,7 +418,7 @@ export default function WeChatBindingCard() {
                               onClick={() => void handleSetEmail(e, me.email)}
                               disabled={setEmailBusy}
                               title={`绑到我自己 (${me.email})`}
-                              style={btnPrimary(setEmailBusy)}
+                              style={btnAccent(setEmailBusy)}
                             >
                               绑到我
                             </button>
@@ -579,7 +579,7 @@ function PendingRow({ p, myEmail, busy, onApprove, onReject }: PendingRowProps) 
             (!bindToMe && !customEmail.trim())
           }
           style={{
-            ...btnPrimary(isApproving),
+            ...btnAccent(isApproving),
             padding: "4px 12px",
           }}
         >
@@ -627,10 +627,16 @@ function btnGhost(disabled: boolean): React.CSSProperties {
   };
 }
 
+/** 逐条的操作 (同意接入 / 改邮箱保存): 青色描边, 不跟卡片主按钮抢 */
+function btnAccent(busy: boolean): React.CSSProperties {
+  return { ...btnPrimary(busy), background: "transparent", color: "var(--catfish-cyan)" };
+}
+
+// 11/24: 原来写的 --catfish-accent 从没定义过, 一直落到兜底的蓝 #2a7fbb —— 改回品牌青
 function btnPrimary(busy: boolean): React.CSSProperties {
   return {
-    background: "var(--catfish-accent, #2a7fbb)",
-    border: "1px solid var(--catfish-accent, #2a7fbb)",
+    background: "var(--catfish-cyan)",
+    border: "1px solid var(--catfish-cyan)",
     borderRadius: 4,
     padding: "2px 8px",
     cursor: busy ? "default" : "pointer",

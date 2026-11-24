@@ -185,7 +185,7 @@ function Buttons({ busy, onYes, onNo, yes }: { busy: boolean; onYes: () => void;
   return (
     <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
       <Btn kind="ghost" disabled={busy} onClick={onNo}>拒绝</Btn>
-      <Btn kind="primary" disabled={busy} onClick={onYes}>{yes}</Btn>
+      <Btn kind="accent" disabled={busy} onClick={onYes}>{yes}</Btn>
     </div>
   );
 }

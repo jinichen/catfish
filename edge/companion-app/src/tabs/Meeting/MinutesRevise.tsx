@@ -231,7 +231,7 @@ export function RevisePreview({ api, minutes, markdownView }: { api: ReviseApi; 
           <span style={{ ...muted, fontWeight: 400, marginLeft: 8 }}>还没存, 看过再决定</span>
         </strong>
         <Btn kind="ghost" disabled={api.applying} onClick={api.discard}>不要</Btn>
-        <Btn kind="primary" disabled={api.applying || api.busy} onClick={() => void api.apply()}>
+        <Btn kind="accent" disabled={api.applying || api.busy} onClick={() => void api.apply()}>
           {api.applying ? "保存中…" : "采用"}
         </Btn>
       </div>

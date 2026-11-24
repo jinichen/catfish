@@ -186,7 +186,7 @@ export function useReviseDetect(roomId: string, onReturned: (text: string) => vo
     <div style={{ ...muted, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 8px", borderRadius: 6,
                   background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))", border: "1px solid var(--catfish-cyan)", color: "inherit" }}>
       <span>{found.file.name} 是《{found.title}》v{found.version} 的修改 —— 交回给 {found.owner_name}?</span>
-      <Btn kind="primary" disabled={busy} onClick={() => void giveBack(Boolean(error?.includes("一点没改"))).then((f) => f && onRemove(f))}>
+      <Btn kind="accent" disabled={busy} onClick={() => void giveBack(Boolean(error?.includes("一点没改"))).then((f) => f && onRemove(f))}>
         {busy ? "交回中…" : "交回"}
       </Btn>
       <Btn kind="ghost" onClick={() => { setFound(null); setError(null); }}>当普通文件发</Btn>

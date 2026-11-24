@@ -212,7 +212,7 @@ function RoomDialog({ meta, body, onClose, onDone }: {
               {tooLong && <span style={{ color: "var(--status-warn)", fontSize: 12 }}>一条群消息最多 {ROOM_TEXT_MAX} 字, 现在 {text.length} 字 —— 删短一点, 全文让大家看附件。</span>}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
                 <Btn kind="ghost" onClick={onClose}>取消</Btn>
-                <Btn kind="primary" disabled={sending || !roomId || !text.trim() || tooLong} onClick={() => void send()}>
+                <Btn kind="accent" disabled={sending || !roomId || !text.trim() || tooLong} onClick={() => void send()}>
                   {sending ? "发送中…" : "发送"}
                 </Btn>
               </div>

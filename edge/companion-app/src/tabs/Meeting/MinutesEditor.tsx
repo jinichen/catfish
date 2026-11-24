@@ -166,7 +166,7 @@ export default function MinutesEditor({ meetingId, title, minutes, markdownView,
           </span>
           {error && <span style={{ flexBasis: "100%" }}><ErrorLine>{error}</ErrorLine></span>}
           <Btn kind="ghost" disabled={saving} onClick={onCancel}>取消</Btn>
-          <Btn kind="primary" disabled={saving || (markdownView && !markdown.trim())} onClick={() => void save()}>
+          <Btn kind="accent" disabled={saving || (markdownView && !markdown.trim())} onClick={() => void save()}>
             {saving ? "保存中…" : "保存"}
           </Btn>
         </div>

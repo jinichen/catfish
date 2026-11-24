@@ -51,8 +51,8 @@ export default function RoomReviseMessage({ m, me, members, roomId, tick, onChan
         <span style={muted}>
           {mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)} · {mine ? "只发给发起人" : "只发给你, 群里其他人看不到"}
         </span>
-        <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
-                      border: "1px dashed var(--catfish-border)", background: "var(--catfish-bg-subtle, rgba(0,0,0,0.03))" }}>
+        <div style={{ maxWidth: "78%", padding: "8px 12px", borderRadius: 12, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                      border: "1px dashed var(--catfish-border)", background: "var(--catfish-bg-subtle)" }}>
           <Ico as={r.unchanged ? Eye : EnvelopeSimple} size={14} />{m.text}
           {m.files?.length ? <RoomFileList roomId={roomId} files={m.files} mine={false} /> : null}
         </div>
@@ -66,8 +66,8 @@ export default function RoomReviseMessage({ m, me, members, roomId, tick, onChan
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 2 }}>
         <span style={muted}>{mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}</span>
-        <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
-                      border: "1px solid var(--status-ok, #059669)", background: "var(--catfish-bg-subtle, rgba(0,0,0,0.03))" }}>
+        <div style={{ maxWidth: "78%", padding: "8px 12px", borderRadius: 12, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                      border: "1px solid var(--status-ok, #059669)", background: "var(--catfish-bg-subtle)" }}>
           {m.text}
           {m.files?.length ? <RoomFileList roomId={roomId} files={m.files} mine={false} tagOf={mergedTag} /> : null}
           <span style={{ display: "flex", gap: 10, marginTop: 4 }}>
@@ -207,9 +207,9 @@ function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onM
           </span>
         ))}
       </span>
-      <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
-                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle, rgba(0,0,0,0.05))", color: mine ? "white" : "inherit",
-                    border: my && (my.state === "pending" || my.state === "editing") && !ended ? "1px solid var(--status-warn, #d97706)" : "1px solid transparent" }}>
+      <div style={{ maxWidth: "78%", padding: "8px 12px", borderRadius: 12, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle)", color: mine ? "white" : "inherit",
+                    border: my && (my.state === "pending" || my.state === "editing") && !ended ? "1px solid color-mix(in srgb, var(--catfish-cyan) 45%, transparent)" : mine ? "1px solid transparent" : "1px solid var(--catfish-border)" }}>
         {m.text}
         {m.files?.length ? <RoomFileList roomId={roomId} files={m.files} mine={mine} /> : null}
       </div>

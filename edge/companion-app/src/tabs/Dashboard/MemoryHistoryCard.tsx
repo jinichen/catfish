@@ -133,11 +133,10 @@ export default function MemoryHistoryCard() {
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 600 }}>
-            <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
             {agentName}记的具体信息
           </h3>
           {/* 5/5 鸿波: 跟"对你的印象"区分清楚, 加副标题 */}
-          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", paddingLeft: 28 }}>
+          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
             你明确告诉我的事实 (像便签贴 · 改了我会留旧版本)
           </span>
         </div>

@@ -5896,3 +5896,13 @@ button {
   font-size: 12px;
   color: var(--catfish-text-muted);
 }
+
+/* 11/24 群聊: 「回复」只在指到那条消息 (或键盘聚焦) 时出现, 不在每条下面常驻 */
+.room-msg__reply {
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.room-msg:hover .room-msg__reply,
+.room-msg__reply:focus-visible {
+  opacity: 1;
+}

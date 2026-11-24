@@ -120,7 +120,7 @@ export default function TranscriptView({ meetingId, transcript, names, colors }:
                             style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit", fontSize: 13 }} />
                   <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <Btn kind="ghost" onClick={() => void play(i)}>{isPlaying(i) ? "■ 停" : "▶ 听这句"}</Btn>
-                    <Btn kind="primary" disabled={saving} onClick={() => void save(i)}>{saving ? "保存中…" : "保存"}</Btn>
+                    <Btn kind="accent" disabled={saving} onClick={() => void save(i)}>{saving ? "保存中…" : "保存"}</Btn>
                     <Btn kind="ghost" disabled={saving} onClick={() => setEditing(null)}>取消</Btn>
                     {seg.orig_text && <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>原话: {seg.orig_text} (清空保存 = 改回原话)</span>}
                   </span>

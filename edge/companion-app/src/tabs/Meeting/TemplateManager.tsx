@@ -172,7 +172,7 @@ export default function TemplateManager({ templates, onChanged, onClose }: Props
                 />
                 <Help title="怎么写?">{PLACEHOLDER_HELP}</Help>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <Btn kind="primary" disabled={busy || !name.trim() || !body.trim()} onClick={() => void saveText()}>
+                  <Btn kind="accent" disabled={busy || !name.trim() || !body.trim()} onClick={() => void saveText()}>
                     {editing ? "保存修改" : "保存模版"}
                   </Btn>
                   {deleteBtn}
@@ -188,7 +188,7 @@ export default function TemplateManager({ templates, onChanged, onClose }: Props
                   把单位现成的纪要表原样传上来, 小鲶认出要填的地方, 生成时只填空, 格式不动。
                 </div>
                 <div>
-                  <Btn kind="primary" disabled={busy} onClick={() => fileInput.current?.click()}>
+                  <Btn kind="accent" disabled={busy} onClick={() => fileInput.current?.click()}>
                     {busy ? "正在读模版…" : "选择 .docx / .xlsx 文件"}
                   </Btn>
                 </div>

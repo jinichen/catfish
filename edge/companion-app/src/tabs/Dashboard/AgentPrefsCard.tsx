@@ -124,7 +124,6 @@ export default function AgentPrefsCard() {
         }}
       >
         <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
-          <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
           {/* BL-E11 后续: 卡标题用员工自定义名, 强化"是你的同事"参与感 */}
           {name}的名字 + 风格
         </h3>

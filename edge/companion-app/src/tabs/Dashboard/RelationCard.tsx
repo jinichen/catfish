@@ -94,7 +94,6 @@ export default function RelationCard() {
         }}
       >
         <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 600 }}>
-          <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
           {agentName}对你的印象
         </h3>
         {/* 6/1 鸿波 ABBB: 副标题删 (自我解释卡标题, 无新信息. 5/5 加是

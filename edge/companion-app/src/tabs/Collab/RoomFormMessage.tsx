@@ -41,9 +41,9 @@ export default function RoomFormMessage({ m, me, members, messages, roomId, onFi
         )}
         {mine && <button type="button" style={link} onClick={() => onWatch(c.form_id)}>看进度</button>}
       </span>
-      <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
-                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle, rgba(0,0,0,0.05))", color: mine ? "white" : "inherit",
-                    border: my && my.state === "waiting" && !closed ? "1px solid var(--status-warn, #d97706)" : "1px solid transparent",
+      <div style={{ maxWidth: "78%", padding: "8px 12px", borderRadius: 12, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle)", color: mine ? "white" : "inherit",
+                    border: my && my.state === "waiting" && !closed ? "1px solid color-mix(in srgb, var(--catfish-cyan) 45%, transparent)" : mine ? "1px solid transparent" : "1px solid var(--catfish-border)",
                     opacity: closed || (my && my.state !== "waiting") ? 0.75 : 1 }}>
         {m.text}
       </div>

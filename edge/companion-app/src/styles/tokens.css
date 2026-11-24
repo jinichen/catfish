@@ -24,6 +24,8 @@
   --catfish-bg: #F3F6F6;          /* 冷白工作区 */
   --catfish-bg-elevated: #FFFFFF;
   --catfish-bg-cream: #E8F1F0;    /* 选中态与轻量强调 */
+  /* 11/24: 浅一档的底 (对方的群聊气泡 / 引用块 / 任务原文)。协同页 20 来处引用它, 以前从没定义, 落到 rgba(0,0,0,.05) —— 暗色下等于没有 */
+  --catfish-bg-subtle: color-mix(in srgb, var(--catfish-text) 5%, var(--catfish-bg-elevated));
   --catfish-border: #DCE5E6;      /* 中性冷灰边框 */
   --catfish-border-strong: #C8D5D6; /* 需要更清晰轮廓时 (控件描边) */
   --catfish-text: #14232A;        /* 主文字 (深青墨, 不用纯黑) */
@@ -110,6 +112,7 @@
     --catfish-bg: #0C1317;          /* 近黑冷青墨 — 主工作区底 */
     --catfish-bg-elevated: #19262D; /* 面板/卡片, 跟主底拉开一整档 */
     --catfish-bg-cream: #24343C;    /* 深模下"米色卡"换成深青卡 */
+    --catfish-bg-subtle: color-mix(in srgb, var(--catfish-text) 7%, var(--catfish-bg-elevated));
     --catfish-border: #2B3E47;
     --catfish-border-strong: #3B5058;
     --catfish-text: #ECEAE2;        /* 暖米色文字, 不用纯白 */

@@ -255,7 +255,7 @@ export default function WorkflowsCard() {
               {w.has_outward ? (w.auto_confirm_outward ? " · 对外步骤直接发" : " · 对外步骤会停下等你确认") : ""}
             </span>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Btn kind="primary" disabled={!!busy} onClick={() => void (async () => {
+              <Btn kind="accent" disabled={!!busy} onClick={() => void (async () => {
                 setBusy(w.skill_path);
                 setNote(`正在跑「${w.title}」…`);
                 try {

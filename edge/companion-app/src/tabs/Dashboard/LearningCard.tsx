@@ -77,7 +77,6 @@ export default function LearningCard() {
       >
         {/* 五一 sprint 5/3 BL-D11: 占位 🐟 → 小尺寸正式头像 */}
         <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
-          <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
           {agentName}今天学到的
         </h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>

@@ -86,7 +86,8 @@ export function waitingNotice(waiting: RoomMember[]): string {
 
 /** 群列表里最后一条的预览: 任务状态 / 自动转发的文字里已经有名字了 */
 export function lastPreview(last: { name: string; text: string; kind?: string }): string {
-  return last.kind === "status" || last.kind === "auto" || last.kind === "deadline" || last.kind === "form_status" || last.kind === "revise_status" ? last.text : `${last.name}: ${last.text}`;
+  const text = last.text.replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, ""); // 「🐟 小鲶: …」列表里不显示开头的 emoji
+  return last.kind === "status" || last.kind === "auto" || last.kind === "deadline" || last.kind === "form_status" || last.kind === "revise_status" ? text : `${last.name}: ${text}`;
 }
 
 /** 截止 / 时间写短: 「2026-11-06」→「11/6」,「2026-11-06T15:00」→「11/6 15:00」(今年以外带年份) */
@@ -711,16 +712,18 @@ function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged, onRe
     return <span style={oneLine} title={m.text}><Ico as={icon} size={12} />{m.text} · {timeLabel(m.at)}</span>;
   }
   const atMe = !mine && (m.mentions ?? []).includes(me);
+  // 11/24: 对方气泡 = 浅底 + 发丝边; @我 的不再整圈橙框, 边框换青 + 名字旁「提到你」; 「回复」悬停才出 (.room-msg CSS)
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 2 }}>
+    <div className="room-msg" style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 4 }}>
       <span style={muted}>
         {mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}
+        {atMe && <span style={{ marginLeft: 6, color: "var(--catfish-cyan)" }}>提到你</span>}
         {m.plain && <span title="对方还是老版本, 这条没加密: 投递途中中央看得到原文" style={{ marginLeft: 6, color: "var(--status-warn, #d97706)" }}>未加密</span>}
       </span>
-      <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
-                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle, rgba(0,0,0,0.05))",
+      <div style={{ maxWidth: "78%", padding: "8px 12px", borderRadius: 12, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle)",
                     color: mine ? "white" : "inherit",
-                    border: atMe ? "1px solid var(--status-warn, #d97706)" : "1px solid transparent" }}>
+                    border: mine ? "1px solid transparent" : `1px solid ${atMe ? "color-mix(in srgb, var(--catfish-cyan) 45%, transparent)" : "var(--catfish-border)"}` }}>
         {quoted && (
           <div style={{ fontSize: 11, opacity: 0.8, borderLeft: "2px solid currentColor", paddingLeft: 6, marginBottom: 4 }}>
             {labelOf(members, quoted.from)}: {quoted.text.slice(0, 80)}
@@ -733,7 +736,7 @@ function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged, onRe
       {delivery}
       <span style={{ display: "flex", gap: 8 }}>
         {onReply && (
-          <button type="button" onClick={onReply}
+          <button type="button" onClick={onReply} className="room-msg__reply"
                   style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: "var(--catfish-text-muted)", padding: 0 }}>
             回复
           </button>
@@ -780,9 +783,9 @@ function TaskMessage({ m, me, members, messages, busy, local: rec, onAccept, onW
         {mine && <button type="button" style={link} onClick={onWatch}>看结果</button>}
         {mine && onSummary && <button type="button" style={link} onClick={onSummary}>汇总发到群里</button>}
       </span>
-      <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
-                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle, rgba(0,0,0,0.05))", color: mine ? "white" : "inherit",
-                    border: myState && !["done", "declined", "quit"].includes(myState) ? "1px solid var(--status-warn, #d97706)" : "1px solid transparent",
+      <div style={{ maxWidth: "78%", padding: "8px 12px", borderRadius: 12, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    background: mine ? "var(--catfish-cyan)" : "var(--catfish-bg-subtle)", color: mine ? "white" : "inherit",
+                    border: mine ? "1px solid transparent" : `1px solid ${myState && !["done", "declined", "quit"].includes(myState) ? "color-mix(in srgb, var(--catfish-cyan) 45%, transparent)" : "var(--catfish-border)"}`,
                     opacity: myState === "done" || myState === "declined" ? 0.75 : 1 }}>
         {m.text}
       </div>

@@ -84,12 +84,14 @@ export function Btn({
   onClick,
   children,
 }: {
-  kind: "primary" | "ghost";
+  /** accent = 青色描边 (11/24: 逐条的「同意 / 放行」等, 一屏可能好几个, 不用实色) */
+  kind: "primary" | "accent" | "ghost";
   disabled?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
   const primary = kind === "primary";
+  const accent = kind === "accent";
   return (
     <button
       type="button"
@@ -105,8 +107,8 @@ export function Btn({
         cursor: disabled ? "default" : "pointer",
         opacity: disabled ? 0.6 : 1,
         background: primary ? "var(--catfish-cyan)" : "transparent",
-        color: primary ? "white" : "var(--catfish-text)",
-        border: primary ? "none" : "1px solid var(--catfish-border)",
+        color: primary ? "white" : accent ? "var(--catfish-cyan)" : "var(--catfish-text)",
+        border: primary ? "none" : accent ? "1px solid var(--catfish-cyan)" : "1px solid var(--catfish-border)",
       }}
     >
       {children}
