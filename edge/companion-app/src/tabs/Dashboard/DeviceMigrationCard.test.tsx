@@ -25,13 +25,13 @@ describe("DeviceMigrationCard", () => {
     render(<DeviceMigrationCard />);
     expect(screen.getByText("这台电脑是…")).toBeTruthy();
     expect(screen.queryByText("📷 扫新电脑上的二维码")).toBeNull();
-    fireEvent.click(screen.getByText("📤 旧电脑"));
+    fireEvent.click(screen.getByText("旧电脑"));
     expect(screen.getByText("📷 扫新电脑上的二维码")).toBeTruthy();
     expect(screen.queryByText("从旧电脑直传 (推荐)")).toBeNull();
     fireEvent.click(screen.getByText(/导出成文件/));
     expect(screen.getByText("正在清点本机数据…")).toBeTruthy();
     fireEvent.click(screen.getByText("← 不是这台"));
-    fireEvent.click(screen.getByText("📥 新电脑"));
+    fireEvent.click(screen.getByText("新电脑"));
     expect(screen.getByText("从旧电脑直传 (推荐)")).toBeTruthy();
     expect(screen.queryByText("📷 扫新电脑上的二维码")).toBeNull();
   });

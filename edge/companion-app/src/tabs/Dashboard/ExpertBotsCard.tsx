@@ -219,8 +219,8 @@ export default function ExpertBotsCard() {
           <div key={bot.id} style={{ padding: 12, border: "1px solid var(--catfish-border)", borderRadius: 7 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <strong>{bot.displayName}</strong>
-              <code style={{ fontSize: 10, color: "var(--catfish-text-muted)" }}>{bot.id}</code>
-              <span style={{ fontSize: 10, color: bot.ready ? "var(--catfish-cyan)" : "var(--status-warn)" }}>{bot.ready ? "● 已就绪" : `○ ${bot.reason}`}</span>
+              <code style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>{bot.id}</code>
+              <span style={{ fontSize: 11, color: bot.ready ? "var(--catfish-cyan)" : "var(--status-warn)" }}>{bot.ready ? "● 已就绪" : `○ ${bot.reason}`}</span>
               <span style={{ flex: 1 }} />
               <label style={{ fontSize: 11 }}>
                 <input type="checkbox" checked={bot.enabled} disabled={busy} onChange={(e) => void run(() => expertBotUpdate({ id: bot.id, enabled: e.target.checked }))} /> 启用

@@ -29,6 +29,9 @@ import {
 } from "../../lib/deviceMigration";
 import { revealInFinder } from "../../lib/tauri";
 import { fileManagerName } from "../../lib/platformLabels";
+import type { Icon } from "@phosphor-icons/react";
+import { DownloadSimple, UploadSimple, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 const muted: React.CSSProperties = {
   fontSize: 11,
@@ -51,7 +54,7 @@ const tabBtn = (on: boolean): React.CSSProperties => ({
 type Role = "" | "old" | "new";
 
 /** 「这台是哪台」的大按钮 */
-function RoleCard({ icon, title, sub, onClick }: { icon: string; title: string; sub: string; onClick: () => void }) {
+function RoleCard({ icon, title, sub, onClick }: { icon: Icon; title: string; sub: string; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -69,7 +72,7 @@ function RoleCard({ icon, title, sub, onClick }: { icon: string; title: string; 
       }}
     >
       <div style={{ fontSize: 14, fontWeight: 600 }}>
-        {icon} {title}
+        <Ico as={icon} gap={6} />{title}
       </div>
       <div style={muted}>{sub}</div>
     </button>
@@ -100,14 +103,14 @@ export default function DeviceMigrationCard() {
   const files = scan?.entries.filter((e) => e.class === "optional" && e.bytes > 0) ?? [];
   const filesBytes = files.reduce((n, e) => n + e.bytes, 0);
   const back = (
-    <button type="button" style={{ ...plainBtn, padding: "2px 10px", fontSize: 11 }} onClick={() => setRole("")}>
+    <button type="button" style={{ ...plainBtn, padding: "2px 10px", minHeight: 24, whiteSpace: "nowrap", fontSize: 11 }} onClick={() => setRole("")}>
       ← 不是这台
     </button>
   );
 
   return (
-    <div style={{ padding: 12, fontSize: 12 }}>
-      <h3 style={{ margin: 0, fontSize: 15 }}>🧳 换机迁移</h3>
+    <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)", fontSize: 12 }}>
+      <h3 style={{ margin: 0, fontSize: 15 }}>换机迁移</h3>
       <div style={{ ...muted, marginTop: 4, lineHeight: 1.6 }}>
         换电脑 / 重装系统时, 把小鲶对你的积累 (工作日志、记忆、知识库、对话、技能、待办) 整个搬过去。账号和授权不搬, 新电脑重新登录。
       </div>
@@ -116,8 +119,8 @@ export default function DeviceMigrationCard() {
         <>
           <h4 style={h4}>这台电脑是…</h4>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <RoleCard icon="📤" title="旧电脑" sub="把这台上的资料搬到新电脑" onClick={() => setRole("old")} />
-            <RoleCard icon="📥" title="新电脑" sub="把旧电脑上的资料搬到这台" onClick={() => setRole("new")} />
+            <RoleCard icon={UploadSimple} title="旧电脑" sub="把这台上的资料搬到新电脑" onClick={() => setRole("old")} />
+            <RoleCard icon={DownloadSimple} title="新电脑" sub="把旧电脑上的资料搬到这台" onClick={() => setRole("new")} />
           </div>
         </>
       )}
@@ -125,7 +128,7 @@ export default function DeviceMigrationCard() {
       {role === "old" && (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>📤 这台是旧电脑: 把资料搬出去</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>这台是旧电脑: 把资料搬出去</span>
             {back}
           </div>
           <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
@@ -139,14 +142,14 @@ export default function DeviceMigrationCard() {
           {mode === "direct" && <DeviceMigrationDirectSend files={files.map(entryKey)} filesBytes={filesBytes} />}
           {mode === "file" && !scan && !error && <div style={muted}>正在清点本机数据…</div>}
           {mode === "file" && scan && <FileExport scan={scan} files={files.map(entryKey)} filesBytes={filesBytes} />}
-          {mode === "file" && error && !scan && <div style={errStyle}>🚫 {error}</div>}
+          {mode === "file" && error && !scan && <div style={errStyle}><Ico as={XCircle} />{error}</div>}
         </>
       )}
 
       {role === "new" && (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>📥 这台是新电脑: 把资料搬进来</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>这台是新电脑: 把资料搬进来</span>
             {back}
           </div>
           <DeviceMigrationImport />
@@ -307,7 +310,7 @@ function FileExport({
           </div>
         </div>
       )}
-      {error && !result && <div style={errStyle}>🚫 {error}</div>}
+      {error && !result && <div style={errStyle}><Ico as={XCircle} />{error}</div>}
     </div>
   );
 }

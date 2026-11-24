@@ -182,7 +182,7 @@ export default function DashboardTab() {
           通知 + LLM 工具已覆盖所有用户场景, Dashboard 上是冗余. */}
       <CollapsibleSection
         id="today"
-        title="🔥 今日"
+        title="今日"
         count={1}
       >
         {/* P49/P50 (9/10): 横向协同两张卡曾放这里; 鸿波: 塞「今日」区不人性 → 独立「协同」tab。 */}
@@ -210,7 +210,7 @@ export default function DashboardTab() {
 
       <CollapsibleSection
         id="expert-bots"
-        title="🧠 专家 Bot"
+        title="专家 Bot"
         count={1}
         defaultCollapsed
       >
@@ -222,7 +222,7 @@ export default function DashboardTab() {
           提示重启 hermes/Companion. 默认收 (大部分时间不动). */}
       <CollapsibleSection
         id="server"
-        title="🌐 服务器配置"
+        title="服务器配置"
         count={1}
         defaultCollapsed
       >
@@ -235,7 +235,7 @@ export default function DashboardTab() {
           6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD (鸿波): 删 RecordingsCard. count 3→2. */}
       <CollapsibleSection
         id="privacy"
-        title="🔒 隐私 / 本机数据"
+        title="隐私 / 本机数据"
         layout="stacked"
         count={3}
       >
@@ -246,20 +246,20 @@ export default function DashboardTab() {
           storageKey="privacy"
           defaultKey="status"
           tabs={[
-            { key: "status", label: "🔒 隐私状态", render: () => <PrivacyCard /> },
-            { key: "outbound", label: "📊 数据外发记录", render: () => <OutboundLogCard /> },
+            { key: "status", label: "隐私状态", render: () => <PrivacyCard /> },
+            { key: "outbound", label: "数据外发记录", render: () => <OutboundLogCard /> },
             // P3.3.54 (6/12 鸿波): 审计导出 — 给信合规 / 内审 / 党办手动交付
-            { key: "audit-export", label: "📦 审计导出", render: () => <AuditExportCard /> },
+            { key: "audit-export", label: "审计导出", render: () => <AuditExportCard /> },
             // 10/31 BL-L9: 换机迁移 —— 旧电脑导出加密迁移包, 新电脑导入 (不经过中央)
-            { key: "migrate", label: "🧳 换机迁移", render: () => <DeviceMigrationCard /> },
-            { key: "snapshots", label: "🛟 误删保护", render: () => <SnapshotsCard /> },
+            { key: "migrate", label: "换机迁移", render: () => <DeviceMigrationCard /> },
+            { key: "snapshots", label: "误删保护", render: () => <SnapshotsCard /> },
             // P3.3.55 (6/12 鸿波): 审计视图 tab — 默认关 (PrivacyCard toggle 开)
             ...(auditViewEnabled
-              ? [{ key: "audit-view", label: "🔍 审计视图", render: () => <AuditViewCard /> }]
+              ? [{ key: "audit-view", label: "审计视图", render: () => <AuditViewCard /> }]
               : []),
             // 11/01: 手机连这台电脑 (经中央中转站, 端到端加密)
-            { key: "mobile", label: "📱 手机", render: () => <MobileCard /> },
-            { key: "wechat", label: "💬 微信接入", render: () => (
+            { key: "mobile", label: "手机", render: () => <MobileCard /> },
+            { key: "wechat", label: "微信接入", render: () => (
               <div style={{ display: "grid", gap: 24, minWidth: 0 }}>
                 <WeChatBindingCard />
                 <WeChatReminderPushCard />
@@ -267,7 +267,7 @@ export default function DashboardTab() {
               </div>
             ) },
             // 10/12: 销售跟进 —— 阶段名 / 几天算冷 + 价格表 / 报价单 (docs/SALES-FOLLOWUP-PLAN.md)
-            { key: "sales", label: "🤝 销售跟进", render: () => (
+            { key: "sales", label: "销售跟进", render: () => (
               <div style={{ display: "grid", gap: 24, minWidth: 0 }}>
                 <SalesTemplateCard />
                 <PricebookCard />
@@ -276,7 +276,7 @@ export default function DashboardTab() {
               </div>
             ) },
             // BL-SELF-CHANGE-PASSWORD (7/20): 员工自主改密码
-            { key: "account", label: "🔐 账号安全", render: () => <AccountSecurityCard /> },
+            { key: "account", label: "账号安全", render: () => <AccountSecurityCard /> },
           ]}
         />
       </CollapsibleSection>
@@ -303,11 +303,11 @@ export default function DashboardTab() {
           storageKey="rel"
           defaultKey="impression"
           tabs={[
-            { key: "impression", label: "📈 小鲶对你的印象", render: () => <RelationCard /> },
-            { key: "memory", label: "🧠 我的记忆", render: () => <HermesMemoryCard /> },
-            { key: "profile", label: "👤 小鲶对你的画像", render: () => <UserProfileCard /> },
-            { key: "style", label: "✍️ 你的文书风格", render: () => <StyleFingerprintCard /> },
-            { key: "dream", label: "🌙 Dream Engine", render: () => <DreamCard /> },
+            { key: "impression", label: "小鲶对你的印象", render: () => <RelationCard /> },
+            { key: "memory", label: "我的记忆", render: () => <HermesMemoryCard /> },
+            { key: "profile", label: "小鲶对你的画像", render: () => <UserProfileCard /> },
+            { key: "style", label: "你的文书风格", render: () => <StyleFingerprintCard /> },
+            { key: "dream", label: "Dream Engine", render: () => <DreamCard /> },
           ]}
         />
       </CollapsibleSection>
@@ -319,7 +319,7 @@ export default function DashboardTab() {
           BL-SKILL-CARD-DISAMBIG 同步改了 2 卡 h3 + 来源 path badge). */}
       <CollapsibleSection
         id="skills"
-        title="🎬 技能"
+        title="技能"
         count={2}
       >
         <SectionTabs
@@ -332,18 +332,18 @@ export default function DashboardTab() {
             //   括号误导. 区别只是"谁装的", 副文案在卡内说.
             // P3.3.35 (6/12): "已装技能库" → "技能库" — "已装" 字眼跟"技能库"重复,
             //   跟"我的技能" 对仗 ("我的" vs "库"=系统的)
-            { key: "my-skills", label: "🧰 我的技能", render: () => <MySkillsCard /> },
-            { key: "installed", label: "📦 技能库", render: () => <SkillsLibraryCard /> },
+            { key: "my-skills", label: "我的技能", render: () => <MySkillsCard /> },
+            { key: "installed", label: "技能库", render: () => <SkillsLibraryCard /> },
             // 10/17: 工作流 —— 把教过的技能和鲶鱼会的能力串成一条 (docs/WORKFLOW-SKILL-PLAN.md)
-            { key: "workflows", label: "🔗 工作流", render: () => <WorkflowsCard /> },
+            { key: "workflows", label: "工作流", render: () => <WorkflowsCard /> },
             // 10/18: 本机专家 —— 把工作流 / 技能交给一个只管这类事的小鲶分身 (docs/EXPERT-PACK-PLAN.md)
-            { key: "experts", label: "🧑‍💼 专家", render: () => <ExpertsCard /> },
+            { key: "experts", label: "专家", render: () => <ExpertsCard /> },
             // P3.3.31 (6/12): 加回 SkillsHubCard — "别人分享的 skill" 在心智里
             //   就该在仪表盘技能 section 找, 不是顶部 banner 跳出去 catfish-web.
             //   原 5/10 BL-ARCH2 砍错了 (当时跟 manager 管理类一起挪走), 现在补.
             // P3.3.38 (6/12): "中央市场 (别人分享的)" → "内部技能分享" — 不再"市场"
             //   (商业感), 强调"内部分享". "部门 wiki" → "部门知识库" 中文化.
-            { key: "hub", label: "🌐 内部技能分享", render: () => <SkillsHubCard /> },
+            { key: "hub", label: "内部技能分享", render: () => <SkillsHubCard /> },
             // 11/12: 「部门知识库」挪到 资料库 →「同事分享」分页 (WikiTab), 这里不再有入口
           ]}
         />
@@ -354,7 +354,7 @@ export default function DashboardTab() {
           完全不同概念, 拆开. 默认收 (员工不常看, 排错才看). */}
       <CollapsibleSection
         id="services"
-        title="⚙️ 服务 / 配额"
+        title="服务 / 配额"
         defaultCollapsed
         count={6}
       >
@@ -362,17 +362,17 @@ export default function DashboardTab() {
           storageKey="services"
           defaultKey="status"
           tabs={[
-            { key: "status", label: "🌐 服务状态", render: () => <ServicesCard /> },
-            { key: "quota", label: "📊 我的配额", render: () => <QuotaCard /> },
-            { key: "api-keys", label: "🔑 Claude Code 钥匙", render: () => <ApiKeysCard /> }, // 11/19
-            { key: "catalog", label: "🧩 可用模型", render: () => <CatalogCard /> },
+            { key: "status", label: "服务状态", render: () => <ServicesCard /> },
+            { key: "quota", label: "我的配额", render: () => <QuotaCard /> },
+            { key: "api-keys", label: "Claude Code 钥匙", render: () => <ApiKeysCard /> }, // 11/19
+            { key: "catalog", label: "可用模型", render: () => <CatalogCard /> },
             // P3.5.59 (6/22 鸿波 catch "无法知道性能状态"): 综合 LLM perf
             // (gateway audit) + tool dispatch perf (tool-bridge audit) 一站式.
             // 数据 100% 本机 fs 直读, 不走网络.
-            { key: "perf", label: "📈 性能统计", render: () => <PerfCard /> },
+            { key: "perf", label: "性能统计", render: () => <PerfCard /> },
             // P3.5.126 (6/26 鸿波 catch "local_search 目录设置 UI 找不到"):
             // 直接 UI 加/删索引目录, 不用 vim ~/.catfish/search-scope.yaml.
-            { key: "search-scope", label: "📂 搜索范围", render: () => <LocalSearchScopeCard /> },
+            { key: "search-scope", label: "搜索范围", render: () => <LocalSearchScopeCard /> },
           ]}
         />
         {/* <CuratorCard /> — 5/16 砍 (BL-CURATOR-CARD-KILL) */}

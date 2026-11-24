@@ -21,6 +21,8 @@ import { InstallDialog, MarketSection, MineSection, PublishDialog } from "./Expe
 // 11/08 分享治理: 审批人「待我审」+ 装到我这里试用 + 试用的回传 / 卸掉; 刷新时不在待审的试用自动卸
 import { ExpertTrialActions, PendingExpertsSection, removedExpertText, syncExpertTrials } from "./ExpertTrialUi";
 import { trialExpertInstall } from "../../lib/tauri_trial";
+import { CheckCircle, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 type InstallSource = { path: string } | { from: "hub" | "trial"; id: string; version: string };
 
@@ -49,7 +51,7 @@ const SOURCE: Record<string, string> = { personal: "我的", department: "部门
 
 function Tag({ children, tone }: { children: string; tone?: string }) {
   return (
-    <span style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: "1px solid var(--catfish-border)",
+    <span style={{ fontSize: 11, padding: "0 6px", borderRadius: 999, border: "1px solid var(--catfish-border)",
                    color: tone ?? "var(--catfish-text-muted)", whiteSpace: "nowrap" }}>{children}</span>
   );
 }
@@ -142,7 +144,7 @@ export function Editor({ initial, isNew, cat, onClose, onSaved }: {
              placeholder="一句话: 它管什么 (小鲶靠这句话决定什么时候推荐它)" style={inputStyle} />
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <Btn kind="ghost" disabled={busy || drafting || !d.name.trim() || !d.description.trim()} onClick={() => void draftWithXiaonian()}>
-          {drafting ? "起草中…" : "✨ 让小鲶帮我填"}
+          {drafting ? "起草中…" : "让小鲶帮我填"}
         </Btn>
         <span style={muted}>填好名字和一句话, 小鲶按它挑工作流 / 技能、写好它接哪些活, 你再改</span>
       </div>
@@ -349,7 +351,7 @@ export default function ExpertsCard() {
     <div style={{ ...cardStyle, height: "auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
         <div>
-          <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>🧑‍💼 专家</h3>
+          <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>专家</h3>
           <div style={{ ...muted, marginTop: 4 }}>
             把你的几个工作流 / 技能交给一个「只管这类事」的小鲶分身: 它有自己的人设, 只看得到你选的东西, 知道什么事走哪条路。
             搭好了在工作台对话框上方「找谁」里找它; 小鲶遇到归它管的事也会推荐你切过去。
@@ -374,7 +376,7 @@ export default function ExpertsCard() {
           <span style={muted}>{e.description}</span>
           {e.pack && !e.pack.trial && (
             <span style={{ fontSize: 11, color: e.pack.signed ? "var(--status-ok, #16a34a)" : "var(--status-warn, #d97706)" }}>
-              📦 专家包 {e.pack.version} · {e.pack.signed ? `✅ 中央已签名${e.pack.reviewed_by ? ` (${e.pack.reviewed_by} 审核)` : ""}` : "⚠️ 未签名 (从文件装的)"}
+              专家包 {e.pack.version} · {e.pack.signed ? <><Ico as={CheckCircle} />{`中央已签名${e.pack.reviewed_by ? ` (${e.pack.reviewed_by} 审核)` : ""}`}</> : <><Ico as={Warning} />未签名 (从文件装的)</>}
             </span>
           )}
           {e.pack?.trial && (
@@ -407,7 +409,7 @@ export default function ExpertsCard() {
               selectExpert(e.profile_id);
               setTab("chat");
               window.dispatchEvent(new CustomEvent("catfish:new-chat"));
-            }}>💬 跟它对话</Btn>
+            }}>跟它对话</Btn>
             {!e.pack && <Btn kind="ghost" disabled={!!busy} onClick={() => void exportPack(e)}>导出</Btn>}
             {!e.pack && <Btn kind="ghost" disabled={!!busy} onClick={() => setPublishing(e)}>发布到资源市场</Btn>}
             {!e.pack?.trial && (

@@ -11,6 +11,8 @@ import { PERSONALITY_LABELS, type Personality } from "../../lib/agent";
 import { useAgentStore } from "../../store/agent";
 import { emailConfigGet, type EmailConfigPublic } from "../../lib/tauri";
 import { abilityEnabled, SECRETARY, setAbilityEnabled, type SecretaryAbility } from "../../lib/secretary";
+import { CheckCircle, PencilSimple, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 // BL-COMPANION-PREFS-TOGGLES (5/20): localStorage key 跟 useProactiveScheduler 对齐
 const MORNING_PUSH_KEY = "catfish:morning_push_enabled";
@@ -136,6 +138,8 @@ export default function AgentPrefsCard() {
               borderRadius: 4,
               fontSize: 11,
               padding: "3px 10px",
+              minHeight: 24,
+              whiteSpace: "nowrap",
               color: "var(--catfish-text-muted)",
               cursor: "pointer",
             }}
@@ -171,8 +175,8 @@ export default function AgentPrefsCard() {
               }}
             >
               <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
-                ☀️ 早安播报 9:00 主动 push
-                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>
+                早安播报 9:00 主动 push
+                <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.7 }}>
                   (邮件 / 日历 / TODO 汇总)
                 </span>
               </span>
@@ -192,8 +196,8 @@ export default function AgentPrefsCard() {
             {switchable.map((a) => (
               <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                 <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
-                  {a.icon} {a.label}
-                  {a.hint && <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>({a.hint})</span>}
+                  {a.label}
+                  {a.hint && <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.7 }}>({a.hint})</span>}
                 </span>
                 <ToggleButton active={secOn[a.id]} onClick={() => void toggleAbility(a, true)} label="开" />
                 <ToggleButton active={!secOn[a.id]} onClick={() => void toggleAbility(a, false)} label="关" />
@@ -211,8 +215,8 @@ export default function AgentPrefsCard() {
               }}
             >
               <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
-                📬 邮件 LLM 评级
-                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>
+                邮件 LLM 评级
+                <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.7 }}>
                   (急 / 中 / 低 自动分类)
                 </span>
               </span>
@@ -224,10 +228,10 @@ export default function AgentPrefsCard() {
                     fontWeight: 500,
                   }}
                 >
-                  {emailCfg.rate_enabled ? "✅ 已开" : "❌ 已关"}
+                  {emailCfg.rate_enabled ? <><Ico as={CheckCircle} />已开</> : <><Ico as={XCircle} />已关</>}
                 </span>
               ) : (
-                <span style={{ fontSize: 10, color: "var(--catfish-text-muted)" }}>读取中…</span>
+                <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>读取中…</span>
               )}
               <button
                 type="button"
@@ -235,8 +239,10 @@ export default function AgentPrefsCard() {
                 disabled={!emailCfg?.yaml_path}
                 title={emailCfg?.yaml_path ?? "yaml 路径未知"}
                 style={{
-                  fontSize: 10,
+                  fontSize: 11,
                   padding: "2px 8px",
+                  minHeight: 24,
+                  whiteSpace: "nowrap",
                   border: "1px solid var(--catfish-border)",
                   borderRadius: 4,
                   background: "transparent",
@@ -245,12 +251,12 @@ export default function AgentPrefsCard() {
                   fontFamily: "inherit",
                 }}
               >
-                📝 改 yaml
+                <Ico as={PencilSimple} />改 yaml
               </button>
             </div>
             <div
               style={{
-                fontSize: 10,
+                fontSize: 11,
                 color: "var(--catfish-text-muted)",
                 marginLeft: 0,
                 opacity: 0.7,
@@ -387,6 +393,8 @@ function ToggleButton({
       style={{
         fontSize: 11,
         padding: "3px 10px",
+        minHeight: 24,
+        whiteSpace: "nowrap",
         border: `1px solid ${active ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
         borderRadius: 4,
         background: active ? "var(--catfish-bg-cream)" : "transparent",
@@ -432,7 +440,7 @@ function CatfishVersionFooter() {
         marginTop: "var(--space-3)",
         paddingTop: "var(--space-2)",
         borderTop: "1px dashed var(--catfish-border)",
-        fontSize: 10,
+        fontSize: 11,
         color: "var(--catfish-text-muted)",
         textAlign: "right",
       }}

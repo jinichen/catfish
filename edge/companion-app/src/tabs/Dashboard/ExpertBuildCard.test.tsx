@@ -48,7 +48,7 @@ describe("ExpertBuildCard", () => {
     expect(await screen.findByText("整理资质邮件", { selector: "strong" })).toBeTruthy();
     expect(screen.getAllByText((_t, el) => el?.tagName === "SPAN" && el.textContent === " · 新搭工作流")).toHaveLength(1);
     expect(screen.getByText(/用你已有的「证书到期提醒」/)).toBeTruthy();
-    expect(screen.getByText(/⏰ 每周一 9:00/)).toBeTruthy();
+    expect(screen.getByText(/每周一 9:00/)).toBeTruthy();
     expect(screen.getByText(/还不会: 在 EIS 里下载证书/)).toBeTruthy();
     expect(screen.getByText("现在教")).toBeTruthy();
   });

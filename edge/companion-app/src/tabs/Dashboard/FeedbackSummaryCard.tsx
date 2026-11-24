@@ -17,6 +17,9 @@ import {
   type FeedbackSummary,
   type FeedbackEvent,
 } from "../../lib/tauri";
+import type { Icon } from "@phosphor-icons/react";
+import { PencilSimple, Question, ThumbsDown, ThumbsUp } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 function humanTime(ts: number): string {
   if (!ts || ts <= 0) return "时间未知";
@@ -33,11 +36,11 @@ function humanTime(ts: number): string {
     .padStart(2, "0")}-${d.getDate().toString().padStart(2, "0")}`;
 }
 
-function kindLabel(kind: string): { emoji: string; text: string; color: string } {
-  if (kind === "thumb_up") return { emoji: "👍", text: "好评", color: "var(--catfish-cyan)" };
-  if (kind === "thumb_down") return { emoji: "👎", text: "不好", color: "var(--status-warn, orange)" };
-  if (kind === "edit") return { emoji: "✏️", text: "想要不一样", color: "var(--catfish-text)" };
-  return { emoji: "?", text: kind, color: "var(--catfish-text-muted)" };
+function kindLabel(kind: string): { icon: Icon; text: string; color: string } {
+  if (kind === "thumb_up") return { icon: ThumbsUp, text: "好评", color: "var(--catfish-cyan)" };
+  if (kind === "thumb_down") return { icon: ThumbsDown, text: "不好", color: "var(--status-warn, orange)" };
+  if (kind === "edit") return { icon: PencilSimple, text: "想要不一样", color: "var(--catfish-text)" };
+  return { icon: Question, text: kind, color: "var(--catfish-text-muted)" };
 }
 
 export default function FeedbackSummaryCard() {
@@ -97,7 +100,7 @@ export default function FeedbackSummaryCard() {
             你给{agentName}的反馈
           </h3>
           <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", paddingLeft: 28 }}>
-            👍/👎/改 历史 (我会看, 越用越懂你)
+            好评 / 不好 / 改 历史 (我会看, 越用越懂你)
           </span>
         </div>
         <button
@@ -132,11 +135,10 @@ export default function FeedbackSummaryCard() {
           style={{
             fontSize: 12,
             color: "var(--catfish-text-muted)",
-            fontStyle: "italic",
             padding: "var(--space-3) 0",
           }}
         >
-          还没反馈过我 — 我说话时, 消息下方有 👍/👎/改 按钮,
+          还没反馈过我 — 我说话时, 消息下方有 <Ico as={ThumbsUp} gap={2} />/<Ico as={ThumbsDown} gap={2} />/改 按钮,
           你点一下我会记住你的偏好, 之后回话照着改.
         </div>
       )}
@@ -152,9 +154,9 @@ export default function FeedbackSummaryCard() {
               fontSize: 13,
             }}
           >
-            <Stat emoji="👍" count={view.thumb_up} color="var(--catfish-cyan)" />
-            <Stat emoji="👎" count={view.thumb_down} color="var(--status-warn, orange)" />
-            <Stat emoji="✏️ 改" count={view.edit} color="var(--catfish-text)" />
+            <Stat icon={ThumbsUp} label="好评" count={view.thumb_up} color="var(--catfish-cyan)" />
+            <Stat icon={ThumbsDown} label="不好" count={view.thumb_down} color="var(--status-warn, orange)" />
+            <Stat icon={PencilSimple} label="改" count={view.edit} color="var(--catfish-text)" />
           </div>
 
           {/* 最近 negative 评论 */}
@@ -202,6 +204,8 @@ export default function FeedbackSummaryCard() {
                   borderRadius: 4,
                   fontSize: 11,
                   padding: "3px 8px",
+                  minHeight: 24,
+                  whiteSpace: "nowrap",
                   color: "var(--catfish-text-muted)",
                   cursor: "pointer",
                 }}
@@ -220,6 +224,8 @@ export default function FeedbackSummaryCard() {
                     borderRadius: 4,
                     fontSize: 11,
                     padding: "3px 8px",
+                    minHeight: 24,
+                    whiteSpace: "nowrap",
                     color: "white",
                     cursor: busy ? "default" : "pointer",
                     opacity: busy ? 0.6 : 1,
@@ -237,6 +243,8 @@ export default function FeedbackSummaryCard() {
                     borderRadius: 4,
                     fontSize: 11,
                     padding: "3px 8px",
+                    minHeight: 24,
+                    whiteSpace: "nowrap",
                     color: "var(--catfish-text-muted)",
                     cursor: busy ? "default" : "pointer",
                   }}
@@ -252,7 +260,7 @@ export default function FeedbackSummaryCard() {
   );
 }
 
-function Stat({ emoji, count, color }: { emoji: string; count: number; color: string }) {
+function Stat({ icon, label, count, color }: { icon: Icon; label: string; count: number; color: string }) {
   return (
     <div
       style={{
@@ -261,7 +269,7 @@ function Stat({ emoji, count, color }: { emoji: string; count: number; color: st
         gap: 6,
       }}
     >
-      <span style={{ fontSize: 16 }}>{emoji}</span>
+      <span style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}><Ico as={icon} />{label}</span>
       <span style={{ fontSize: 18, fontWeight: 600, color }}>{count}</span>
     </div>
   );
@@ -281,16 +289,16 @@ function NegEntry({ ev }: { ev: FeedbackEvent }) {
     >
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
         <span style={{ color: k.color, fontSize: 11 }}>
-          {k.emoji} {k.text}
+          <Ico as={k.icon} />{k.text}
         </span>
-        <span style={{ fontSize: 10, color: "var(--catfish-text-muted)" }}>
+        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           {humanTime(ev.ts)}
         </span>
       </div>
       {ev.comment ? (
         <div style={{ color: "var(--catfish-text)", lineHeight: 1.5 }}>{ev.comment}</div>
       ) : (
-        <div style={{ color: "var(--catfish-text-muted)", fontStyle: "italic", fontSize: 11 }}>
+        <div style={{ color: "var(--catfish-text-muted)", fontSize: 11 }}>
           (没写理由)
         </div>
       )}
@@ -298,7 +306,7 @@ function NegEntry({ ev }: { ev: FeedbackEvent }) {
         <div
           style={{
             marginTop: 4,
-            fontSize: 10,
+            fontSize: 11,
             color: "var(--catfish-text-muted)",
             paddingLeft: 8,
             borderLeft: "2px solid var(--catfish-border)",

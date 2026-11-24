@@ -97,6 +97,8 @@ export default function BriefingCard({ headerExtra, headerBelow }: { headerExtra
               cursor: "pointer",
               fontSize: 12,
               padding: "3px 10px",
+              minHeight: 24,
+              whiteSpace: "nowrap",
               fontFamily: "inherit",
             }}
           >

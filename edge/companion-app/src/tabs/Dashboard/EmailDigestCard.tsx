@@ -19,6 +19,8 @@ import {
 } from "../../lib/tauri";
 import { emailClientName, emailFailureHint } from "../../lib/emailPlatformHints";
 import { useUIStore } from "../../store/ui";
+import { EnvelopeSimple } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 const DISPLAY_LIMIT = 5;
 const FETCH_LIMIT = 10;  // 多取 5 个 buffer, 万一前 5 个被员工标"忽略"未来 (step2)
@@ -107,7 +109,7 @@ export default function EmailDigestCard() {
           marginBottom: "var(--space-2)",
         }}
       >
-        <span style={{ fontSize: 16 }}>📧</span>
+        <Ico as={EnvelopeSimple} gap={0} />
         <strong style={{ fontSize: 13 }}>邮件简报</strong>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           {error
@@ -132,6 +134,8 @@ export default function EmailDigestCard() {
             cursor: loading ? "wait" : "pointer",
             fontSize: 11,
             padding: "2px 8px",
+            minHeight: 24,
+            whiteSpace: "nowrap",
             fontFamily: "inherit",
           }}
         >
@@ -208,7 +212,7 @@ export default function EmailDigestCard() {
             padding: "var(--space-3) 0",
           }}
         >
-          🌊 没有未读邮件, 都处理完了
+          没有未读邮件, 都处理完了
         </div>
       )}
 
@@ -240,7 +244,7 @@ export default function EmailDigestCard() {
             fontFamily: "inherit",
           }}
         >
-          💬 让小鲶帮我处理
+          让小鲶帮我处理
         </button>
         <button
           type="button"
@@ -256,14 +260,14 @@ export default function EmailDigestCard() {
             fontFamily: "inherit",
           }}
         >
-          📬 开 {emailClientName()}
+          开 {emailClientName()}
         </button>
       </div>
 
       {lastFetched && !loading && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: 11,
             color: "var(--catfish-text-muted)",
             opacity: 0.6,
             textAlign: "right",

@@ -57,7 +57,7 @@ export default function DepartmentQuotaCard({ department }: Props) {
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
-        <h3 style={{ margin: 0 }}>👥 部门 · {department}</h3>
+        <h3 style={{ margin: 0 }}>部门 · {department}</h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           经理视图 · 今日聚合
         </span>
@@ -120,6 +120,8 @@ function QuotaEditor({
         style={{
           fontSize: 11,
           padding: "2px 8px",
+          minHeight: 24,
+          whiteSpace: "nowrap",
           background: "transparent",
           border: "1px solid var(--catfish-border)",
           borderRadius: 3,
@@ -160,6 +162,8 @@ function QuotaEditor({
           style={{
             fontSize: 11,
             padding: "2px 8px",
+            minHeight: 24,
+            whiteSpace: "nowrap",
             background: "var(--catfish-cyan)",
             color: "white",
             border: "none",
@@ -175,6 +179,8 @@ function QuotaEditor({
           style={{
             fontSize: 11,
             padding: "2px 8px",
+            minHeight: 24,
+            whiteSpace: "nowrap",
             background: "transparent",
             border: "1px solid var(--catfish-border)",
             borderRadius: 3,

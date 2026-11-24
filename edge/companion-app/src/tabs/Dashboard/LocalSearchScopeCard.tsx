@@ -22,6 +22,8 @@ import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { currentEmailPlatform } from "../../lib/emailPlatformHints";
+import { ArrowClockwise, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 interface ScopeResult {
   include: string[];
@@ -243,7 +245,7 @@ export default function LocalSearchScopeCard() {
             marginBottom: 4,
           }}
         >
-          <h3 style={{ margin: 0 }}>📂 Local Search 索引目录</h3>
+          <h3 style={{ margin: 0 }}>Local Search 索引目录</h3>
           <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
             鲶鱼能搜哪些目录的文件
           </span>
@@ -268,6 +270,8 @@ export default function LocalSearchScopeCard() {
             style={{
               fontSize: 11,
               padding: "3px 10px",
+              minHeight: 24,
+              whiteSpace: "nowrap",
               background: "transparent",
               border: "1px solid var(--catfish-border)",
               borderRadius: 3,
@@ -276,7 +280,7 @@ export default function LocalSearchScopeCard() {
             }}
             title="按当前 search-scope.yaml 把所有目录重扫一遍"
           >
-            🔄 重建索引
+            <Ico as={ArrowClockwise} />重建索引
           </button>
           {indexing && (
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
@@ -294,7 +298,7 @@ export default function LocalSearchScopeCard() {
               background: "var(--catfish-bg, rgba(0,0,0,0.03))",
               border: "1px solid var(--catfish-border)",
               borderRadius: 4,
-              fontSize: 10,
+              fontSize: 11,
               lineHeight: 1.5,
               maxHeight: 160,
               overflowY: "auto",
@@ -319,19 +323,19 @@ export default function LocalSearchScopeCard() {
           >
             {!stats.dbExists ? (
               <span style={{ color: "var(--catfish-text-muted)" }}>
-                ⚠️ <strong>还没建索引</strong> — 点上面"重建索引", 或启 Local Search
+                <Ico as={Warning} /><strong>还没建索引</strong> — 点上面"重建索引", 或启 Local Search
                 watcher (空库时它会自己先建一次), 落库到 <code>{stats.dbPath}</code>
               </span>
             ) : stats.totalFiles === 0 ? (
               <span style={{ color: "var(--catfish-text-muted)" }}>
-                📊 索引库存在但 <strong>0 文件</strong> — 可能是 include 目录都被
+                索引库存在但 <strong>0 文件</strong> — 可能是 include 目录都被
                 exclude 命中, 或文件类型 / 大小不达标. 点"重建索引"看逐目录报数.
               </span>
             ) : (
               <>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                   <span>
-                    📊 <strong>{stats.totalFiles.toLocaleString()}</strong> 个文件
+                    <strong>{stats.totalFiles.toLocaleString()}</strong> 个文件
                   </span>
                   <span style={{ color: "var(--catfish-text-muted)" }}>
                     {formatBytes(stats.totalSizeBytes)}
@@ -371,7 +375,7 @@ export default function LocalSearchScopeCard() {
                       <span
                         key={`bt-${t.fileType}`}
                         style={{
-                          fontSize: 10,
+                          fontSize: 11,
                           padding: "1px 6px",
                           background: "var(--catfish-bg-elevated, white)",
                           border: "1px solid var(--catfish-border)",
@@ -425,7 +429,7 @@ export default function LocalSearchScopeCard() {
                             <div
                               style={{
                                 color: "var(--catfish-text-muted)",
-                                fontSize: 10,
+                                fontSize: 11,
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
                                 whiteSpace: "nowrap",
@@ -457,7 +461,7 @@ export default function LocalSearchScopeCard() {
               marginTop: 4,
             }}
           >
-            ⚠️ {err}
+            <Ico as={Warning} />{err}
           </div>
         )}
       </div>
@@ -496,7 +500,6 @@ export default function LocalSearchScopeCard() {
                 style={{
                   fontSize: 11,
                   color: "var(--catfish-text-muted)",
-                  fontStyle: "italic",
                   padding: "4px 0",
                 }}
               >
@@ -527,8 +530,10 @@ export default function LocalSearchScopeCard() {
                   onClick={() => void onRemove(d)}
                   disabled={busy}
                   style={{
-                    fontSize: 10,
+                    fontSize: 11,
                     padding: "1px 6px",
+                    minHeight: 24,
+                    whiteSpace: "nowrap",
                     background: "transparent",
                     border: "1px solid var(--catfish-border)",
                     borderRadius: 3,
@@ -573,6 +578,8 @@ export default function LocalSearchScopeCard() {
                 style={{
                   fontSize: 11,
                   padding: "3px 10px",
+                  minHeight: 24,
+                  whiteSpace: "nowrap",
                   background:
                     input.trim() && !busy
                       ? "var(--catfish-cyan, #0E5F66)"
@@ -599,6 +606,8 @@ export default function LocalSearchScopeCard() {
                 style={{
                   fontSize: 11,
                   padding: "3px 10px",
+                  minHeight: 24,
+                  whiteSpace: "nowrap",
                   background: "transparent",
                   border: "1px solid var(--catfish-border)",
                   borderRadius: 3,

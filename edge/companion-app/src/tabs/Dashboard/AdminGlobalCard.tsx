@@ -70,7 +70,7 @@ export default function AdminGlobalCard() {
           marginBottom: "var(--space-3)",
         }}
       >
-        <h3 style={{ margin: 0 }}>🌐 全局聚合</h3>
+        <h3 style={{ margin: 0 }}>全局聚合</h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           管理员视图 · 今日全员 · 30s 刷新
         </span>
