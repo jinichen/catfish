@@ -74,7 +74,7 @@ if [ "$WHEEL_COUNT" != "1" ]; then
 fi
 # skill 一并带上: 没有它 CLI 装了但模型不知道有这个工具
 cp -R "$EMAIL_SRC/hermes-skill" "$EMAIL_STAGE/hermes-skill"
-tar czf "$EMAIL_TAR" -C "$EMAIL_STAGE" .
+python3 "$SCRIPT_DIR/repro_tar.py" "$EMAIL_STAGE" "$EMAIL_TAR"   # 11/25: 同样内容逐字节一样, 不再每版都重装
 # 校验产出 —— 装机时才发现缺东西就晚了
 if ! tar tzf "$EMAIL_TAR" | grep -q '\.whl$'; then
     echo "❌ $EMAIL_TAR 里没有 wheel"

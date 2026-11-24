@@ -19,7 +19,7 @@ if [ "$WHEEL_COUNT" != "1" ]; then
     echo "ERROR: expected exactly one catfish-wechat-reader wheel, got $WHEEL_COUNT" >&2
     exit 1
 fi
-tar czf "$ARCHIVE" -C "$STAGE" .
+python3 "$SCRIPT_DIR/repro_tar.py" "$STAGE" "$ARCHIVE"   # 11/25: 同样内容逐字节一样, 不再每版都重装
 tar tzf "$ARCHIVE" | grep -q '\.whl$'
 mkdir -p "$COMPANION/src-tauri/resources/windows"
 cp "$ARCHIVE" "$COMPANION/src-tauri/resources/windows/catfish-wechat-reader-dist.tar.gz"
