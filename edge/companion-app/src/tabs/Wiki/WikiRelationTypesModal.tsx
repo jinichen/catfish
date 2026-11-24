@@ -67,7 +67,7 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <h3 style={{ margin: 0, fontSize: 17 }}>关系类型</h3>
           <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: "transparent", cursor: "pointer", color: V.muted }}>
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
         <p style={{ margin: "0 0 14px", color: V.muted, fontSize: 13, lineHeight: 1.6 }}>
@@ -106,7 +106,7 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
                 cursor: busy || !name.trim() || !meaning.trim() ? "not-allowed" : "pointer",
                 opacity: busy || !name.trim() || !meaning.trim() ? 0.5 : 1,
               }}>
-              <Plus size={14} />登记
+              <Plus size={16} />登记
             </button>
           </div>
         </section>
@@ -125,7 +125,7 @@ export default function WikiRelationTypesModal({ onClose }: { onClose: () => voi
                   </span>
                   <button type="button" disabled={busy} onClick={() => void drop(c.name)} aria-label={`删除关系类型「${c.name}」`} title="删除"
                     style={{ border: 0, background: "transparent", cursor: "pointer", color: V.muted, padding: 4 }}>
-                    <Trash size={15} />
+                    <Trash size={16} />
                   </button>
                 </div>
               ))}

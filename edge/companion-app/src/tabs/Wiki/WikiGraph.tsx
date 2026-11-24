@@ -477,7 +477,7 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
     <div className={`wiki-graph${expanded ? " wiki-graph--expanded" : ""}`}>
       <div className="wiki-graph__header">
         <div className="wiki-graph__heading">
-          <ShareNetwork size={21} aria-hidden="true" />
+          <ShareNetwork size={16} aria-hidden="true" />
           <strong>关联图谱</strong>
           {hasGraph && (
             <span className="wiki-graph__count" aria-label={`显示 ${visibleNodeCount} 个节点，共 ${availableNodeCount} 个节点`}>
@@ -505,14 +505,14 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
               title={expanded ? "退出放大图谱" : "放大图谱"}
             >
               {expanded
-                ? <CornersIn size={18} aria-hidden="true" />
-                : <CornersOut size={18} aria-hidden="true" />}
+                ? <CornersIn size={16} aria-hidden="true" />
+                : <CornersOut size={16} aria-hidden="true" />}
             </button>
             </>
           )}
           {onCollapse && !expanded && (
             <button type="button" onClick={onCollapse} aria-label="收起图谱" title="收起图谱">
-              <CaretRight size={18} aria-hidden="true" />
+              <CaretRight size={16} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -527,12 +527,12 @@ export default function WikiGraph({ onCollapse }: { onCollapse?: () => void }) {
             className="wiki-graph__more"
             onClick={() => setNeighborLimit((current) => current + GRAPH_NEIGHBOR_STEP)}
           >
-            <Plus size={17} aria-hidden="true" />再显示 20 个
+            <Plus size={16} aria-hidden="true" />再显示 20 个
           </button>
         )}
         {!hasGraph && (
           <div className="wiki-graph__empty">
-            <ShareNetwork size={38} weight="duotone" aria-hidden="true" />
+            <ShareNetwork size={24} aria-hidden="true" />
             <strong>
               {graphFiles.length === 0
                 ? "暂无已确认关系"

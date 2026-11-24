@@ -12,6 +12,7 @@ import WikiEntryIssues from "./WikiEntryIssues";
 import WikiTypeCard from "./WikiTypeCard";
 import { useEffect, useMemo, useState } from "react";
 import { alertDialog } from "../../components/dialogs";
+import { FileText } from "@phosphor-icons/react";
 import ReactMarkdown from "react-markdown";
 import { GFM_PLUGINS } from "../../lib/markdown";
 import { useChatStore } from "../../store/chat";
@@ -136,7 +137,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
     if (!chatModel) {
       void alertDialog(
         "还没有选定模型。\n\n" +
-          "🔗 扫描关联要调用大模型，用的是你在「聊天」页选的那个模型。\n" +
+          "扫描关联要调用大模型，用的是你在「聊天」页选的那个模型。\n" +
           "请先去聊天页选一个，再回来扫描。",
       );
       return;
@@ -378,7 +379,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
   if (!selectedFile) {
     return (
       <div className="wiki-preview__empty">
-        <div className="wiki-preview__empty-icon">📄</div>
+        <div className="wiki-preview__empty-icon"><FileText size={24} aria-hidden="true" /></div>
         <div className="wiki-preview__empty-title">左侧选 wiki 文件</div>
         <div>entity / concept / query 都行</div>
       </div>
@@ -431,14 +432,14 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
               style={{
                 fontSize: 12,
                 color: "var(--catfish-text-muted)",
-                padding: "4px 10px",
-                background: "rgba(124,58,237,0.08)",
-                border: "1px solid rgba(124,58,237,0.2)",
+                padding: "4px 12px",
+                background: "var(--catfish-bg-elevated)",
+                border: "1px solid var(--catfish-border)",
                 borderRadius: 4,
               }}
               title="来自部门 wiki-hub 的副本, 不能本机改也不能再 share. 原作者撤回时这里会显 stale 标."
             >
-              📥 部门 wiki · read-only (来自 hub)
+              部门 wiki · read-only (来自 hub)
             </span>
             {/* P3.3.18 Phase 4 P2 (6/10): 卸载本机副本 — 5 秒 confirm */}
             <button
@@ -459,7 +460,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
                 ? "卸载中…"
                 : confirmUninstall
                   ? "确认卸载"
-                  : "🗑 卸载本机副本"}
+                  : "卸载本机副本"}
             </button>
           </>
         )}
@@ -483,7 +484,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
                 title="AI 扫描 body 找可能对应现有 wiki 节点的名字, 建议加关联 (你确认后加入)"
                 disabled={deleting}
               >
-                🔗 扫描关联
+                扫描关联
               </button>
             )}
             {/* P3.3.18 (6/10): 分享到部门 — 强警告 dialog 跟 manifesto 公理 4 提醒 */}
@@ -493,7 +494,7 @@ export default function WikiPreview({ onOpenTask }: { onOpenTask?: (taskId: stri
               disabled={deleting || shareDialogOpen}
               title="把这条 wiki 分享到本部门或全公司 (全公司要管理员审) — 已装走的副本撤不回"
             >
-              📤 分享
+              分享
             </button>
             <button
               className={

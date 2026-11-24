@@ -20,6 +20,8 @@
 
 import { useState, useEffect } from "react";
 import { ModalShell } from "../../components/ModalShell";
+import { CheckCircle, LinkSimple, MagnifyingGlass, SpinnerGap, X, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 import { V } from "./wikiTheme";
 import { wikiUpdateFile } from "../../lib/tauri";
 import {
@@ -64,7 +66,6 @@ export default function WikiLinkSuggestModal({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [closeHover, setCloseHover] = useState(false);
-  const [applyHover, setApplyHover] = useState(false);
 
   // 严格 auto-load 一次 (open 时立即调 LLM)
   useEffect(() => {
@@ -160,8 +161,8 @@ export default function WikiLinkSuggestModal({
           position: "absolute",
           top: 16,
           right: 16,
-          width: 22,
-          height: 22,
+          width: 24,
+          height: 24,
           borderRadius: "50%",
           border: "none",
           background: closeHover ? V.border : V.bg,
@@ -177,43 +178,23 @@ export default function WikiLinkSuggestModal({
         }}
         aria-label="关闭"
       >
-        <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
-          <path
-            d="M1 1 L8 8 M8 1 L1 8"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-        </svg>
+        <X size={16} aria-hidden="true" />
       </button>
 
-      {/* 视觉锚 — cyan 圆 + 白链条图标 */}
+      {/* 视觉锚 — 实色青方块 + 白链条图标 */}
       <div
         style={{
           width: 56,
           height: 56,
           borderRadius: 14,
-          background: `linear-gradient(135deg, ${V.accent}, ${V.accent})`,
+          background: V.accent,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          marginBottom: 18,
-          boxShadow: `0 6px 16px ${V.accent}40`,
+          marginBottom: 16,
         }}
       >
-        <svg
-          width="28"
-          height="28"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="white"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-        </svg>
+        <LinkSimple size={24} color="white" aria-hidden="true" />
       </div>
 
       <h3
@@ -222,7 +203,6 @@ export default function WikiLinkSuggestModal({
           fontSize: 19,
           fontWeight: 600,
           color: V.text,
-          letterSpacing: "-0.015em",
           fontFamily: V.font,
         }}
       >
@@ -254,7 +234,7 @@ export default function WikiLinkSuggestModal({
               fontFamily: V.font,
             }}
           >
-            <div style={{ fontSize: 28, marginBottom: 8 }}>⏳</div>
+            <div style={{ marginBottom: 8 }}><SpinnerGap className="wiki-spin" size={24} aria-hidden="true" /></div>
             AI 分析中… (通常 3-8 秒)
           </div>
         )}
@@ -263,8 +243,8 @@ export default function WikiLinkSuggestModal({
           <div
             style={{
               padding: "20px",
-              background: `${V.error}15`,
-              border: `1px solid ${V.error}40`,
+              background: `color-mix(in srgb, ${V.error} 8%, transparent)`,
+              border: `1px solid color-mix(in srgb, ${V.error} 25%, transparent)`,
               borderRadius: 8,
               color: V.error,
               fontSize: 13,
@@ -272,7 +252,7 @@ export default function WikiLinkSuggestModal({
               lineHeight: 1.5,
             }}
           >
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>❌ 出错</div>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}><Ico as={XCircle} />出错</div>
             <div style={{ marginBottom: 12 }}>{error}</div>
             <button
               onClick={handleRetry}
@@ -303,7 +283,7 @@ export default function WikiLinkSuggestModal({
               lineHeight: 1.6,
             }}
           >
-            <div style={{ fontSize: 28, marginBottom: 8 }}>🔍</div>
+            <div style={{ marginBottom: 8 }}><MagnifyingGlass size={24} aria-hidden="true" /></div>
             <div style={{ marginBottom: 4 }}>没找到明确匹配</div>
             <div style={{ fontSize: 11, color: V.muted }}>
               AI 严格审阅了 body 里的内容, 没找到跟现有 wiki 节点明确对应的名字.
@@ -395,10 +375,10 @@ export default function WikiLinkSuggestModal({
                         </span>
                         <span
                           style={{
-                            fontSize: 10,
+                            fontSize: 11,
                             padding: "1px 6px",
                             borderRadius: 4,
-                            background: `${badge.color}20`,
+                            background: `color-mix(in srgb, ${badge.color} 14%, transparent)`,
                             color: badge.color,
                             fontFamily: V.font,
                             fontWeight: 500,
@@ -450,7 +430,7 @@ export default function WikiLinkSuggestModal({
               fontFamily: V.font,
             }}
           >
-            <div style={{ fontSize: 28, marginBottom: 8 }}>💾</div>
+            <div style={{ marginBottom: 8 }}><SpinnerGap className="wiki-spin" size={24} aria-hidden="true" /></div>
             写入中…
           </div>
         )}
@@ -466,7 +446,7 @@ export default function WikiLinkSuggestModal({
               fontFamily: V.font,
             }}
           >
-            <div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>
+            <div style={{ marginBottom: 8 }}><CheckCircle size={24} aria-hidden="true" /></div>
             已加入 {selected.size} 个关联概念
           </div>
         )}
@@ -488,7 +468,7 @@ export default function WikiLinkSuggestModal({
             onClick={onClose}
             disabled={view === "applying"}
             style={{
-              padding: "9px 18px",
+              padding: "8px 16px",
               border: "none",
               borderRadius: 8,
               background: "transparent",
@@ -513,11 +493,9 @@ export default function WikiLinkSuggestModal({
           </div>
           <button
             onClick={handleApply}
-            onMouseEnter={() => setApplyHover(true)}
-            onMouseLeave={() => setApplyHover(false)}
             disabled={view === "applying" || selected.size === 0}
             style={{
-              padding: "9px 22px",
+              padding: "8px 20px",
               border: "none",
               borderRadius: 8,
               background:
@@ -525,9 +503,7 @@ export default function WikiLinkSuggestModal({
                   ? V.muted
                   : selected.size === 0
                     ? V.muted
-                    : applyHover
-                      ? V.accent
-                      : V.accent,
+                    : V.accent,
               color: "white",
               fontSize: 14,
               fontWeight: 600,
@@ -538,7 +514,8 @@ export default function WikiLinkSuggestModal({
                   : "pointer",
               opacity: selected.size === 0 ? 0.6 : 1,
               transition: "background 120ms ease",
-              boxShadow: selected.size > 0 ? `0 2px 6px ${V.accent}40` : "none",
+              whiteSpace: "nowrap",
+              flex: "none",
             }}
           >
             {view === "applying"

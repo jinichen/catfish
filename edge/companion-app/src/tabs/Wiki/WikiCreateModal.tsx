@@ -121,7 +121,7 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
       }
       if (guard?.similar.length && !allowSimilar) {
         setAllowSimilar(true);
-        setError(`${guard.similar_message.replace(/是同一个就用 catfish_wiki_update 改那一条.*$/, "")}是同一个就去改那一条; 确认是两个不同的东西, 再点一次「✓ 创建」。`);
+        setError(`${guard.similar_message.replace(/是同一个就用 catfish_wiki_update 改那一条.*$/, "")}是同一个就去改那一条; 确认是两个不同的东西, 再点一次「创建」。`);
         return;
       }
       // P3.5.109: UI kind "system" → backend "concept" 0 后端改动, concept_type=system
@@ -189,15 +189,12 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
                 style={{
                   flex: 1,
                   padding: "6px 12px",
-                  border: "1px solid var(--catfish-border)",
+                  border: `1px solid ${kind === k ? kindColor(k) : "var(--catfish-border)"}`,
                   borderRadius: 4,
-                  background:
-                    kind === k
-                      ? k === "system"
-                        ? "var(--catfish-orange, #F47B3D)" // P3.5.109: 体系橙色, 跟 WikiTree "🌟 顶级体系"组真视觉一致
-                        : "var(--catfish-accent, #4a9eff)"
-                      : "transparent",
-                  color: kind === k ? "#fff" : "var(--catfish-text)",
+                  // 11/24: 选中态用浅底 + 描边, 实色只留给「创建」一个主按钮。体系橙色 (P3.5.109) 保留
+                  background: kind === k ? `color-mix(in srgb, ${kindColor(k)} 12%, transparent)` : "transparent",
+                  color: kind === k ? kindColor(k) : "var(--catfish-text)",
+                  whiteSpace: "nowrap",
                   cursor: "pointer",
                   fontSize: 12,
                 }}
@@ -206,7 +203,7 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
                   ? "实体 (entity)"
                   : k === "concept"
                   ? "概念 (concept)"
-                  : "🌟 体系 (system)"}
+                  : "体系 (system)"}
               </button>
             ))}
           </div>
@@ -240,7 +237,7 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
               borderLeft: "2px solid var(--catfish-orange, #F47B3D)",
             }}
           >
-            💡 <strong>顶级体系</strong> — 进 WikiTree "🌟 顶级体系"组 + 选它后 WikiGraph 显整体系子树.
+            <strong>顶级体系</strong> — 进 WikiTree "顶级体系"组 + 选它后 WikiGraph 显整体系子树.
             "相关" 字段建议留空 (顶级体系没有上位), 下属概念在 body 写 [[本体系名]] 即自动挂下来.
           </div>
         )}
@@ -365,13 +362,13 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
               padding: "6px 14px",
               border: "none",
               borderRadius: 4,
-              background: saving || !title.trim() ? "#aaa" : "var(--catfish-accent, #4a9eff)",
+              background: saving || !title.trim() ? "var(--catfish-text-muted)" : "var(--catfish-cyan)",
               color: "#fff",
               cursor: saving || !title.trim() ? "not-allowed" : "pointer",
               fontSize: 13,
             }}
           >
-            {saving ? "保存中..." : "✓ 创建"}
+            {saving ? "保存中..." : "创建"}
           </button>
         </div>
       </div>
@@ -400,3 +397,7 @@ const inputStyle: React.CSSProperties = {
   color: "var(--catfish-text)",
   boxSizing: "border-box",
 };
+
+function kindColor(k: "entity" | "concept" | "system"): string {
+  return k === "system" ? "var(--catfish-orange, #F47B3D)" : "var(--catfish-cyan)";
+}

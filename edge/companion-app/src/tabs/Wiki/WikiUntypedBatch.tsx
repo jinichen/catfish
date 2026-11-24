@@ -186,7 +186,7 @@ export default function WikiUntypedBatch({ task }: { task: WikiRelationshipTask 
               <span className="wiki-untyped__actions">
                 <button type="button" disabled={busy} onClick={() => keep([row])} title="以后不再列这条">保持关联</button>
                 <button type="button" disabled={busy} onClick={() => removeRow(row)} aria-label="删掉这条关系" title="只删关系，不删条目">
-                  <Trash size={14} />
+                  <Trash size={16} />
                 </button>
               </span>
             </div>

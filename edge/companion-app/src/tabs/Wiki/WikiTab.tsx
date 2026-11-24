@@ -69,7 +69,7 @@ export default function WikiTab() {
             className="wikitab__graph-reopen"
             onClick={() => setGraphVisible(true)}
           >
-            <ShareNetwork size={18} aria-hidden="true" />查看关联图谱
+            <ShareNetwork size={16} aria-hidden="true" />查看关联图谱
           </button>
         )}
         {mode === "shared" ? (
