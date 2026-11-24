@@ -47,13 +47,22 @@ export function rowKey(r: PendingRow): string | null {
   return null;
 }
 
-/** 这个对话里要新放进横幅的 (已经顺着流来的、横幅里已有的不重复) */
+/** 11/24 鸿波「为什么批准后又再来一次？」: 员工答过的 request_id —— 服务那边的记录还没翻过来时,
+ *  轮询会把它又列出来; 答过的一律不再弹 (最多记 200 条)。 */
+const answered = new Set<string>();
+export function markAnswered(requestId: string | undefined): void {
+  if (!requestId) return;
+  answered.add(requestId);
+  if (answered.size > 200) answered.delete(answered.values().next().value as string);
+}
+
+/** 这个对话里要新放进横幅的 (已经顺着流来的、横幅里已有的、答过的不重复) */
 export function newDetails(sessionId: string, rows: PendingRow[], existingKeys: Set<string>): PendingApprovalDetail[] {
   const out: PendingApprovalDetail[] = [];
   for (const r of rows) {
     if (r.session_id !== sessionId) continue;
     const key = rowKey(r);
-    if (!key || existingKeys.has(key)) continue;
+    if (!key || existingKeys.has(key) || (r.request_id && answered.has(r.request_id))) continue;
     if (!r.run_id && r.request_id && hasNativeRequest(r.request_id)) continue;
     if (r.run_id) registerNativeApproval(r.run_id, r.request_id, r.execution_generation);
     out.push({
@@ -85,6 +94,7 @@ export async function fetchPendingApprovals(): Promise<PendingRow[]> {
 export async function answerQueuedApproval(key: string, choice: string): Promise<{ resolved?: number; choice?: string }> {
   const k = parseQueueKey(key);
   if (!k) throw new Error("不是队列里的批准");
+  markAnswered(k.requestId);
   const resp = await fetchViaProxy(`${config.backendUrl}/v1/sessions/${encodeURIComponent(k.sessionKey)}/approval`, {
     method: "POST",
     headers: authHeaders(),

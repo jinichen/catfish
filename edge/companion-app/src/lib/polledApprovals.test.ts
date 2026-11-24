@@ -61,3 +61,18 @@ describe("窗口没连着那一轮时的批准 (11/24 授权卡片没弹)", () =
     await expect(toolBridgeChatApproval(queueKey(KEY, "aaa"), "once")).rejects.toThrow(/409/);
   });
 });
+
+describe("批过的不再弹 (11/24 批准后又再来一次)", () => {
+  it("答过一条以后, 服务那边记录还停在等批准, 轮询也不再把它放回横幅", async () => {
+    const run = { run_id: "chatcmpl-a8cb", session_id: SID, request_id: "990df69a", execution_generation: 5, command: "execute_code" };
+    fetchViaProxy.mockResolvedValueOnce(ok({ approvals: [run] }));
+    await syncPolledApprovals(SID);
+    expect(useApprovalsStore.getState().items.map((i) => i.key)).toEqual(["chatcmpl-a8cb"]);
+    fetchViaProxy.mockResolvedValueOnce(ok({ resolved: 1, choice: "once" }));
+    await toolBridgeChatApproval("chatcmpl-a8cb", "once");
+    useApprovalsStore.setState((s) => ({ ...s, items: [] }));
+    fetchViaProxy.mockResolvedValueOnce(ok({ approvals: [run] }));
+    await syncPolledApprovals(SID);
+    expect(useApprovalsStore.getState().items).toEqual([]);
+  });
+});

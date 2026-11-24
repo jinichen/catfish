@@ -54,3 +54,12 @@ def test_队列里不是从流来的也列出来_流里有的不重复():
     assert got[1] == {"session_key": "agent:main:api_server:dm:20261106_142422_babcd2",
                       "session_id": "20261106_142422_babcd2", "request_id": "r9",
                       "command": "execute_code", "description": "动态执行"}
+
+
+def test_批过的不再列_run状态还停在等批准也不算():
+    """11/24: 批准后 _run_statuses 还停在 waiting_for_approval 带着旧 request_id; 队列里已经没有了。"""
+    a = _Adapter({"run-a": {"status": "waiting_for_approval", "created_at": 10, "session_id": "s",
+                            "approval": {"request_id": "old", "command": "x", "session_id": "s"}}})
+    assert mod.merged(a, {"agent:main:api_server:dm:s": []}) == []
+    got = mod.merged(a, {"agent:main:api_server:dm:s": [{"request_id": "old", "command": "x"}]})
+    assert [x.get("run_id") for x in got] == ["run-a"]

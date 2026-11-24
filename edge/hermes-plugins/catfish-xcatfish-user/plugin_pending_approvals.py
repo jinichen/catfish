@@ -53,21 +53,25 @@ def snapshot(adapter: Any) -> list[dict[str, Any]]:
 API_SESSION_PREFIX = "agent:main:api_server:dm:"
 
 
+def _all_queues() -> dict | None:
+    """hermes 批准队列的快照 {session_key: [entry.data…]}; 拿不到返回 None。"""
+    try:
+        from tools import approval as _ap  # noqa: PLC0415
+    except ImportError:
+        return None
+    with _ap._lock:
+        keys = list(_ap._gateway_queues)
+    return {k: _ap.list_gateway_approvals(k) for k in keys}
+
+
 def queued_snapshot(queues: dict | None = None) -> list[dict[str, Any]]:
     """11/24 鸿波「为什么没有弹出授权卡片？」: 不是从窗口那条流发起的一轮 (卡住的对话解开后排队消息接着跑、
     Companion 中途重启) 不在 _run_statuses 里, 只在 hermes 的批准队列 (tools.approval._gateway_queues)。
     这里把队列里对话窗口的那些也列出来 —— 没有 run_id, 带上 session_key, 回执走 P15.2 POST
     /v1/sessions/{session_key}/approval (带 request_id, 只批这一条)。只读。"""
-    if queues is None:
-        try:
-            from tools import approval as _ap  # noqa: PLC0415
-        except ImportError:
-            return []
-        with _ap._lock:
-            keys = list(_ap._gateway_queues)
-        rows = {k: _ap.list_gateway_approvals(k) for k in keys}
-    else:
-        rows = queues
+    rows = _all_queues() if queues is None else queues
+    if rows is None:
+        return []
     out = []
     for key, entries in rows.items():
         if not isinstance(key, str) or not key.startswith(API_SESSION_PREFIX):
@@ -86,10 +90,18 @@ def queued_snapshot(queues: dict | None = None) -> list[dict[str, Any]]:
 
 
 def merged(adapter: Any, queues: dict | None = None) -> list[dict[str, Any]]:
-    """流里的 (有 run_id) 在前; 队列里同一个 request_id 的不再重复列。"""
+    """流里的 (有 run_id) 在前; 队列里同一个 request_id 的不再重复列。
+
+    11/24 鸿波「为什么批准后又再来一次？」: _run_statuses 在批准之后还会停在 waiting_for_approval、带着
+    已经批过的 request_id, 一直到这个 run 下一次变状态。轮询把它当成还在等, 卡片又弹出来, 一点就 409。
+    批准队列才是真的「还在等」: 有队列数据时, 流里那些只留 request_id 还在队列里的。"""
+    q = _all_queues() if queues is None else queues
     runs = snapshot(adapter)
+    if q is not None:
+        live = {d.get("request_id") for entries in q.values() for d in (entries or []) if isinstance(d, dict)}
+        runs = [r for r in runs if r.get("request_id") in live]
     seen = {r.get("request_id") for r in runs}
-    return runs + [q for q in queued_snapshot(queues) if q["request_id"] not in seen]
+    return runs + [x for x in queued_snapshot(q) if x["request_id"] not in seen]
 
 
 def register_routes(router: Any) -> bool:
