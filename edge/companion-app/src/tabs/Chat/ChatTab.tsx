@@ -29,6 +29,7 @@ import TaskPicker from "./TaskPicker";
 import ArtifactPanel from "./artifacts/ArtifactPanel";
 import { useCardPanelStore } from "../../store/cardPanel";
 import { useArtifactAutoOpen } from "./artifacts/useArtifactAutoOpen";
+import { usePolledApprovals } from "../../hooks/usePolledApprovals";
 import { useArtifactStore } from "../../store/artifacts";
 import { sessionArtifactPaths } from "../../lib/artifactKinds";
 
@@ -385,6 +386,7 @@ export default function ChatTab() {
   }, [persistedSessionId, noMessages]);
   const artifactPaths = useMemo(() => sessionArtifactPaths(messages), [messages]);
   useArtifactAutoOpen(messages, isStreaming, persistedSessionId);
+  usePolledApprovals(persistedSessionId, isStreaming); // 11/24: 窗口没连着那一轮时批准卡片也弹得出来
 
   return (
     <div className={artifactView ? "chat-workspace chat-workspace--with-artifact" : "chat-workspace"}>

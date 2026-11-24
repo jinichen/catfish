@@ -52,6 +52,12 @@ export function nativeApprovalBody(native: NativeRun, choice: string): Record<st
   return native.requestId ? { choice, request_id: native.requestId } : { choice };
 }
 
+/** 这个批准请求 (request_id) 已经顺着流到了窗口 —— 轮询到同一条时不再弹第二张卡 */
+export function hasNativeRequest(requestId: string): boolean {
+  for (const r of nativeRuns.values()) if (r.requestId === requestId) return true;
+  return false;
+}
+
 export function forgetNativeApproval(key: string): void {
   nativeRuns.delete(key);
 }

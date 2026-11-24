@@ -50,6 +50,48 @@ def snapshot(adapter: Any) -> list[dict[str, Any]]:
     return out
 
 
+API_SESSION_PREFIX = "agent:main:api_server:dm:"
+
+
+def queued_snapshot(queues: dict | None = None) -> list[dict[str, Any]]:
+    """11/24 鸿波「为什么没有弹出授权卡片？」: 不是从窗口那条流发起的一轮 (卡住的对话解开后排队消息接着跑、
+    Companion 中途重启) 不在 _run_statuses 里, 只在 hermes 的批准队列 (tools.approval._gateway_queues)。
+    这里把队列里对话窗口的那些也列出来 —— 没有 run_id, 带上 session_key, 回执走 P15.2 POST
+    /v1/sessions/{session_key}/approval (带 request_id, 只批这一条)。只读。"""
+    if queues is None:
+        try:
+            from tools import approval as _ap  # noqa: PLC0415
+        except ImportError:
+            return []
+        with _ap._lock:
+            keys = list(_ap._gateway_queues)
+        rows = {k: _ap.list_gateway_approvals(k) for k in keys}
+    else:
+        rows = queues
+    out = []
+    for key, entries in rows.items():
+        if not isinstance(key, str) or not key.startswith(API_SESSION_PREFIX):
+            continue
+        for d in entries or []:
+            if not isinstance(d, dict) or not d.get("request_id"):
+                continue
+            out.append({
+                "session_key": key,
+                "session_id": key[len(API_SESSION_PREFIX):],
+                "request_id": d["request_id"],
+                "command": d.get("command", ""),
+                "description": d.get("description", ""),
+            })
+    return out
+
+
+def merged(adapter: Any, queues: dict | None = None) -> list[dict[str, Any]]:
+    """流里的 (有 run_id) 在前; 队列里同一个 request_id 的不再重复列。"""
+    runs = snapshot(adapter)
+    seen = {r.get("request_id") for r in runs}
+    return runs + [q for q in queued_snapshot(queues) if q["request_id"] not in seen]
+
+
 def register_routes(router: Any) -> bool:
     """跟 P44 / P49 同一个 fence (Application.__init__, router 未 freeze)。鉴权 fail closed。"""
     from aiohttp import web as _w  # noqa: PLC0415
@@ -64,7 +106,7 @@ def register_routes(router: Any) -> bool:
         if denied is not None:
             return denied
         adapter = request.app.get("_catfish_apiserver_adapter")
-        return _w.json_response({"approvals": snapshot(adapter)})
+        return _w.json_response({"approvals": merged(adapter)})
 
     try:
         router.add_get(ROUTE, _list)

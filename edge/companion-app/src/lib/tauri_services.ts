@@ -8,6 +8,7 @@
  * lib/tauri.ts 现在是 barrel, 只做 re-export —— 62 个调用方一行没动。
  */
 
+import { answerQueuedApproval, isQueueKey } from "./polledApprovals";
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
 import type { HermesBootstrapProgress } from "./hermesBootstrap";
 import { config } from "./env";
@@ -174,6 +175,8 @@ export const toolBridgeChatApproval = async (
   sessionKey: string,
   choice: "once" | "session" | "always" | "deny",
 ): Promise<{ resolved?: number; choice?: string }> => {
+  // 11/24: 窗口没连着那一轮、靠轮询发现的批准 —— 走本机服务的控制通道 (lib/polledApprovals.ts)
+  if (isQueueKey(sessionKey)) return answerQueuedApproval(sessionKey, choice);
   // 10/14 hermes v0.22: 原生审批 (chat.ts 登记过的 run_id) 走 POST /v1/runs/{run_id}/approval
   const native = nativeApprovalFor(sessionKey);
   const url = native

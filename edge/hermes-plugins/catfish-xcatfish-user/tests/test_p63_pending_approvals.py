@@ -36,3 +36,21 @@ def test_只给还在等批准的_带回执要的字段():
 def test_没有adapter或格式不对_返回空():
     assert mod.snapshot(None) == []
     assert mod.snapshot(_Adapter({"x": "坏数据"})) == []
+
+
+def test_队列里不是从流来的也列出来_流里有的不重复():
+    """11/24: 卡住的对话解开后排队消息接着跑 —— 没有窗口的流, 批准只在 hermes 队列里, 卡片弹不出来。"""
+    a = _Adapter({"run-a": {"status": "waiting_for_approval", "created_at": 10,
+                            "approval": {"request_id": "r1", "command": "curl", "description": "联网"}}})
+    queues = {
+        "agent:main:api_server:dm:20261106_142422_babcd2": [
+            {"request_id": "r1", "command": "curl", "description": "联网"},
+            {"request_id": "r9", "command": "execute_code", "description": "动态执行"},
+        ],
+        "agent:main:weixin:dm:abc": [{"request_id": "w1", "command": "x"}],
+    }
+    got = mod.merged(a, queues)
+    assert [x["request_id"] for x in got] == ["r1", "r9"]
+    assert got[1] == {"session_key": "agent:main:api_server:dm:20261106_142422_babcd2",
+                      "session_id": "20261106_142422_babcd2", "request_id": "r9",
+                      "command": "execute_code", "description": "动态执行"}

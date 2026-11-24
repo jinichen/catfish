@@ -56,6 +56,12 @@ pub async fn hermes_session_unstick(session_id: String) -> Result<UnstickResult,
     if !valid_session_id(&session_id) {
         return Err("会话 id 不对".into());
     }
+    let out = run_hermes_script(SCRIPT, vec![session_id]).await?;
+    parse_output(&out)
+}
+
+/// 用 hermes 自己的 venv 跑一段控制通道脚本, 返回 stdout
+async fn run_hermes_script(script: &'static str, args: Vec<String>) -> Result<String, String> {
     let python = super::codex_probe::hermes_python()?;
     let root = python
         .parent()
@@ -69,8 +75,8 @@ pub async fn hermes_session_unstick(session_id: String) -> Result<UnstickResult,
             .current_dir(&root)
             .env("HERMES_HOME", &home)
             .arg("-c")
-            .arg(SCRIPT)
-            .arg(&session_id)
+            .arg(script)
+            .args(&args)
             .output()
             .map_err(|e| format!("启动失败: {e}"))?;
         if !out.status.success() {
@@ -78,7 +84,7 @@ pub async fn hermes_session_unstick(session_id: String) -> Result<UnstickResult,
             let tail: String = err.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" / ");
             return Err(format!("本机服务没接受: {tail}"));
         }
-        parse_output(&String::from_utf8_lossy(&out.stdout))
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     })
     .await
     .map_err(|e| e.to_string())?

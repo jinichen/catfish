@@ -402,3 +402,22 @@ def test_上游check_auth的契约没变():
     assert "Authorization" in body and "Bearer" in body, (
         "_check_auth 不再校验 Bearer 头 —— 鉴权方式变了, 重新确认 Companion 发的东西还对不对。"
     )
+
+
+
+def test_带request_id_只批那一条():
+    """11/24: P63 列出来的队列里的批准 (不是从流来的) 按 request_id 精确批。"""
+    calls: list = []
+    status, text, _h = _post(_build_middleware(calls), "/v1/sessions/sid-abc/approval",
+                             headers={"Authorization": f"Bearer {_GOOD_KEY}"}, adapter=_FakeAdapter(),
+                             body='{"choice": "once", "request_id": "1e8d1efd"}')
+    assert status == 200, text
+    assert calls == [("sid-abc", "once", (), {"request_id": "1e8d1efd"})]
+
+
+def test_request_id_不是字母数字就拒():
+    calls: list = []
+    status, _t, _h = _post(_build_middleware(calls), "/v1/sessions/sid-abc/approval",
+                           headers={"Authorization": f"Bearer {_GOOD_KEY}"}, adapter=_FakeAdapter(),
+                           body='{"choice": "once", "request_id": "../x"}')
+    assert status == 400 and calls == []

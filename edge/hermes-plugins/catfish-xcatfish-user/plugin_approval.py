@@ -363,7 +363,13 @@ def _patch_p15_2_chat_approval_route() -> None:
                         # (命中的全是各 venv 里 pygments/pip 的同名符号). 一个
                         # 没人用、却在安全端点上放大权限的开关 —— 上游默认
                         # resolve_all=False, 这里就是那个默认值, 行为不变.
-                        resolved = resolve_gateway_approval(session_id, choice)
+                        # 11/24: 带 request_id 就只批这一条 (P63 列出来的、不是从流里来的那种);
+                        # 不带照旧批这个对话最早的一条
+                        request_id = body.get("request_id")
+                        if request_id is not None and not (isinstance(request_id, str) and request_id.isalnum()):
+                            return _aw.json_response({"error": "request_id 不对"}, status=400)
+                        resolved = (resolve_gateway_approval(session_id, choice, request_id=request_id) if request_id
+                                    else resolve_gateway_approval(session_id, choice))
                         logger.info(
                             "P15.2 chat_approval resolved=%d choice=%s sid=%s",
                             resolved, choice, session_id[:24],
