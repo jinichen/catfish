@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::hermes_install_artifacts::{hermes_extra_package_names, RuntimeArtifacts};
+use super::hermes_install_artifacts::{hermes_extra_package_names, hermes_extra_pins, RuntimeArtifacts};
 use super::hermes_install_native::{REQUIREMENTS_FILE, WHEELHOUSE_DIR};
 use super::hermes_install_state::BootstrapPaths;
 
@@ -52,6 +52,20 @@ pub(crate) fn overrides() -> Vec<(String, String)> {
         .collect()
 }
 
+/// 要求的最低版本 [(规范化包名, 版本)]: 安全覆盖 + 额外包清单里 `==` 钉的版本 (11/24, 见
+/// hermes_install_artifacts::hermes_extra_pins)。同一个包两边都有时取高的。
+pub(crate) fn floors() -> Vec<(String, String)> {
+    let mut out = overrides();
+    for (name, version) in hermes_extra_pins() {
+        match out.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, v)) if below(v, &version) => *v = version,
+            Some(_) => {}
+            None => out.push((name, version)),
+        }
+    }
+    out
+}
+
 /// 版本号里的数字段, 按段比大小 (2.15.1 > 2.13.0; 2.8.0 > 2.7.0)。
 fn version_key(version: &str) -> Vec<u64> {
     version
@@ -68,7 +82,7 @@ fn below(have: &str, floor: &str) -> bool {
 /// 依赖清单 (`包名==版本 \` 加 `--hash` 续行) 里低于覆盖版本的包, 格式 `包名 已钉版本 < 要求版本`。
 /// 清单里没有的包不算 (有的覆盖只是预防, 见覆盖清单末尾)。
 fn stale_pins(requirements: &str) -> Vec<String> {
-    let floors = overrides();
+    let floors = floors();
     let mut out = Vec::new();
     for line in requirements.lines() {
         let Some((name, rest)) = line.split_once("==") else { continue };
@@ -114,7 +128,7 @@ fn outdated_reasons(requirements: &str) -> Vec<String> {
 
 /// 拼进运行环境检查的 Python 片段: 装了且低于覆盖版本就退出非零 (跟 import 失败同样处理)。
 pub(crate) fn version_floor_check() -> String {
-    let pairs: Vec<String> = overrides().iter().map(|(n, v)| format!("({n:?}, {v:?})")).collect();
+    let pairs: Vec<String> = floors().iter().map(|(n, v)| format!("({n:?}, {v:?})")).collect();
     format!(
         "import importlib.metadata as _m, re as _re\n\
          _k = lambda v: [int(x) for x in _re.findall(r'\\d+', v)]\n\
@@ -256,8 +270,11 @@ mod tests {
     /// 一份齐全的依赖清单 (额外包都在), pyjwt 用给定版本
     fn reqs(pyjwt: &str) -> String {
         let mut out = format!("pyjwt=={pyjwt} \\\n    --hash=sha256:aa\n");
+        // 钉了版本的照钉的写 (11/24 起钉的版本也是最低版本), 没钉的随便写个 1.0
+        let pins = hermes_extra_pins();
         for name in hermes_extra_package_names() {
-            out.push_str(&format!("{name}==1.0 \\\n    --hash=sha256:bb\n"));
+            let version = pins.iter().find(|(n, _)| *n == name).map(|(_, v)| v.as_str()).unwrap_or("1.0");
+            out.push_str(&format!("{name}=={version} \\\n    --hash=sha256:bb\n"));
         }
         out
     }
@@ -272,6 +289,17 @@ mod tests {
         assert!(hermes_extra_package_names().contains(&"xlrd".to_owned()));
         assert!(outdated_reasons(&reqs("2.15.1")).is_empty());
         assert_eq!(outdated_reasons(&reqs("2.13.0")), vec!["pyjwt 2.13.0 < 2.15.1"]);
+    }
+
+    /// 11/24: 额外包清单里 `==` 钉的版本也是最低版本 —— a2ui-agent-sdk 0.11 → 0.12.1 那次, 老机器上
+    /// 旧版照样 import 得了, 装了新安装包也一直停在旧版
+    #[test]
+    fn 额外包钉的版本也算最低版本_老机器的旧版要换() {
+        let pin = hermes_extra_pins().into_iter().find(|(n, _)| n == "a2ui-agent-sdk").expect("a2ui-agent-sdk 要钉版本");
+        assert!(floors().contains(&pin), "{:?}", floors());
+        let old = reqs("2.15.1").replace(&format!("a2ui-agent-sdk=={}", pin.1), "a2ui-agent-sdk==0.11.0");
+        assert_eq!(outdated_reasons(&old), vec![format!("a2ui-agent-sdk 0.11.0 < {}", pin.1)]);
+        assert!(version_floor_check().contains(&format!("({:?}, {:?})", pin.0, pin.1)));
     }
 
     #[test]

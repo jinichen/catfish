@@ -62,6 +62,18 @@ pub(crate) fn hermes_extra_package_names() -> Vec<String> {
         .collect()
 }
 
+/// 11/24: 额外包清单里用 `==` 钉了版本的那些 [(规范化包名, 版本)] —— 当作最低版本, 跟安全覆盖同一套
+/// (hermes_dep_overrides::floors)。原来只查 import 得不得了: a2ui-agent-sdk 0.11 → 0.12.1 装了新安装包,
+/// 老机器上旧版照样 import 得了, 就一直停在旧版。
+pub(crate) fn hermes_extra_pins() -> Vec<(String, String)> {
+    hermes_extra_entries()
+        .filter_map(|(req, _)| {
+            let (name, version) = req.split_once("==")?;
+            Some((name.trim().to_ascii_lowercase().replace(['_', '.'], "-"), version.trim().to_owned()))
+        })
+        .collect()
+}
+
 /// 装没装的判据: import 得了才算。playwright 要 sync_api (装了一半时顶层能 import)。
 pub(crate) fn hermes_extra_import_check() -> String {
     let modules: Vec<&str> = hermes_extra_entries().map(|(_, module)| module).collect();
