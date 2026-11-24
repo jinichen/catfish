@@ -14,6 +14,7 @@ import { useChatStore } from "../../store/chat";
 import { useUIStore } from "../../store/ui";
 import { useCatalog } from "../../hooks/useCatalog";
 import { getSession, sessionGetTaskUid, sessionUpdateTitle } from "../../lib/tauri";
+import { chatMessageCount } from "../../lib/sessionMessages";
 import * as streamRegistry from "../../lib/streamRegistry";
 import ChatPanel from "./ChatPanel";
 import SessionAttachmentsBar from "./SessionAttachmentsBar";
@@ -356,7 +357,9 @@ export default function ChatTab() {
         const detail = await getSession(persistedSessionId);
         // detail.meta.messageCount 是 state.db 真实总数
         // 如果跟当前 messages 长度差了 (微信/飞书/企微 进来新消息), reload
-        const dbCount = detail.meta?.messageCount ?? 0;
+        // 11/24: 只数对话消息 —— hermes 每轮末尾记的 session_meta 行也算进 messageCount,
+        // 害得每轮答完都从库里整段重读一遍 (全部消息重挂 = 闪一下)
+        const dbCount = chatMessageCount(detail);
         if (dbCount > lastMsgCount) {
           lastMsgCount = dbCount;
           loadSession(detail);

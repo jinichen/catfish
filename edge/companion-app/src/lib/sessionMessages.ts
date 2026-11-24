@@ -111,8 +111,17 @@ export function dbMessageToChat(m: SessionMessage): ChatMessage {
  *  P3.5.8: 这是同步版, **不还原 image base64** (历史 image attachments 会失踪).
  *  需要历史看图的调用方走 loadSessionMessagesAsChatAsync.
  */
+const KNOWN_ROLES = new Set(["user", "assistant", "system", "tool"]);
+
+/** 库里这段会话有几条是对话消息 (不算 hermes 的 session_meta 记账行) */
+export function chatMessageCount(detail: SessionDetail): number {
+  return detail.messages.filter((m) => KNOWN_ROLES.has(m.role)).length;
+}
+
 export function loadSessionMessagesAsChat(detail: SessionDetail): ChatMessage[] {
-  const mapped = detail.messages.map(dbMessageToChat);
+  // 11/24 鸿波「最后闪一下, 多了一个空的小鲶」: hermes 在每轮末尾往库里记一行 role=session_meta
+  // (它自己的账, 没有正文)。不认识的角色以前一律当成小鲶的回复, 从库里重读时就多出一个空头像。
+  const mapped = detail.messages.filter((m) => KNOWN_ROLES.has(m.role)).map(dbMessageToChat);
   // 第二遍: tool_call_id → content 索引, 回填 assistant.tool_calls[i].result
   const toolResultByCallId = new Map<string, string>();
   for (const m of mapped) {
