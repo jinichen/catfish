@@ -19,3 +19,7 @@
 上游的 TypeScript 渲染包 (`typescript/catalogs/vegachart`, Lit 版) 没发到 npm; Companion 照它的做法用 vega-embed 写了 React 版
 (companion-app/src/tabs/Chat/VegaChart.tsx: 动态加载、SVG、不要操作菜单、表达式走 vega-interpreter、loader 全拒)。
 升级时: 换这个文件 → 核对 VegaChart 属性 → `python -m catfish_tool_bridge.a2ui_catalog` 重新生成。
+
+# 11/24 升级: a2ui-agent-sdk 0.12.1 / a2ui-core 0.7.1, Companion @a2ui/react + @a2ui/web_core 0.16.1
+基础目录和 VegaChart 目录在 python/a2ui-core/v0.7.1 这个 tag 上跟这里的拷贝逐字相同, 没换。
+同一张卡新旧 SDK 编出来的消息逐字一样; 本机 21 张已存卡片新旧 core 校验结果一样 (新增的严格校验没多拒一张)。

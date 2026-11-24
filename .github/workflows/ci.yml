@@ -173,7 +173,7 @@ jobs:
           # 10/23: 入知识库前抽文字 (doc_text.py) 用 pypdfium2 / python-pptx —— 客户机上 hermes-deps 本来就装
           # 11/15: 对话卡片 (a2ui_card.py) 用 A2UI 官方 SDK 生成提示词 / 校验卡片 —— 客户机上随 hermes-extra-packages.txt 装
           pip install pytest pytest-asyncio pyyaml httpx jieba pydantic python-dotenv \
-            python-docx Pillow openpyxl cryptography pypdfium2 python-pptx a2ui-agent-sdk==0.11.0
+            python-docx Pillow openpyxl cryptography pypdfium2 python-pptx a2ui-agent-sdk==0.12.1
 
       - name: Run tool-bridge tests
         working-directory: edge/tool-bridge
