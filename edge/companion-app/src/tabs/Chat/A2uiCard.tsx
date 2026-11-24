@@ -3,13 +3,14 @@
  * 这个文件连带 @a2ui/react + @a2ui/web_core (+ Lit) 体积不小, 只经 ToolCards.tsx 的 React.lazy 按需加载 ——
  * 对话里真出现卡片才拉, 平时不进首屏。
  */
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { A2uiSurface, MarkdownComponentContext, type ReactCatalogComponent } from "@a2ui/react";
 import { Catalog, MessageProcessor, type ActionPayload, type SurfaceModel } from "@a2ui/web_core";
 import { basicCatalog } from "@a2ui/web_core/catalogs/basic/v1";
 
 import { buildSubmission, CARD_BASIC_COMPONENTS, CARD_BLOCKED_FUNCTIONS, CARD_CATALOG_ID, cardProblem, cardTitle } from "../../lib/a2uiCard";
 import { CATFISH_CARD_COMPONENTS } from "./catfishCardComponents";
+import { hasInvalid, touchAll, touchedHost } from "../../lib/a2uiTouched";
 
 /** 鲶鱼目录 (id = CARD_CATALOG_ID): 上游 v1.0 基础目录里挑 12 个基础组件 (上游的 Lit 实现) + 鲶鱼自定义 4 个 (React 实现),
  *  函数去掉 openUrl。tool-bridge 的专员按同一个 id 的 JSON 目录生成 (tool-bridge/a2ui_catalog.py) */
@@ -51,6 +52,11 @@ const THEME: CSSProperties = {
   "--a2ui-font-family": "inherit",
   "--a2ui-font-family-title": "inherit",
   "--a2ui-font-size": "13px",
+  // 11/25: 组件读的是 -s / -xs (没设时跟着外层字号走, 选项字比标题还大); 标题 (标签) 600, 选项正文见 a2uiShadowStyles
+  "--a2ui-font-size-s": "13px",
+  "--a2ui-font-size-xs": "12px",
+  "--a2ui-label-font-weight": "600",
+  "--a2ui-choicepicker-color-error": "var(--status-err)",
   "--a2ui-border-radius": "6px",
 } as CSSProperties;
 
@@ -140,11 +146,29 @@ export default function A2uiCard({ cardId, messages, interactive, submitted, onS
   const [sentNow, setSentNow] = useState(false);
   const done = submitted || sentNow;
   const built = useMemo(() => buildCard(cardId, messages), [cardId, messages]);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  // 11/25: 碰过的那一项才显示检查没通过的提示 (artifacts.css + lib/a2uiTouched.ts)
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const touch = (e: Event) => touchedHost(e)?.setAttribute("data-touched", "");
+    for (const t of ["input", "click", "focusout"]) el.addEventListener(t, touch);
+    return () => {
+      for (const t of ["input", "click", "focusout"]) el.removeEventListener(t, touch);
+    };
+  }, [built]);
 
   useEffect(() => {
     if (!("processor" in built)) return;
     built.handlers.onAction = (a) => {
       if (!interactive || done) return;
+      // 11/25: 还有没填 / 没通过检查的 → 不交, 把每一项的提示都亮出来 (平时碰过才显示, 见 a2uiShadowStyles)
+      const el = boxRef.current;
+      if (el && hasInvalid(el)) {
+        touchAll(el);
+        return;
+      }
       setSentNow(true);
       onSubmit(buildSubmission({
         title: built.title, key: cardId,
@@ -159,7 +183,7 @@ export default function A2uiCard({ cardId, messages, interactive, submitted, onS
   }
 
   return (
-    <div className="a2ui-card" data-card={cardId} style={{ ...THEME, margin: "var(--space-2) 0", maxWidth: 640 }}>
+    <div ref={boxRef} className="a2ui-card" data-card={cardId} style={{ ...THEME, margin: "var(--space-2) 0", maxWidth: 640 }}>
       <div aria-disabled={done || !interactive} style={done ? { opacity: 0.6, pointerEvents: "none" } : undefined}>
         <MarkdownComponentContext.Provider value={PlainMarkdown}>
           {built.surfaces.map((s) => <A2uiSurface key={s.id} surface={s} />)}
