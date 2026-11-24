@@ -86,7 +86,8 @@ export default function MeetingTab() {
           </div>
           {error && <ErrorLine>{error}</ErrorLine>}
         </div>
-        <div className="meeting-col" style={{ minHeight: 0, overflowY: "auto", paddingBottom: "var(--space-4)" }}>
+        {/* 11/24 鸿波「头部固定, 内容区支持垂直滚动」: 右栏本身不滚, 滚动交给 MeetingDetail 里的内容区 */}
+        <div className="meeting-col" style={{ minHeight: 0, display: "flex", flexDirection: "column", paddingBottom: "var(--space-4)" }}>
         {current ? (
           <MeetingDetail
             meta={current}

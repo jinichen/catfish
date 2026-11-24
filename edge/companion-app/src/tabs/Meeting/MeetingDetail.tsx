@@ -1,7 +1,7 @@
 /**
  * 一场会议的详情 (10/1): 按状态走 —— 待转写 → 转写中 → 已转写 (改说话人名 / 看转写 / 纪要)。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   formatClock,
@@ -30,7 +30,6 @@ import MinutesView from "./MinutesView";
 import TranscriptView from "./TranscriptView";
 import { sampleSegment, toggleClip } from "./meetingPlayer";
 import { estimatePercent, STATUS_LABEL } from "./meetingHelpers";
-import { COL_CARD } from "./meetingHelpers";
 
 const PHASE_LABEL: Record<string, string> = {
   starting: "启动中",
@@ -67,7 +66,19 @@ export default function MeetingDetail({
   const [saved, setSaved] = useState(false);
   const dirty = useRef(false);
   const [speakersOpen, setSpeakersOpen] = useState(true);
-  const [tab, setTab] = useState<"minutes" | "transcript">("minutes");
+  const [tab, setTabState] = useState<"minutes" | "transcript">("minutes");
+  // 11/24: 内容区一个滚动框, 纪要 / 转写各记各的位置 —— 切走时记下, 切回来摆回去
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const tabScroll = useRef<Record<string, number>>({});
+  const setTab = (t: "minutes" | "transcript") => {
+    const el = scrollRef.current;
+    if (el) tabScroll.current[tab] = el.scrollTop;
+    setTabState(t);
+  };
+  // 切过去那一刻 (画到屏幕之前) 摆回这个页上次的位置; 没看过的页从顶上开始
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = tabScroll.current[tab] ?? 0;
+  }, [tab]);
   // 删除点两下: Tauri WebView 里 window.confirm() 静默返回 null (CronJobsCard 7/6 记过), 跟模板删除同一个做法
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -78,7 +89,10 @@ export default function MeetingDetail({
     setError(null);
     setSaved(false);
     setConfirmDelete(false);
-    setTab("minutes");
+    // 换了一场会议: 回到纪要、从顶上看, 上一场记的滚动位置作废
+    setTabState("minutes");
+    tabScroll.current = {};
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
     dirty.current = false;
     if (meta.status === "transcribed") {
       meetingTranscript(meta.id).then(setTranscript).catch((e) => setError(String(e)));
@@ -182,11 +196,15 @@ export default function MeetingDetail({
 
   const busyNow = meta.status === "recording" || meta.status === "transcribing";
   const head = (
-    <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>{meta.title}</h3>
-        <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginTop: 4 }}>
-          {meta.created_at.slice(0, 16).replace("T", " ")} · {formatClock(meta.duration_secs)} · {meta.attendees} 人 · {STATUS_LABEL[meta.status]}
+        {/* 11/24: 标题和时间并成一行, 固定头部压矮 */}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
+          <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
+              title={meta.title}>{meta.title}</h3>
+          <span style={{ fontSize: 12, color: "var(--catfish-text-muted)", whiteSpace: "nowrap", flexShrink: 0 }}>
+            {meta.created_at.slice(0, 16).replace("T", " ")} · {formatClock(meta.duration_secs)} · {meta.attendees} 人 · {STATUS_LABEL[meta.status]}
+          </span>
         </div>
         {confirmDelete && (
           <div style={{ fontSize: 12, color: "var(--catfish-danger, #d9534f)", marginTop: 4 }}>
@@ -203,6 +221,7 @@ export default function MeetingDetail({
   );
 
   let body = null;
+  let fixed = null;
   if (meta.status === "recording") {
     // 11/15 会中小鲶: 实时文字 + 问小鲶 + 主动提示
     body = <LiveAssist meta={meta} />;
@@ -284,7 +303,8 @@ export default function MeetingDetail({
                         onReady={() => { setHqSetup(false); loadHq(); }} />
         )}
         {open && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8,
+                        maxHeight: "28vh", overflowY: "auto" /* 在固定头部里: 人多时自己滚, 别把内容区挤没 */ }}>
             {/* 11/12: 每个说话人旁边 ▶ 听他说得最长的一句, 听出是谁再填名字 */}
             {spks.map((s) => {
               const sample = sampleSegment(transcript.segments, s);
@@ -327,7 +347,7 @@ export default function MeetingDetail({
         {label}
       </button>
     );
-    body = (
+    fixed = (
       <>
         {speakers}
         <div role="tablist" aria-label="纪要 / 转写"
@@ -336,7 +356,11 @@ export default function MeetingDetail({
           {tabBtn("minutes", "纪要")}
           {tabBtn("transcript", `转写 · ${transcript.segments.length} 句`)}
         </div>
-        {/* 两个都挂着, 只切显示: 转写里改的错字、小鲶改到一半的纪要, 切过去再切回来都还在 */}
+      </>
+    );
+    // 两个都挂着, 只切显示: 转写里改的错字、小鲶改到一半的纪要, 切过去再切回来都还在; 各自的滚动位置也各记各的
+    body = (
+      <>
         <div style={{ display: tab === "minutes" ? "contents" : "none" }}>
           <MinutesView key={notesTick} meta={meta} names={names} />
         </div>
@@ -347,12 +371,24 @@ export default function MeetingDetail({
     );
   }
 
+  // 11/24 鸿波「头部和内容区分开处理, 头部固定, 内容区支持垂直滚动」:
+  // 固定: 标题行 + 说话人行 (含重新转写) + 纪要/转写切换; 滚动: 下面的纪要 / 转写正文。
+  // 纪要和转写各记各的滚动位置 (切过去再切回来不跳回顶)。
   return (
-    <div style={{ ...cardStyle, ...COL_CARD }}>
-      {head}
-      {body}
-      {meta.status !== "recording" && <LiveNotes key={meta.id} meetingId={meta.id} onChanged={() => setNotesTick((n) => n + 1)} />}
-      {error && <ErrorLine>{error}</ErrorLine>}
+    <div style={{ ...cardStyle, flex: 1, minHeight: 0, gap: 0, padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div className="meeting-detail__head"
+           style={{ display: "flex", flexDirection: "column", gap: 8, padding: "var(--space-4) var(--space-4) var(--space-2)",
+                    borderBottom: "1px solid var(--catfish-border)", flexShrink: 0 }}>
+        {head}
+        {fixed}
+      </div>
+      <div ref={scrollRef} className="meeting-detail__body"
+           style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "var(--space-3)",
+                    padding: "var(--space-3) var(--space-4) var(--space-4)" }}>
+        {body}
+        {meta.status !== "recording" && <LiveNotes key={meta.id} meetingId={meta.id} onChanged={() => setNotesTick((n) => n + 1)} />}
+        {error && <ErrorLine>{error}</ErrorLine>}
+      </div>
     </div>
   );
 }
