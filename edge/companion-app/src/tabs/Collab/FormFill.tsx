@@ -100,7 +100,7 @@ export default function FormFill({ formId, onClose }: { formId: string; onClose:
 
       {!closed && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <Btn kind="ghost" disabled={busy} onClick={askXiaonian}>🐟 让小鲶先填</Btn>
+          <Btn kind="ghost" disabled={busy} onClick={askXiaonian}>让小鲶先填</Btn>
           <span style={muted}>小鲶用你电脑上的邮件、文件、知识库起草, 找不到的空着; 只存草稿, 交不交你定。</span>
         </div>
       )}

@@ -9,6 +9,8 @@
  *        「请他重做」的框里先填好小鲶起草的话 (可以改); 「延期」只改截止, 对方不用重新同意。
  */
 import { useCallback, useEffect, useState } from "react";
+import { CheckCircle, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import type { ScheduleValue } from "./TaskSchedulePicker";
 import TaskSchedulePicker from "./TaskSchedulePicker";
@@ -115,7 +117,7 @@ export default function TaskProgress({ taskId, onClose, initialError }: {
     <Overlay title={`「${task.title}」的进度`} onClose={onClose} width={760}>
       <span style={muted}>
         {task.status === "cancelled" ? "已取消" : task.status === "draft" ? "还没发出去" : "进行中"}
-        {d.schedule_text ? ` · ⏰ ${d.schedule_text}` : task.deadline ? ` · 截止 ${when(task.deadline)}` : " · 不限时"} ·
+        {d.schedule_text ? ` · ${d.schedule_text}` : task.deadline ? ` · 截止 ${when(task.deadline)}` : " · 不限时"} ·
         {" "}{Object.entries(progress.counts).map(([k, v]) => `${k} ${v}`).join(" · ") || "还没加人"}
       </span>
       <div style={{ fontSize: 13, whiteSpace: "pre-wrap", padding: "8px 10px", borderRadius: 4,
@@ -259,12 +261,12 @@ export default function TaskProgress({ taskId, onClose, initialError }: {
           {canCheck && (
             <span title={task.expect ? "按「要交」逐人看交回的结果, 标出缺什么, 起草重做意见" : "按任务原话逐人看交回的结果 (派的时候写了「要交」会更准)"}>
               <Btn kind="ghost" disabled={busy} onClick={checkNow}>
-                {checking ? "小鲶在核对… (一两分钟)" : task.check ? "🐟 再核对一次" : "🐟 小鲶核对结果"}
+                {checking ? "小鲶在核对… (一两分钟)" : task.check ? "再核对一次" : "小鲶核对结果"}
               </Btn>
             </span>
           )}
           <Btn kind="ghost" disabled={busy || !anyDone} onClick={() => { startChat(summaryChatKey(taskId), summaryPrompt(task)); onClose(); }}>
-            🐟 让小鲶汇总
+            让小鲶汇总
           </Btn>
           {task.check && !checking && <span style={muted}>核对于 {when(task.check.at)}{task.check.summary ? ` · ${task.check.summary}` : ""}</span>}
         </span>
@@ -292,7 +294,7 @@ function CheckLine({ c }: { c: ReturnType<typeof checkOf> }) {
   return (
     <div style={{ fontSize: 13, color, display: "flex", flexDirection: "column", gap: 2 }}>
       <span>
-        🐟 {c.ok ? "对上了要求" : `还缺 ${c.gaps.length} 处`}
+        <Ico as={c.ok ? CheckCircle : Warning} size={14} />{c.ok ? "对上了要求" : `还缺 ${c.gaps.length} 处`}
         {c.stale && <span style={muted}> · 核对后他又改了再交, 再核对一次</span>}
       </span>
       {!c.ok && c.gaps.map((g, i) => <span key={i} style={{ paddingLeft: 18 }}>· {g}</span>)}

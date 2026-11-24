@@ -132,7 +132,7 @@ export default function FormProgress({ formId, onClose, initialError }: {
             return `导出了 ${r.rows} 份回答`;
           })}>导出 Excel</Btn>
           <Btn kind="ghost" disabled={busy} onClick={() => { startChat(summaryChatKey(formId), summaryPrompt(form)); onClose(); }}>
-            🐟 让小鲶汇总
+            让小鲶汇总
           </Btn>
         </div>
         {form.status === "open" && (

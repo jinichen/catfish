@@ -5,6 +5,8 @@
  * 群内搜索: 搜本机记录 (正文包含关键词, 可按人筛), 点一条跳到那条前后。
  */
 import { useEffect, useState } from "react";
+import { LockSimple, LockSimpleOpen } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import {
   roomSearch, roomSettingsGet, roomSettingsSet,
@@ -78,8 +80,8 @@ export function RetentionDialog({ onClose }: { onClose: () => void }) {
       {s?.local && s.local.encrypted !== null && (
         <span style={{ fontSize: 12, color: s.local.encrypted ? "var(--catfish-cyan)" : "var(--status-warn, #d97706)" }}>
           {s.local.encrypted
-            ? "🔒 本机记录已加密存放 (密钥在系统钥匙串里, 电脑丢了 / 文件被拷走也读不出来)"
-            : `🔓 本机记录还没加密: ${s.local.why ?? "原因不明"}`}
+            ? <><Ico as={LockSimple} size={12} />本机记录已加密存放 (密钥在系统钥匙串里, 电脑丢了 / 文件被拷走也读不出来)</>
+            : <><Ico as={LockSimpleOpen} size={12} />本机记录还没加密: {s.local.why ?? "原因不明"}</>}
         </span>
       )}
       {s && (

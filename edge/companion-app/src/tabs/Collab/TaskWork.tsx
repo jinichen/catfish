@@ -7,6 +7,8 @@
  * 定时 / 周期的 (11/4 第二步) 换成 TaskWorkScheduled: 接下 = 本机建定时, 每期一个框核对交回。
  */
 import { useEffect, useState } from "react";
+import { CheckCircle, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import { refreshTasks } from "../../lib/colleagueTasksStore";
 import { doChatKey, doPrompt } from "../../lib/taskPrompts";
@@ -88,13 +90,13 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
       </div>
       {rec.task.room_auto_post && (
         <div style={{ fontSize: 13, color: "var(--status-warn, #d97706)" }}>
-          ⚠️ {rec.owner} 设了「每次结果自动发到群里」: 你每次交回的结果, 群里的人都会看到。
+          <Ico as={Warning} size={14} />{rec.owner} 设了「每次结果自动发到群里」: 你每次交回的结果, 群里的人都会看到。
         </div>
       )}
       {!rec.task.schedule && rec.done && (
         <div style={{ fontSize: 13, padding: "6px 10px", borderRadius: 4, border: "1px solid var(--status-ok, #16a34a)",
                       color: "var(--status-ok, #16a34a)" }}>
-          ✅ 已交回给 {rec.owner} ({when(rec.done.at)}) —— 对方看到的是那一版。要更新就改下面的内容, 点「改了再交」。
+          <Ico as={CheckCircle} size={14} />已交回给 {rec.owner} ({when(rec.done.at)}) —— 对方看到的是那一版。要更新就改下面的内容, 点「改了再交」。
         </div>
       )}
       <div style={{ fontSize: 13, whiteSpace: "pre-wrap", padding: "8px 10px", borderRadius: 4,
@@ -127,7 +129,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
             <Btn kind="primary" disabled={busy} onClick={() => run(async () => {
               const r = await taskAccept(taskId);
               return r.start_error ?? "接下了, 小鲶已经在后台开工, 做好了会通知你核对";
-            })}>🐟 接下 (小鲶马上开工)</Btn>
+            })}>接下 (小鲶马上开工)</Btn>
             <Btn kind="ghost" disabled={busy} onClick={askXiaonian}>接下, 在对话里看着小鲶做</Btn>
             <Btn kind="ghost" disabled={busy} onClick={() => run(async () => { await taskAccept(taskId, false, false); return "已告诉对方你在做了"; })}>
               接下, 我自己做
@@ -144,8 +146,8 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
       {!rec.task.schedule && !cancelled && accepted && !rec.done && rec.auto_started_at && !rec.draft?.result && (
         <div style={{ fontSize: 13, color: rec.start_failed ? "var(--status-warn, #d97706)" : "var(--catfish-cyan)" }}>
           {rec.start_failed
-            ? "🐟 小鲶在后台没做出来 —— 点「让小鲶做」在对话里做, 或者自己写结果。"
-            : `🐟 小鲶 ${when(rec.auto_started_at).slice(11)} 接下后已经在后台开工, 做好了会通知你核对。想看着它做就点「让小鲶做」。`}
+            ? "小鲶在后台没做出来 —— 点「让小鲶做」在对话里做, 或者自己写结果。"
+            : `小鲶 ${when(rec.auto_started_at).slice(11)} 接下后已经在后台开工, 做好了会通知你核对。想看着它做就点「让小鲶做」。`}
         </div>
       )}
       {!rec.task.schedule && (rec.draft?.mail ?? rec.done?.mail) && (
@@ -161,7 +163,7 @@ export default function TaskWork({ taskId, onClose }: { taskId: string; onClose:
           {rec.draft && <span style={muted}>草稿存于 {when(rec.draft.updated_at)}</span>}
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
             <div style={{ display: "flex", gap: 8 }}>
-              <Btn kind="ghost" disabled={busy} onClick={askXiaonian}>🐟 {rec.draft ? "再让小鲶做" : "让小鲶做"}</Btn>
+              <Btn kind="ghost" disabled={busy} onClick={askXiaonian}>{rec.draft ? "再让小鲶做" : "让小鲶做"}</Btn>
               {!rec.done && <Btn kind="ghost" disabled={busy} onClick={() => setDeclining(true)}>不接了</Btn>}
             </div>
             <div style={{ display: "flex", gap: 8 }}>

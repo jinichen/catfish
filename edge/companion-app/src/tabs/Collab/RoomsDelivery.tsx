@@ -10,6 +10,8 @@
  * 群文件: 消息下面一个文件一行, 收齐了「打开」(写到 ~/Downloads/鲶鱼群文件/<群名>/ 再用默认程序开, 员工自己点的)。
  */
 import { createContext, useContext, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { Hourglass, Paperclip, Warning, X } from "@phosphor-icons/react";
+import { FileKindIcon, Ico } from "../../components/icons";
 
 import { openFile, revealInFinder } from "../../lib/tauri_app";
 import { roomFileRetry, roomFileSave, roomResend, roomStage, type Delivery, type RoomFile, type RoomMember } from "../../lib/tauri_colleague_rooms";
@@ -107,7 +109,7 @@ export function DeliveryLine({ roomId, msgId, rows, members, hasFiles, align, on
       {deliveryLines(rows, members, hasFiles).map((l) => (
         <span key={l.state} style={{ ...muted, color: l.state === "failed" ? "var(--status-warn, #d97706)" : undefined,
                                      display: "flex", gap: 6, flexWrap: "wrap", justifyContent: align }}>
-          <span>{l.state === "sending" ? "⏳ " : l.state === "failed" ? "⚠ " : ""}{l.text}</span>
+          <span>{l.state === "sending" ? <Ico as={Hourglass} size={12} /> : l.state === "failed" ? <Ico as={Warning} size={12} /> : null}{l.text}</span>
           {l.state === "failed" && (
             <button type="button" style={link} disabled={busy} onClick={() => void resend(l.emails.length === 1 ? l.emails[0] : undefined)}>
               {busy ? "重发中…" : "重发"}
@@ -173,7 +175,7 @@ export function RoomFileList({ roomId, files, mine, onRevise, tagOf }: {
           )}
           {/* 名字太长省中间、留结尾 + 扩展名 (同一批文件常常只有结尾不同) */}
           <span style={{ minWidth: 0, display: "flex", maxWidth: 300 }} title={f.name}>
-            <span style={{ flex: "0 0 auto" }}>📄&nbsp;</span>
+            <span style={{ flex: "0 0 auto" }}><FileKindIcon name={f.name} size={12} /></span>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{_splitFilename(f.name)[0]}</span>
             {_splitFilename(f.name)[1] && <span style={{ flex: "0 0 auto", whiteSpace: "nowrap" }}>{_splitFilename(f.name)[1]}</span>}
           </span>
@@ -253,8 +255,8 @@ export function AttachButton({ disabled, onPick }: { disabled?: boolean; onPick:
              onChange={(e: ChangeEvent<HTMLInputElement>) => { if (e.target.files?.length) onPick(e.target.files); e.target.value = ""; }} />
       <button type="button" disabled={disabled} onClick={() => ref.current?.click()} title={`发文件 (最多 ${MAX_FILES} 个, 合计 ${MAX_TOTAL / 1024 / 1024}MB; 加密后经中央转交, 中央看不到内容, 大家取完就删)`}
               style={{ border: "1px solid var(--catfish-border)", background: "transparent", borderRadius: "var(--radius-sm, 6px)",
-                       cursor: disabled ? "default" : "pointer", padding: "4px 8px", fontSize: 13, color: "inherit" }}>
-        📎
+                       cursor: disabled ? "default" : "pointer", padding: "4px 8px", fontSize: 13, color: "inherit", display: "inline-flex", alignItems: "center" }} aria-label="发文件">
+        <Paperclip size={16} weight="regular" />
       </button>
     </>
   );
@@ -267,10 +269,10 @@ export function PickedChips({ files, onRemove }: { files: PickedFile[]; onRemove
       {files.map((f, i) => (
         <span key={`${f.name}-${i}`} style={{ ...muted, display: "flex", alignItems: "center", gap: 4, padding: "2px 8px",
                                               border: "1px solid var(--catfish-border)", borderRadius: 12, maxWidth: 260 }}>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>📄 {f.name}</span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}><FileKindIcon name={f.name} size={12} />{f.name}</span>
           <span>{sizeLabel(f.size)}</span>
           <button type="button" aria-label={`不发 ${f.name}`} onClick={() => onRemove(i)}
-                  style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, color: "inherit" }}>✕</button>
+                  style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, color: "inherit", display: "inline-flex" }}><X size={12} weight="regular" /></button>
         </span>
       ))}
     </div>

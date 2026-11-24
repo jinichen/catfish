@@ -18,7 +18,7 @@ import {
   resolveOutput,
   useRoomLink,
 } from "../../lib/roomLinkStore";
-import { Btn, cardStyle, ErrorLine, itemStyle } from "./roomLinkUi";
+import { Btn, CardHead, cardStyle, ErrorLine, itemStyle } from "./roomLinkUi";
 
 export default function PendingPanel() {
   const [busy, setBusy] = useState<string | null>(null); // run_id 正在处理
@@ -71,18 +71,12 @@ export default function PendingPanel() {
   const total = pendingCount(state);
 
   return (
-    <div style={cardStyle}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>
-          等我点头
-        </h3>
-        <span style={{ fontSize: "var(--text-xs)", color: "var(--catfish-text-muted)" }}>
-          {total > 0 ? `${total} 条待处理` : "暂无"}
-        </span>
-      </div>
+    <div style={{ ...cardStyle, height: "auto" }}>
+      <CardHead title="等我点头"
+                aside={<span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{total > 0 ? `${total} 条待处理` : "暂无"}</span>} />
 
       {total === 0 && (
-        <div style={{ fontSize: "var(--text-sm)", color: "var(--catfish-text-muted)" }}>
+        <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--catfish-text-muted)" }}>
           同事想借用你的小鲶、或对方的小鲶要在你机器上跑工具、要把回复发回去时, 都会在这里等你点头。
           不点头就什么都不会发生。
         </div>

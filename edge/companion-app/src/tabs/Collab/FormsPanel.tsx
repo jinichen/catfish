@@ -11,7 +11,11 @@ import FormComposer from "./FormComposer";
 import FormFill from "./FormFill";
 import FormProgress from "./FormProgress";
 import { StateTag, muted } from "./formsUi";
-import { Btn, cardStyle, itemStyle } from "./roomLinkUi";
+import { Btn, CardHead, cardStyle, itemStyle } from "./roomLinkUi";
+
+// 11/24: 跟左边任务行同样的内边距 (8 / 12)
+const row = { ...itemStyle, padding: "8px 12px", gap: "var(--space-1)", textAlign: "left" as const, cursor: "pointer",
+              background: "transparent", color: "inherit", font: "inherit" };
 
 const STATUS_LABEL = { draft: "没发出", open: "收集中", closed: "已结束" } as const;
 
@@ -24,24 +28,19 @@ export default function FormsPanel() {
 
   return (
     <div style={{ ...cardStyle, height: "auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div>
-          <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>📋 一起填表</h3>
-          <div style={{ ...muted, marginTop: 4 }}>
-            发一张表请同事各填一份, 同事的小鲶帮他预填、他本人核对后提交; 回答只回到你这台电脑汇总。中央只转交加密内容、看不到原文, 取走即清空。
-          </div>
-        </div>
-        <Btn kind="primary" onClick={() => setComposing(true)}>发起填表</Btn>
-      </div>
+      {/* 11/24: 一屏只留一个实色主按钮 (左边「派任务」), 这里用描边 */}
+      <CardHead title="一起填表"
+                sub="发一张表请同事各填一份, 同事的小鲶帮他预填、他本人核对后提交; 回答只回到你这台电脑汇总。中央只转交加密内容、看不到原文, 取走即清空。"
+                aside={<Btn kind="ghost" onClick={() => setComposing(true)}>发起填表</Btn>} />
       {syncError && <span style={muted}>暂时收不到新表: {syncError}</span>}
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "var(--space-3)" }}>
-        <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <section style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
           <strong style={{ fontSize: 13 }}>收到的表</strong>
           {loaded && incoming.length === 0 && <span style={muted}>还没有人发表给你。</span>}
           {incoming.map((f) => (
             <button key={f.form_id} type="button" onClick={() => setFilling(f.form_id)}
-                    style={{ ...itemStyle, textAlign: "left", cursor: "pointer", background: "transparent", color: "inherit", font: "inherit" }}>
+                    style={row}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
                 <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>{f.title}</span>
                 <StateTag state={f.closed && (f.state === "待填" || f.state === "草稿") ? "已结束" : f.state} />
@@ -52,12 +51,12 @@ export default function FormsPanel() {
             </button>
           ))}
         </section>
-        <section style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <section style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
           <strong style={{ fontSize: 13 }}>我发起的表</strong>
           {loaded && outgoing.length === 0 && <span style={muted}>还没发起过。</span>}
           {outgoing.map((f) => (
             <button key={f.form_id} type="button" onClick={() => { setNotice(undefined); setWatching(f.form_id); }}
-                    style={{ ...itemStyle, textAlign: "left", cursor: "pointer", background: "transparent", color: "inherit", font: "inherit" }}>
+                    style={row}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
                 <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>{f.title}</span>
                 <StateTag state={STATUS_LABEL[f.status]} />

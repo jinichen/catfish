@@ -3,6 +3,8 @@
  * 直接填邮箱。中央通讯录只给 邮箱 / 姓名 / 部门。
  */
 import { useEffect, useState } from "react";
+import { X } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import { formDirectory, type Person } from "../../lib/tauri_forms";
 import { inputStyle } from "./roomLinkUi";
@@ -43,7 +45,7 @@ export default function RecipientPicker({ picked, onPicked, typed, onTyped, onEr
         {picked.map((e) => (
           <span key={e} style={{ fontSize: 12, padding: "2px 8px", border: "1px solid var(--catfish-border)", borderRadius: 12 }}>
             {e} <button type="button" aria-label={`去掉 ${e}`} onClick={() => onPicked(picked.filter((x) => x !== e))}
-                        style={{ border: "none", background: "transparent", cursor: "pointer" }}>✕</button>
+                        style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, color: "inherit", verticalAlign: "middle" }}><Ico as={X} size={12} gap={0} /></button>
           </span>
         ))}
       </div>

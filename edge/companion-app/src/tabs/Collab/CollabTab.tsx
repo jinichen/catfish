@@ -29,9 +29,10 @@ export default function CollabTab() {
   const roomBadge = pendingRoomCount(rooms);
   const reviseBadge = pendingReviseCount(rooms);
   const seg = (on: boolean) => ({
-    border: "1px solid var(--catfish-border)", cursor: "pointer", font: "inherit", fontSize: 13,
-    padding: "6px 14px", borderRadius: "var(--radius-sm, 6px)",
-    background: on ? "var(--catfish-cyan)" : "transparent", color: on ? "white" : "inherit",
+    border: `1px solid ${on ? "var(--catfish-cyan)" : "var(--catfish-border)"}`, cursor: "pointer", font: "inherit", fontSize: 13,
+    padding: "6px 12px", borderRadius: "var(--radius-sm, 6px)",
+    // 11/24: 选中态用浅青底 + 青字 (实色青只留给一屏一个的主按钮)
+    background: on ? "var(--catfish-cyan-tint)" : "transparent", color: on ? "var(--catfish-cyan)" : "var(--catfish-text)",
     display: "inline-flex", alignItems: "center", gap: 6,
   });
   return (
@@ -42,7 +43,7 @@ export default function CollabTab() {
           协同事项
           {reviseBadge > 0 && (
             <span aria-label={`${reviseBadge} 份文档等你修改`}
-                  style={{ fontSize: 10, minWidth: 16, padding: "0 5px", borderRadius: 8, background: "var(--status-error, #dc2626)", color: "white" }}>
+                  style={{ fontSize: 11, lineHeight: "16px", minWidth: 16, padding: "0 4px", borderRadius: 8, textAlign: "center", background: "var(--status-error, #dc2626)", color: "white" }}>
               {reviseBadge}
             </span>
           )}
@@ -51,7 +52,7 @@ export default function CollabTab() {
           群聊
           {roomBadge > 0 && (
             <span aria-label={`${roomBadge} 条群消息等你看`}
-                  style={{ fontSize: 10, minWidth: 16, padding: "0 5px", borderRadius: 8, background: "var(--status-error, #dc2626)", color: "white" }}>
+                  style={{ fontSize: 11, lineHeight: "16px", minWidth: 16, padding: "0 4px", borderRadius: 8, textAlign: "center", background: "var(--status-error, #dc2626)", color: "white" }}>
               {roomBadge > 99 ? "99+" : roomBadge}
             </span>
           )}

@@ -47,7 +47,7 @@ async function open(rec: object, state: string) {
 describe("TaskWork", () => {
   it("接下 (默认): 小鲶在后台开工, 不开对话", async () => {
     await open(REC, "待处理");
-    fireEvent.click(screen.getByText("🐟 接下 (小鲶马上开工)"));
+    fireEvent.click(screen.getByText("接下 (小鲶马上开工)"));
     await screen.findByText("接下了, 小鲶已经在后台开工, 做好了会通知你核对");
     expect(api.taskAccept).toHaveBeenCalledWith(REC.task_id);
     expect(startChat).not.toHaveBeenCalled();
@@ -90,13 +90,13 @@ describe("TaskWork", () => {
     await open({ ...REC, declined: { reason: "这周出差", at: "x" } }, "不接");
     expect(screen.getByText("改主意了, 还能接下:")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "不接" })).toBeNull();
-    expect(screen.getByText("🐟 接下 (小鲶马上开工)")).toBeTruthy();
+    expect(screen.getByText("接下 (小鲶马上开工)")).toBeTruthy();
   });
 
   it("对方取消了: 不再有接下 / 交回", async () => {
     await open({ ...REC, status: "cancelled" }, "已取消");
     expect(screen.getByText(/对方已经取消了这个任务/)).toBeTruthy();
-    expect(screen.queryByText("🐟 接下, 让小鲶做")).toBeNull();
+    expect(screen.queryByText("接下, 让小鲶做")).toBeNull();
     expect(screen.queryByText("交回")).toBeNull();
   });
 });
