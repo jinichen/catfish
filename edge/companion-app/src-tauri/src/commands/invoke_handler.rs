@@ -370,6 +370,7 @@ pub(crate) fn handler(
             // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径 — BriefingCard 输入框
             // 5/26 DEPRECATED: hermes 0.14 原生 /goal 替代. 3 个 command 改 stub 返 error
             // 防回归. 保留 invoke_handler 注册防遗漏 JS caller 编译失败.
+            crate::commands::hermes_unstick::hermes_session_unstick,
             crate::commands::session_goal::session_goal_read,
             crate::commands::session_goal::session_goal_write,
             crate::commands::session_goal::session_goal_clear,

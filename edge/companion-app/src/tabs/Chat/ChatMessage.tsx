@@ -10,6 +10,7 @@ import ToolCards from "./ToolCards";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolSteps from "./ChatToolSteps";
 import ChatLoopLimitNotice from "./ChatLoopLimitNotice";
+import ChatStuckNotice, { isStuckSession } from "./ChatStuckNotice";
 import { isAgentLoopLimit, stepLimitText } from "../../lib/agentLoopLimit";
 import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
@@ -539,7 +540,8 @@ function AssistantBubble({
         {!isError && msg._stepLimit && (
           <ChatLoopLimitNotice text={stepLimitText(msg._stepLimit)} canContinue={canContinue} />
         )}
-        {isError && !isAgentLoopLimit(msg.error) && (
+        {isError && isStuckSession(msg.error) && <ChatStuckNotice />}
+        {isError && !isAgentLoopLimit(msg.error) && !isStuckSession(msg.error) && (
           <div
             style={{
               marginTop: "var(--space-2)",
