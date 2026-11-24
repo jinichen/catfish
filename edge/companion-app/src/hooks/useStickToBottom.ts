@@ -94,17 +94,50 @@ export function useStickToBottom(
     wasStreamingRef.current = isStreaming;
   }, [isStreaming, scrollToBottom]);
 
+  // 11/24 鸿波「右边的预览框出来后, 中间的内容的位置就无法保持稳定」: 员工往上翻着看某段时,
+  // 右栏一开 / 窗口一变宽, 文字重新折行, 上面的消息变矮或变高, scrollTop 数字没变 ——
+  // 看着的那段就跑了 (WebKit 没有 overflow-anchor, 浏览器不替我们稳住)。
+  // 记住「眼下最上面那条消息 + 看到它的百分之几」, 尺寸一变就把同一处摆回原位。
+  const anchorRef = useRef<{ node: Element; frac: number } | null>(null);
+  const saveAnchor = useCallback(() => {
+    const el = scrollRef.current;
+    const content = el?.firstElementChild;
+    if (!el || !content) return;
+    const top = el.getBoundingClientRect().top;
+    for (const node of Array.from(content.children)) {
+      const r = node.getBoundingClientRect();
+      if (r.bottom > top + 1) {
+        anchorRef.current = { node, frac: r.height > 0 ? Math.max(0, (top - r.top) / r.height) : 0 };
+        return;
+      }
+    }
+    anchorRef.current = null;
+  }, [scrollRef]);
+  const restoreAnchor = useCallback(() => {
+    const el = scrollRef.current;
+    const a = anchorRef.current;
+    if (!el || !a || !a.node.isConnected) return;
+    const r = a.node.getBoundingClientRect();
+    const delta = r.top + a.frac * r.height - el.getBoundingClientRect().top;
+    if (Math.abs(delta) >= 1) {
+      el.scrollTop += delta;
+      lastTopRef.current = el.scrollTop;
+    }
+  }, [scrollRef]);
+
   useEffect(() => {
     const el = scrollRef.current;
     const content = el?.firstElementChild;
     if (!el || !content || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       if (stickRef.current || streamingRef.current) scrollToBottom();
+      else restoreAnchor();
+      saveAnchor();
     });
     ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [scrollRef, scrollToBottom]);
+  }, [scrollRef, scrollToBottom, restoreAnchor, saveAnchor]);
 
   // 挂在滚动容器的 onScroll 上
   return useCallback(() => {
@@ -122,5 +155,6 @@ export function useStickToBottom(
       return;
     }
     lastTopRef.current = top;
-  }, [scrollRef, scrollToBottom]);
+    saveAnchor();
+  }, [scrollRef, scrollToBottom, saveAnchor]);
 }

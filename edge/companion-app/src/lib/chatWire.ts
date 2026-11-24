@@ -220,8 +220,45 @@ export function formatManyFiles(files: Parameters<typeof formatFileAttachment>[0
   );
 }
 
+/** 11/24 考试那天连着三次 413: hermes 收的请求体上限 10MB, 而每一轮都把整段历史里
+ *  所有截图的 base64 重发一遍 —— 截图一多, 后面每句话都发不出去, 只能开新会话。
+ *  现在只把「最近的」图片原样带上: 最新一条用户消息的图永远带, 再往前的从新到旧
+ *  累计到这个预算 / 张数为止; 更早的换成一行文字 (名字 + 原图路径), 要看再用工具读。 */
+export const WIRE_IMAGE_BUDGET_CHARS = 6_000_000;
+export const WIRE_IMAGE_MAX_COUNT = 10;
+
+/** 哪些消息里的哪几张图原样发 (key = 消息下标, value = 那条里要带的图的下标) */
+export function pickInlineImages(messages: ChatMessage[]): Map<number, Set<number>> {
+  const keep = new Map<number, Set<number>>();
+  let used = 0;
+  let count = 0;
+  let newest = true;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user") continue;
+    const imgs = (m.attachments ?? []).filter((a) => a.kind === "image");
+    if (imgs.length === 0) { newest = false; continue; }
+    const set = new Set<number>();
+    imgs.forEach((a, j) => {
+      const size = a.base64?.length ?? 0;
+      if (newest || (used + size <= WIRE_IMAGE_BUDGET_CHARS && count < WIRE_IMAGE_MAX_COUNT)) {
+        set.add(j); used += size; count += 1;
+      }
+    });
+    keep.set(i, set);
+    newest = false;
+  }
+  return keep;
+}
+
+function droppedImageNote(a: { name: string; keptPath?: string }): string {
+  return `\n[图片「${a.name}」前面已经发过, 这轮没再附上` +
+    (a.keptPath ? `; 原图在 ${a.keptPath}, 需要再看就用工具读这张图` : "") + "]";
+}
+
 export function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
-  return messages.map((m) => {
+  const inline = pickInlineImages(messages);
+  return messages.map((m, idx) => {
     if (m.role === "tool") {
       // tool 角色: content 是工具结果(已是字符串),携带 tool_call_id
       return {
@@ -264,15 +301,21 @@ export function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
       }
       // P3.5.20.1 (6/17): applySteerPrefix 调用砍, _steered 字段已退役.
 
-      // 没图片附件: 直接返普通 string content (兼容非 vision 模型)
-      if (imageAttachments.length === 0) {
+      const keepSet = inline.get(idx) ?? new Set<number>();
+      const sentImages = imageAttachments.filter((_, j) => keepSet.has(j));
+      for (const [j, att] of imageAttachments.entries()) {
+        if (!keepSet.has(j)) textContent += droppedImageNote(att);
+      }
+
+      // 没图片要带: 直接返普通 string content (兼容非 vision 模型)
+      if (sentImages.length === 0) {
         return { role: "user", content: textContent };
       }
 
       // 有图片附件: 走 multipart array
       const parts: OpenAIContentPart[] = [];
       parts.push({ type: "text", text: textContent });
-      for (const att of imageAttachments) {
+      for (const att of sentImages) {
         parts.push({
           type: "image_url",
           image_url: { url: `data:${att.mimeType};base64,${att.base64}` },

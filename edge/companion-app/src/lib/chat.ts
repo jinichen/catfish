@@ -24,7 +24,7 @@ import { hermesApiConfigGet, hermesApiAuthHeader, authWhoami } from "./tauri";
 // BL-CSP-PROXY (7/18 鸿波): hermes 8642 直连也走 Rust reqwest 代理, CSP 严格.
 import { fetchViaProxy } from "./http_proxy";
 import { prepareChatRequest } from "./chatRequest";
-import { chatStreamError, isTruncatedChunk } from "./chatStreamError";
+import { TOO_LARGE_MSG, chatStreamError, isTruncatedChunk } from "./chatStreamError";
 import { pendingFromNativeEvent } from "./nativeApprovals";
 
 // 8/15: 5 个类型声明搬去 chat_types.ts。
@@ -428,6 +428,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       return;
     }
 
+
     // BL-C8 (5/16): 底层 fallback 同样优先 backend friendly 翻译.
     let detail = "";
     try {
@@ -439,7 +440,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     } catch {
       detail = await resp.text().catch(() => "");
     }
-    onError(`HTTP ${resp.status}: ${detail || "unknown"}`);
+    onError(resp.status === 413 ? TOO_LARGE_MSG : `HTTP ${resp.status}: ${detail || "unknown"}`);
     return;
   }
   if (!resp.body) {

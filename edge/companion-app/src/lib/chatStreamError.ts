@@ -30,3 +30,6 @@ export function isTruncatedChunk(chunk: unknown): boolean {
   return Array.isArray(data.choices) && data.choices.some((choice) =>
     choice && typeof choice === "object" && choice.finish_reason === "length");
 }
+
+/** 11/24 hermes 回 413 (请求体超 10MB) 时给员工看的。chatWire.toWire 已经只带最近的图, 还超 = 这一条本身太大 */
+export const TOO_LARGE_MSG = "这一条连同前面的内容太大, 发不出去。少贴几张图或把长文本存成文件再发; 还不行就开个新对话。";

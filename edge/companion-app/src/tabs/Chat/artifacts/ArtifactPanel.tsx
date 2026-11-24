@@ -6,7 +6,7 @@
  * 什么时候自动打开见 useArtifactAutoOpen; 左边缘拖动调宽, 宽度记在本机。
  * 11/20 起打开时窗口向右长出这一栏 (windowGrow.ts), 不再从对话区里切走一半。
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
 import { useArtifactStore, ARTIFACT_MIN_WIDTH } from "../../../store/artifacts";
 import FilePane from "./FilePane";
@@ -58,10 +58,28 @@ export default function ArtifactPanel({ paths }: { paths: string[] }) {
   }, [measure, view]);
   // 11/20 打开时窗口向右长出右侧栏的宽度, 关掉 / 离开对话页缩回去 (windowGrow.ts)
   const open = view !== null;
-  useEffect(() => {
+  // 11/24 鸿波「右边的预览框出来后, 中间的内容的位置就无法保持稳定」: 右栏一挂上就先从对话区
+  // 挤出位置, 窗口隔一会儿才长宽, 对话区「先变窄再变回来」, 文字折两次行。
+  // 现在长窗口期间把对话区钉在原宽 (右栏随窗口变宽一点点露出来), 长完再放开;
+  // 窗口长不了 (最大化 / 屏幕不够) 才让一次位置。
+  useLayoutEffect(() => {
     if (!open) return;
-    void growWindowFor(useArtifactStore.getState().width);
-    return () => void shrinkWindowBack();
+    const main = asideRef.current?.parentElement?.querySelector<HTMLElement>(".chat-workspace__main");
+    if (main) main.style.flex = `0 0 ${main.offsetWidth}px`;
+    let done = false;
+    const release = () => {
+      if (done || !main) return;
+      done = true;
+      main.style.flex = "";
+    };
+    void growWindowFor(useArtifactStore.getState().width)
+      // 窗口 setSize 返回后, 网页那边的 resize 还要一两帧才到
+      .then(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+      .finally(release);
+    return () => {
+      release();
+      void shrinkWindowBack();
+    };
   }, [open]);
   const overlay = space !== null && space.docked < ARTIFACT_MIN_WIDTH;
   const maxWidth = useCallback(() => {
