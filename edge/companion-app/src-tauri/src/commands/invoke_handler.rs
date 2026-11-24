@@ -76,6 +76,7 @@ pub(crate) fn handler(
             crate::commands::logs::tail,
             crate::commands::logs::stop_tail,
             // sessions (read)
+            crate::commands::sessions_queue::session_queue_state,
             crate::commands::sessions::sessions_list,
             crate::commands::user_requests::sessions_user_requests,
             crate::commands::sessions::sessions_count,

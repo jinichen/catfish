@@ -24,6 +24,7 @@
  * diff 只有头尾, 中间 371 行可以肉眼确认没被改过。
  */
 
+import { WAITING_TEXT, watchQueue } from "../../lib/queueNotice";
 import { CARD_RENDERER_CAPABILITIES } from "../../lib/a2uiCard";
 import { currentExpertRoute } from "../../lib/expertChat";
 import { useChatStore } from "../../store/chat";
@@ -95,7 +96,9 @@ export async function runOneRound(
       };
       addMessage(assistantMsg);
       setStreamingId(assistantId);
-      setLifecycleStatus("正在等待模型首个回复…");
+      setLifecycleStatus(WAITING_TEXT);
+      // 11/24: 排在上一轮后面时改口「排队中」, 别让人以为卡死 (lib/queueNotice.ts)
+      const stopQueueWatch = watchQueue(ctx.sessionId, setLifecycleStatus);
 
       // 5/24 BL-MULTI-SESSION-STREAM: 局部 raf-throttled flush (不再共享 hook ref).
       // 每条 stream 自己一套, 跨 session 并发不会串 delta.
@@ -180,6 +183,7 @@ export async function runOneRound(
         a2uiCapabilities: CARD_RENDERER_CAPABILITIES,
         signal: ctx.ctrl.signal,
         onDelta: (text) => {
+          stopQueueWatch();
           // 首个正文 chunk 到达后，状态条让位给实际回答，避免重复占用消息区。
           if (text) setLifecycleStatus(null);
           pendingDelta += text;
@@ -189,10 +193,12 @@ export async function runOneRound(
           refs.truncated = true;
         },
         onToolCalls: (calls) => {
+          stopQueueWatch();
           refs.calls = calls;
           setLifecycleStatus("正在准备执行工具…");
         },
         onDone: (info) => {
+          stopQueueWatch();
           if (rafId !== null) {
             cancelAnimationFrame(rafId);
             rafId = null;
@@ -220,6 +226,7 @@ export async function runOneRound(
           // 要重做就在那边做, 不要再从 gateway 这层取信号。
         },
         onError: (err) => {
+          stopQueueWatch();
           if (rafId !== null) {
             cancelAnimationFrame(rafId);
             rafId = null;
@@ -238,6 +245,7 @@ export async function runOneRound(
         // status "running" → 显; "completed" → 清 (但 hermes 目前不发 completed —
         // preflight emit 一次后 compress 跑完 stream 自然 done, finally block 清).
         onLifecycle: (status, text) => {
+          stopQueueWatch();
           // 10/27: hermes 步数到上限的那条状态记下来, 回答结束后挂到这条消息上 (见下面 finalAssistant)
           const limit = parseStepLimit(text);
           if (limit) refs.stepLimit = limit;
