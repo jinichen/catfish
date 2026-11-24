@@ -134,7 +134,7 @@ describe("不打开编辑器也能改 (11/08 鸿波「一般人很难适应」)"
     api.expertBuildList.mockResolvedValue({ builds: [broken()] });
     render(<ExpertBuildCard onApplied={vi.fn()} />);
     expect(await screen.findByText("小鲶：写分镜脚本")).toBeTruthy();
-    expect(screen.getByText(/🔔 推送到我的微信/)).toBeTruthy();
+    expect(screen.getByText(/推送到我的微信/).querySelector('[aria-label="对外"]')).toBeTruthy();
     expect(screen.getByText(/还没搭好: 第 2 步 是小鲶自己想/)).toBeTruthy();
     expect(screen.queryByText(/\(word\)/)).toBeNull();
   });

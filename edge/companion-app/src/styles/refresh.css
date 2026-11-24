@@ -472,10 +472,11 @@ progress {
     background var(--transition-fast),
     box-shadow var(--transition-fast);
 }
+/* 选中的分段 = 浅青底 + 青字 (跟协同 / 邮件的切换一致), 实色青只留给一屏一个的主按钮 */
 .wiki-segmented__btn[data-active="true"] {
-  background: var(--catfish-cyan);
-  color: #fff;
-  box-shadow: none;
+  background: var(--catfish-cyan-tint);
+  color: var(--catfish-cyan);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--catfish-cyan) 35%, transparent);
 }
 
 /* ═══ 7. 横幅 / 弹窗 / toast ═══ */
