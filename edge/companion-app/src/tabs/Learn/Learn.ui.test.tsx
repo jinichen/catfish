@@ -65,6 +65,17 @@ describe("学习页", () => {
     expect(screen.getByText(/小鲶在想/)).toBeTruthy();
   });
 
+  it("例子按钮只给还没学过的人看; 学过以后不占地方", async () => {
+    api.list.mockResolvedValue([]);
+    await mount();
+    expect(screen.getByText("公司的差旅报销规定")).toBeTruthy();
+    cleanup();
+    api.list.mockResolvedValue([SUMMARY]);
+    api.get.mockResolvedValue(view());
+    await mount();
+    expect(screen.queryByText("公司的差旅报销规定")).toBeNull();
+  });
+
   it("答题: 选项 + 把握 + 想法一起交; 我不知道单独交", async () => {
     api.get.mockResolvedValue(view({ pending: { qid: "q1" } }, [{ id: "e1", at: 2, role: "tutor", kind: "question", qid: "q1", q: Q }]));
     api.answer.mockResolvedValue(view({}, [], true));

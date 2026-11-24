@@ -22,7 +22,8 @@ const GRAPH = "__graph__";
 const EXAMPLES = ["准备 CCRC 应急处理二级的答辩", "弄懂 ITSS 二级要提交哪些材料、为什么", "公司的差旅报销规定"];
 
 /** primary: 右栏没有打开别的 (空状态) 时「开始」才是实色主按钮; 右栏有自己的主按钮时它退成青色描边 */
-function NewLearning({ onCreated, primary }: { onCreated: (id: string) => void; primary: boolean }) {
+/** examples: 只给还没学过东西的人看 (11/24 鸿波「这几个按钮是不是冗余了」—— 输入框提示里已经有例子, 学过以后它们只占地方) */
+function NewLearning({ onCreated, primary, examples }: { onCreated: (id: string) => void; primary: boolean; examples: boolean }) {
   const [goal, setGoal] = useState("");
   const [mode, setMode] = useState<LearnMode>("quick");
   const [lang, setLang] = useState("en");
@@ -54,13 +55,13 @@ function NewLearning({ onCreated, primary }: { onCreated: (id: string) => void; 
       <div style={{ fontWeight: 600 }}>学点什么</div>
       <textarea aria-label="想学会什么" rows={3} value={goal} onChange={(e) => setGoal(e.target.value)} disabled={busy}
         placeholder="想学会什么? 越具体越好, 例: 准备 CCRC 应急处理二级的答辩" style={{ ...inputStyle, resize: "vertical" }} />
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+      {examples && <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {EXAMPLES.map((x) => (
           <button key={x} type="button" onClick={() => setGoal(x)} disabled={busy}
             style={{ fontSize: 12, minHeight: 24, padding: "4px 12px", borderRadius: 999, textAlign: "left", border: "1px solid var(--catfish-border)",
               background: "transparent", color: "var(--catfish-text-muted)", cursor: "pointer", fontFamily: "inherit" }}>{x}</button>
         ))}
-      </div>
+      </div>}
       {/* 11/24: 四个练法原来挤一行 (左栏窄时「答辩陪练」被压断), 改成两列 */}
       <div role="radiogroup" aria-label="怎么学" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
         {modeBtn("quick", "快速", "讲得短、多检查, 适合记规定、准备答辩")}
@@ -90,6 +91,7 @@ function NewLearning({ onCreated, primary }: { onCreated: (id: string) => void; 
 
 export default function LearnTab() {
   const [list, setList] = useState<LearnSummary[]>([]);
+  const [listLoaded, setListLoaded] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -110,6 +112,7 @@ export default function LearnTab() {
     try {
       const l = await learnList();
       setList(l);
+      setListLoaded(true);
       setError(null);
       setSelected((cur) => (selectId !== undefined ? selectId : cur === REVIEW || cur === GRAPH || (cur && l.some((x) => x.id === cur)) ? cur : l[0]?.id ?? null));
     } catch (e) {
@@ -123,7 +126,7 @@ export default function LearnTab() {
     <div style={{ maxWidth: 1600, margin: "0 auto", padding: "var(--space-4) var(--space-4) 0", height: "100%", boxSizing: "border-box" }}>
       <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 360px) minmax(0, 1fr)", gap: "var(--space-4)", height: "100%" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", minHeight: 0, overflowY: "auto", paddingBottom: "var(--space-4)" }}>
-          <NewLearning primary={!selected} onCreated={(id) => void refresh(id)} />
+          <NewLearning primary={!selected} examples={listLoaded && list.length === 0} onCreated={(id) => void refresh(id)} />
           <button type="button" onClick={() => setSelected(REVIEW)} aria-label="去复习"
             style={{ ...cardStyle, ...COL_CARD, cursor: "pointer", textAlign: "left", fontFamily: "inherit", color: "var(--catfish-text)",
               borderColor: selected === REVIEW ? "var(--catfish-cyan)" : "var(--catfish-border)", gap: 4 }}>
