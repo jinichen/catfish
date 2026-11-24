@@ -10,7 +10,7 @@ import {
   type Previews, type Rating, type ReviewCard, type ReviewResult, type ReviewStats,
 } from "../../lib/tauri_learn";
 import { cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
-import { ghostBtn, primaryBtn } from "./QuestionCard";
+import { ghostBtn, primaryBtn, optionText } from "./QuestionCard";
 
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
 const OBJECTIVE = new Set(["single_choice", "multi_choice", "true_false"]);
@@ -92,7 +92,7 @@ export default function ReviewPanel({ onChanged }: { onChanged?: () => void }) {
               <input type={card.type === "multi_choice" ? "checkbox" : "radio"} name={`r${card.id}`} disabled={!!shown || busy}
                 checked={picked.includes(k)}
                 onChange={() => setPicked(card.type === "multi_choice" ? (picked.includes(k) ? picked.filter((x) => x !== k) : [...picked, k]) : [k])} />
-              <span>{card.type === "true_false" ? label : <><b>{k}.</b> {label}</>}</span>
+              <span>{card.type === "true_false" ? label : <><b>{k}.</b> {optionText(k, label)}</>}</span>
             </label>
           ))}
           {!objective && !shown && (

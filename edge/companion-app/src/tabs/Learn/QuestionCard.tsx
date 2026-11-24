@@ -31,6 +31,13 @@ const box: CSSProperties = {
 };
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
 
+/** 11/24 鸿波截图「a. a) 直接买一等座」: 模型常把「a)」「A.」「（a）」写进选项文字, 前面又有我们的「a.」——
+ *  开头的编号跟这个选项的 value 一样就去掉, 不一样 (比如正文本来以字母开头) 不动 */
+export function optionText(value: string, label: string): string {
+  const m = /^\s*[（(]?\s*([A-Za-z0-9])\s*[)）.、:：]\s*/.exec(label);
+  return m && m[1].toLowerCase() === value.toLowerCase() ? label.slice(m[0].length) : label;
+}
+
 type Draft = { picked: string[]; text: string; confidence: number | null; thinking: string };
 const drafts = new Map<string, Draft>();
 export const _clearDrafts = () => drafts.clear();
@@ -55,14 +62,14 @@ export function OpenQuestion({ qid, q, disabled, onSubmit }: {
     onSubmit(a);
   };
   return (
-    <div style={{ ...box, borderColor: "var(--catfish-cyan)" }} aria-label="当前的题">
+    <div style={{ ...box, borderColor: "color-mix(in srgb, var(--catfish-cyan) 45%, var(--catfish-border))" }} aria-label="当前的题">
       <span style={muted}>{ROLE_LABEL[q.role]}{q.multi ? " · 多选" : ""}</span>
       <Markdown text={hardBreaks(q.question)} />
       {(q.options ?? []).map((o) => (
         <label key={o.value} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", fontSize: 13 }}>
           <input type={q.multi ? "checkbox" : "radio"} name={qid} checked={d.picked.includes(o.value)} disabled={disabled}
             onChange={() => toggle(o.value)} style={{ marginTop: 3 }} />
-          <span><b>{o.value}.</b> {o.label}</span>
+          <span><b>{o.value}.</b> {optionText(o.value, o.label)}</span>
         </label>
       ))}
       {q.type !== "choice" && (
@@ -105,7 +112,7 @@ export function AnsweredQuestion({ q, answer, grade }: { q: LearnQuestion; answe
           <div key={o.value} style={{ fontSize: 13, display: "flex", gap: 8,
             color: right ? "var(--status-ok)" : picked && q.type === "choice" ? "var(--status-err)" : "var(--catfish-text)" }}>
             <span style={{ width: 14 }}>{picked ? "●" : "○"}</span>
-            <span><b>{o.value}.</b> {o.label}{right && q.type === "choice" ? " ← 正确答案" : ""}</span>
+            <span><b>{o.value}.</b> {optionText(o.value, o.label)}{right && q.type === "choice" ? " ← 正确答案" : ""}</span>
           </div>
         );
       })}
