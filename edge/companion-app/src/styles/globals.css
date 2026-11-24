@@ -2205,16 +2205,24 @@ button {
   background: var(--catfish-cyan);
   color: #fff;
   font: 600 14px/1 var(--font-sans);
+  white-space: nowrap;
+  flex: none;
   cursor: pointer;
 }
 .wiki-workbench__secondary {
   min-height: 44px;
-  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
   border: 1px solid var(--catfish-border-strong);
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--catfish-text-muted);
   font: 14px/1 var(--font-sans);
+  white-space: nowrap;
+  flex: none;
   cursor: pointer;
 }
 .wiki-workbench__secondary:hover:not(:disabled) { color: var(--catfish-cyan); border-color: var(--catfish-cyan); }
@@ -2229,7 +2237,7 @@ button {
   align-items: stretch;
 }
 .wiki-workbench__conflict-field { align-self: center; font-size: 13px; color: var(--catfish-text-muted); }
-.wiki-workbench__conflict > button { justify-content: flex-start; gap: 6px; flex-wrap: wrap; text-align: left; }
+.wiki-workbench__conflict > button { justify-content: flex-start; gap: 6px; flex-wrap: wrap; text-align: left; white-space: normal; }
 .wiki-workbench__conflict > button small { width: 100%; font-size: 11px; opacity: 0.7; }
 .wiki-workbench__conflict > button small.wiki-workbench__conflict-tip { color: var(--status-ok); opacity: 1; }
 
@@ -2239,12 +2247,14 @@ button {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 0 14px;
+  padding: 0 16px;
   border: 1px solid color-mix(in srgb, var(--status-err) 55%, transparent);
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--status-err);
   font: 14px/1 var(--font-sans);
+  white-space: nowrap;
+  flex: none;
   cursor: pointer;
 }
 .wiki-workbench__danger:hover:not(:disabled) { background: color-mix(in srgb, var(--status-err) 10%, transparent); }
@@ -2593,7 +2603,8 @@ button {
 }
 .wiki-segmented__btn {
   flex: 1;
-  padding: 5px 10px;
+  min-height: 28px;
+  padding: 4px 8px;
   font-size: 11px;
   font-weight: 500;
   font-family: inherit;
@@ -2611,9 +2622,7 @@ button {
   background: var(--catfish-bg-elevated);
   color: var(--catfish-cyan);
   font-weight: 600;
-  box-shadow:
-    0 1px 2px rgba(14, 95, 102, 0.12),
-    0 0 0 1px rgba(14, 95, 102, 0.06);
+  box-shadow: 0 0 0 1px var(--catfish-border);
 }
 .wiki-segmented__btn:focus-visible {
   outline: 2px solid var(--catfish-cyan-bright);
@@ -3079,7 +3088,6 @@ button {
 .wiki-preview__history {
   margin-top: 28px;
   padding-top: 18px;
-  /* subtle 顶部分隔 — 用 bg gradient 替 1px dashed (cliche AI border) */
   border-top: 1px solid var(--catfish-border);
 }
 .wiki-preview__history-toggle {
@@ -3133,9 +3141,8 @@ button {
   padding: 20px;
 }
 .wiki-preview__empty-icon {
-  font-size: 44px;
-  margin-bottom: 14px;
-  opacity: 0.4;
+  margin-bottom: 12px;
+  opacity: 0.6;
 }
 .wiki-preview__empty-title {
   font-weight: 600;
@@ -3251,14 +3258,6 @@ button {
   overflow: hidden;
   background: var(--catfish-bg);
 }
-.wiki-graph__stage::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--catfish-bg) 32%, transparent), transparent 18%, transparent 82%, color-mix(in srgb, var(--catfish-bg) 38%, transparent));
-  opacity: 0.55;
-}
 .wiki-graph--expanded .wiki-graph__stage {
   grid-column: 1 / -1;
   grid-row: 2;
@@ -3281,7 +3280,6 @@ button {
   font: 600 13px/1 var(--font-sans);
   cursor: pointer;
   transform: translateX(-50%);
-  box-shadow: 0 5px 18px rgba(14, 95, 102, 0.12);
 }
 .wiki-graph__more:hover { border-color: var(--catfish-cyan); }
 .wiki-graph__more:focus-visible { outline: none; box-shadow: var(--focus-ring); }
@@ -5666,7 +5664,7 @@ button {
   user-select: none;
   transition: background-color 150ms ease;
 }
-.wiki-tree-group__header { font-size: 13px; font-weight: 600; color: var(--catfish-text-muted); letter-spacing: 0.02em; }
+.wiki-tree-group__header { font-size: 13px; font-weight: 600; color: var(--catfish-text-muted); }
 .wiki-tree-subgroup__header { font-size: 13px; font-weight: 500; color: var(--catfish-text); }
 .wiki-tree-group__header:hover,
 .wiki-tree-subgroup__header:hover { background: var(--catfish-bg-cream); }

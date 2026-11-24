@@ -115,7 +115,7 @@ export default function WikiActionPanel({
   return (
     <section className="wiki-workbench__section wiki-workbench__section--actions">
       <div className="wiki-workbench__section-title">
-        <Lightning size={22} aria-hidden="true" />
+        <Lightning size={16} aria-hidden="true" />
         <div><h3>关联行动</h3><p>给这条知识配上常用的技能。点「交给小鲶」，小鲶会读这条知识取需要的信息，缺的会问你。</p></div>
       </div>
       {!readOnly && (
@@ -138,7 +138,7 @@ export default function WikiActionPanel({
             ))}
           </select>
           <button type="button" className="wiki-workbench__secondary" onClick={addAction} disabled={!selectedActionId || actionSaving}>
-            {actionSaving ? <SpinnerGap className="wiki-spin" size={18} /> : <Check size={18} />}
+            {actionSaving ? <SpinnerGap className="wiki-spin" size={16} /> : <Check size={16} />}
             关联行动
           </button>
         </div>
@@ -165,9 +165,9 @@ export default function WikiActionPanel({
               {!action.available && <small className="wiki-workbench__error">{action.reason || "当前不可执行"}</small>}
             </div>
             <div className="wiki-action-card__buttons">
-              {!readOnly && <button type="button" className="wiki-workbench__secondary" onClick={() => removeAction(action)} disabled={actionSaving} title="解除这个行动关联"><X size={18} />解除</button>}
-              <button type="button" className="wiki-workbench__primary" onClick={() => runAction(action)} disabled={!action.available} title="去工作台让小鲶按这条知识来做">
-                <ChatCircleDots size={18} />
+              {!readOnly && <button type="button" className="wiki-workbench__secondary" onClick={() => removeAction(action)} disabled={actionSaving} title="解除这个行动关联"><X size={16} />解除</button>}
+              <button type="button" className="wiki-workbench__secondary" onClick={() => runAction(action)} disabled={!action.available} title="去工作台让小鲶按这条知识来做">
+                <ChatCircleDots size={16} />
                 交给小鲶
               </button>
             </div>

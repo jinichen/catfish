@@ -78,7 +78,7 @@ export default function WikiDuplicatePanel({ task, onLater }: { task: WikiRelati
   if (notice) {
     return (
       <section className="wiki-workbench__section">
-        <p className="wiki-workbench__success"><CheckCircle size={18} />{notice}</p>
+        <p className="wiki-workbench__success"><CheckCircle size={16} />{notice}</p>
         {onLater && <button type="button" className="wiki-workbench__secondary" onClick={onLater}>下一项</button>}
       </section>
     );
@@ -87,13 +87,13 @@ export default function WikiDuplicatePanel({ task, onLater }: { task: WikiRelati
   return (
     <section className="wiki-workbench__section">
       <div className="wiki-workbench__section-title">
-        <Stack size={22} aria-hidden="true" />
+        <Stack size={16} aria-hidden="true" />
         <div>
           <h3>这 {paths.length} 条可能是同一个东西</h3>
           <p>是同一个：选要保留的那条，其余的内容、别名、关系并进来（原名自动变成别名，别处引用照样能找到）。不是：点「不是同一个」，以后不再提示。</p>
         </div>
       </div>
-      {!entries && !error && <p className="wiki-dup__loading"><SpinnerGap className="wiki-spin" size={18} />正在读取…</p>}
+      {!entries && !error && <p className="wiki-dup__loading"><SpinnerGap className="wiki-spin" size={16} />正在读取…</p>}
       <div className="wiki-dup">
         {entries?.map((e) => (
           <article className="wiki-dup__card" key={e.info.rel_path}>
@@ -116,14 +116,14 @@ export default function WikiDuplicatePanel({ task, onLater }: { task: WikiRelati
             ) : (
               <footer>
                 <button type="button" className="wiki-workbench__link" onClick={() => void selectFile(e.info.rel_path)}>
-                  看全文 <ArrowRight size={14} aria-hidden="true" />
+                  看全文 <ArrowRight size={16} aria-hidden="true" />
                 </button>
                 <span />
                 <button type="button" className="wiki-workbench__secondary" disabled={busy}
                   onClick={() => { setRenaming(e.info.rel_path); setNewName(e.info.title); }}>
                   <PencilSimple size={16} aria-hidden="true" />改个名
                 </button>
-                <button type="button" className="wiki-workbench__primary" disabled={busy || !entries} onClick={() => keep(e)}>
+                <button type="button" className="wiki-workbench__secondary" disabled={busy || !entries} onClick={() => keep(e)}>
                   {busy ? <SpinnerGap className="wiki-spin" size={16} /> : <CheckCircle size={16} />}保留这条，合并其余
                 </button>
               </footer>

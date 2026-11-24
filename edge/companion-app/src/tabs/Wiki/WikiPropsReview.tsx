@@ -99,7 +99,7 @@ export default function WikiPropsReview({ onClose }: { onClose: () => void }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h3 style={{ margin: 0, fontSize: 17 }}>整理属性</h3>
           <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: "transparent", cursor: "pointer", color: V.muted }}>
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
         <p style={{ margin: 0, color: V.muted, fontSize: 13, lineHeight: 1.5 }}>

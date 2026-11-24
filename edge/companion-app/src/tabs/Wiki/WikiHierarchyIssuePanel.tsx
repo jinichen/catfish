@@ -35,7 +35,7 @@ export default function WikiHierarchyIssuePanel({ task, onLater }: { task: WikiR
   return (
     <section className="wiki-workbench__section">
       <div className="wiki-workbench__section-title">
-        <TreeStructure size={22} aria-hidden="true" />
+        <TreeStructure size={16} aria-hidden="true" />
         <div>
           <h3>{task.kind === "skiplevel" ? "跨级重复" : "多个上级"}</h3>
           <p>{task.detail}</p>

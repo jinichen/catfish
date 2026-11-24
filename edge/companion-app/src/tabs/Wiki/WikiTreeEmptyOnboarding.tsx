@@ -25,7 +25,7 @@ export function EmptyOnboarding({ onCreateClick }: { onCreateClick: () => void }
       }}
     >
       <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>
-        🐟 资料库还是空的
+        资料库还是空的
       </div>
       <div style={{ color: "var(--catfish-text-muted)", marginBottom: 14 }}>
         3 种方式开始累积:
@@ -33,13 +33,13 @@ export function EmptyOnboarding({ onCreateClick }: { onCreateClick: () => void }
 
       <Step n={1} title="拖文件进 chat" body={
         <>
-          PDF / Word / Excel / 文本拖进 💬 对话框, 小鲶自动保存全文到 <code style={ocode}>~/.catfish/wiki/raw/sources/</code>, 24 小时内 distill 生成 entity / concept. 适合资料 / 文档入库.
+          PDF / Word / Excel / 文本拖进对话框, 小鲶自动保存全文到 <code style={ocode}>~/.catfish/wiki/raw/sources/</code>, 24 小时内 distill 生成 entity / concept. 适合资料 / 文档入库.
         </>
       } />
 
       <Step n={2} title="跟小鲶聊" body={
         <>
-          chat 时小鲶后台记日记 (<code style={ocode}>employee_journal.md</code>). 想沉淀对话进 wiki, 在消息右下角点 💾 存 wiki 手动存.
+          chat 时小鲶后台记日记 (<code style={ocode}>employee_journal.md</code>). 想沉淀对话进 wiki, 在消息右下角点「存 wiki」手动存.
         </>
       } />
 
@@ -48,14 +48,15 @@ export function EmptyOnboarding({ onCreateClick }: { onCreateClick: () => void }
           <button
             onClick={onCreateClick}
             style={{
-              background: "var(--catfish-teal, #0d9488)",
+              background: "var(--catfish-cyan)",
               border: "none",
               color: "#fff",
               borderRadius: 4,
-              padding: "3px 10px",
-              fontSize: 11,
+              padding: "4px 12px",
+              fontSize: 12,
               cursor: "pointer",
-              marginRight: 6,
+              marginRight: 8,
+              whiteSpace: "nowrap",
               fontWeight: 500,
             }}
           >
@@ -74,7 +75,7 @@ export function EmptyOnboarding({ onCreateClick }: { onCreateClick: () => void }
           color: "var(--catfish-text-muted)",
         }}
       >
-        💡 wiki 文件存在 <code style={ocode}>~/.catfish/wiki/</code>, 也能用
+        wiki 文件存在 <code style={ocode}>~/.catfish/wiki/</code>, 也能用
         <strong> Obsidian </strong> 直接打开当 vault. wikilink <code style={ocode}>[[name]]</code> 互联.
       </div>
     </div>
@@ -87,11 +88,11 @@ function Step({ n, title, body }: { n: number; title: string; body: React.ReactN
       <div
         style={{
           flexShrink: 0,
-          width: 22,
-          height: 22,
+          width: 24,
+          height: 24,
           borderRadius: "50%",
-          background: "var(--catfish-teal, #0d9488)",
-          color: "#fff",
+          border: "1px solid var(--catfish-cyan)",
+          color: "var(--catfish-cyan)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -111,7 +112,7 @@ function Step({ n, title, body }: { n: number; title: string; body: React.ReactN
 
 const ocode: React.CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: 10,
+  fontSize: 11,
   background: "rgba(0,0,0,0.06)",
   padding: "1px 4px",
   borderRadius: 2,

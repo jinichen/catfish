@@ -107,16 +107,16 @@ export default function WikiRelationshipWorkbench({
     );
   }
   if (selectedLoading) {
-    return <div className="wiki-workbench__empty"><SpinnerGap className="wiki-spin" size={30} />正在读取关系…</div>;
+    return <div className="wiki-workbench__empty"><SpinnerGap className="wiki-spin" size={24} />正在读取关系…</div>;
   }
   if (selectedError) {
-    return <div className="wiki-workbench__empty wiki-workbench__empty--error"><WarningCircle size={30} />{selectedError}</div>;
+    return <div className="wiki-workbench__empty wiki-workbench__empty--error"><WarningCircle size={24} />{selectedError}</div>;
   }
   if (!selectedFile) {
     if (!hasTasks) {
       return (
         <div className="wiki-workbench__empty">
-          <LinkSimple size={36} weight="duotone" aria-hidden="true" />
+          <LinkSimple size={24} aria-hidden="true" />
           <strong>知识之间的关系都整理好了</strong>
           <span>小鲶从对话、邮件、文档里抽出新知识时, 拿不准的关系 (两个说法、指向不明、没对上原文…) 会列在左边等你定。</span>
           {onBrowse && (
@@ -127,7 +127,7 @@ export default function WikiRelationshipWorkbench({
     }
     return (
       <div className="wiki-workbench__empty">
-        <LinkSimple size={36} weight="duotone" aria-hidden="true" />
+        <LinkSimple size={24} aria-hidden="true" />
         <strong>从左侧选一项</strong>
         <span>逐条处理后，知识图谱会自动变得清晰。</span>
       </div>
@@ -181,7 +181,7 @@ export default function WikiRelationshipWorkbench({
       {(info.conflicts?.length ?? 0) > 0 && (
         <section className="wiki-workbench__section">
           <div className="wiki-workbench__section-title">
-            <ArrowsLeftRight size={22} aria-hidden="true" />
+            <ArrowsLeftRight size={16} aria-hidden="true" />
             <div><h3>两个说法</h3><p>小鲶后来读到的跟现在记的不一样。文件里保留的是现在的值，选一个。</p></div>
           </div>
           <div className="wiki-workbench__conflicts">
@@ -224,7 +224,7 @@ export default function WikiRelationshipWorkbench({
       {selectedTask?.kind === "stale" && (
         <section className="wiki-workbench__section">
           <div className="wiki-workbench__section-title">
-            <ClockCounterClockwise size={22} aria-hidden="true" />
+            <ClockCounterClockwise size={16} aria-hidden="true" />
             <div>
               <h3>核对进度</h3>
               <p>
@@ -239,7 +239,7 @@ export default function WikiRelationshipWorkbench({
           <div className="wiki-relation-editor__actions">
             {onLater && <button type="button" className="wiki-workbench__secondary" onClick={onLater}>稍后处理</button>}
             <button type="button" className="wiki-workbench__primary" disabled={saving} onClick={() => void markReviewed()}>
-              {saving ? <SpinnerGap className="wiki-spin" size={20} /> : <CheckCircle size={20} />}
+              {saving ? <SpinnerGap className="wiki-spin" size={16} /> : <CheckCircle size={16} />}
               进度还对，标记已核对
             </button>
           </div>
@@ -260,7 +260,7 @@ export default function WikiRelationshipWorkbench({
 
       <section className="wiki-workbench__section">
         <div className="wiki-workbench__section-title">
-          <FileText size={22} aria-hidden="true" />
+          <FileText size={16} aria-hidden="true" />
           <div><h3>证据与来源</h3><p>确认关系前，可以先核对原始文字。</p></div>
         </div>
         <div className="wiki-workbench__evidence">

@@ -89,7 +89,7 @@ export default function WikiUnverifiedPanel({ task, onLater }: { task: WikiRelat
   return (
     <section className="wiki-workbench__section">
       <div className="wiki-workbench__section-title">
-        <SealWarning size={22} aria-hidden="true" />
+        <SealWarning size={16} aria-hidden="true" />
         <div>
           <h3>没对上原文的事实和关系</h3>
           <p>{task.detail}</p>

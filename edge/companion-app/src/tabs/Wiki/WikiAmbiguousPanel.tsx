@@ -52,7 +52,7 @@ export default function WikiAmbiguousPanel({
   return (
     <section className="wiki-workbench__section">
       <div className="wiki-workbench__section-title">
-        <WarningCircle size={22} aria-hidden="true" />
+        <WarningCircle size={16} aria-hidden="true" />
         <div>
           <h3>选它指的是哪一个</h3>
           <p>
@@ -77,7 +77,7 @@ export default function WikiAmbiguousPanel({
                 {candidate.aliases.length > 0 && ` · 别名：${candidate.aliases.join("、")}`}
               </small>
             </span>
-            {saving === candidate.rel_path ? <SpinnerGap className="wiki-spin" size={18} /> : <ArrowRight size={18} aria-hidden="true" />}
+            {saving === candidate.rel_path ? <SpinnerGap className="wiki-spin" size={16} /> : <ArrowRight size={16} aria-hidden="true" />}
           </button>
         ))}
       </div>
@@ -93,7 +93,7 @@ export default function WikiAmbiguousPanel({
 
       <div className="wiki-relation-editor__actions">
         {error && <span className="wiki-workbench__error">{error}</span>}
-        {done && <span className="wiki-workbench__success"><CheckCircle size={18} />{done}</span>}
+        {done && <span className="wiki-workbench__success"><CheckCircle size={16} />{done}</span>}
         {onLater && <button type="button" className="wiki-workbench__secondary" onClick={onLater}>稍后处理</button>}
       </div>
     </section>

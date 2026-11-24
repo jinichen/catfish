@@ -59,7 +59,7 @@ export default function WikiTypeDefsModal({ onClose }: { onClose: () => void }) 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <h3 style={{ margin: 0, fontSize: 17 }}>类型定义</h3>
           <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: "transparent", cursor: "pointer", color: V.muted }}>
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
         <p style={{ margin: "0 0 12px", color: V.muted, fontSize: 13, lineHeight: 1.5 }}>

@@ -28,6 +28,8 @@
  */
 import { useEffect, useMemo, useState } from "react";
 
+import { CheckCircle, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 import { fetchMe } from "../../lib/me";
 import { fileManagerName } from "../../lib/platformLabels";
 import {
@@ -412,7 +414,7 @@ export default function WikiShareDialog({
           <div className="wiki-share__results">
             {results.map((r) => (
               <div key={r.label} className={r.ok ? "wiki-share__ok" : "wiki-share__err"}>
-                {r.ok ? "✓" : "✗"} 「{r.label}」{r.text}
+                <Ico as={r.ok ? CheckCircle : XCircle} />「{r.label}」{r.text}
               </div>
             ))}
           </div>

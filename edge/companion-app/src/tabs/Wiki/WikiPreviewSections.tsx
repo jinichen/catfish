@@ -28,6 +28,8 @@
  * 优化任何东西 —— 改了就说不清是哪一步动的。
  */
 import ReactMarkdown from "react-markdown";
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 import { GFM_PLUGINS } from "../../lib/markdown";
 import type { WikiFileInfo } from "../../lib/tauri";
 import { wikiSourceLabel } from "./wikiLabels";
@@ -62,7 +64,7 @@ export function WikiHubStaleBanner({
         marginBottom: 10,
       }}
     >
-      <strong>⚠ 原作者已撤回这条 wiki</strong>
+      <strong><Ico as={Warning} />原作者已撤回这条 wiki</strong>
       {hubStaleInfo.unpublished_at && (
         <span style={{ marginLeft: 6, fontSize: 12, opacity: 0.8 }}>
           ({hubStaleInfo.unpublished_at.slice(0, 10)})
@@ -70,10 +72,10 @@ export function WikiHubStaleBanner({
       )}
       <div style={{ marginTop: 4 }}>
         中央 hub body 已清零, 但你本机这份副本不动 (manifesto 公理 4 — 中央不强制清你本机).
-        自己决定是否点 "🗑 卸载本机副本".
+        自己决定是否点「卸载本机副本」.
       </div>
       {hubStaleInfo.unpublished_reason && (
-        <div style={{ marginTop: 4, fontStyle: "italic" }}>
+        <div style={{ marginTop: 4 }}>
           原作者撤回原因: {hubStaleInfo.unpublished_reason}
         </div>
       )}

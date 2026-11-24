@@ -193,7 +193,7 @@ export default function WikiOrganizer({
           data-active={mode === "organize"}
           onClick={() => onModeChange("organize")}
         >
-          <ListChecks size={18} aria-hidden="true" />
+          <ListChecks size={16} aria-hidden="true" />
           关系整理
         </button>
         <button
@@ -203,7 +203,7 @@ export default function WikiOrganizer({
           data-active={mode === "browse"}
           onClick={() => onModeChange("browse")}
         >
-          <Books size={18} aria-hidden="true" />
+          <Books size={16} aria-hidden="true" />
           全部知识
         </button>
         <button
@@ -213,7 +213,7 @@ export default function WikiOrganizer({
           data-active={mode === "shared"}
           onClick={() => onModeChange("shared")}
         >
-          <UsersThree size={18} aria-hidden="true" />
+          <UsersThree size={16} aria-hidden="true" />
           同事分享
         </button>
       </div>
@@ -232,7 +232,7 @@ export default function WikiOrganizer({
               三个按钮看着像筛选条件。现在: 有待处理的才出搜索框 (占满一行); 三个按钮挪到最下面「整理工具」, 各带一句说明。 */}
           {(tasks.length > 0 || search) && (
             <label className="wiki-organizer__search">
-              <MagnifyingGlass size={18} aria-hidden="true" />
+              <MagnifyingGlass size={16} aria-hidden="true" />
               <span className="sr-only">搜索整理任务</span>
               <input
                 value={search}
@@ -257,7 +257,7 @@ export default function WikiOrganizer({
                   onClick={() => setKindFilter(kindFilter === kind ? "all" : kind)}
                   aria-pressed={kindFilter === kind}
                 >
-                  <Icon size={15} aria-hidden="true" />
+                  <Icon size={16} aria-hidden="true" />
                   <span>{TASK_META[kind].label}</span>
                   <strong>{counts[kind]}</strong>
                 </button>
@@ -316,13 +316,13 @@ export default function WikiOrganizer({
           {filesLoading && <div className="wiki-organizer__status">正在整理知识关系…</div>}
           {filesError && (
             <div className="wiki-organizer__status wiki-organizer__status--error">
-              <WarningCircle size={20} aria-hidden="true" />
+              <WarningCircle size={16} aria-hidden="true" />
               {filesError}
             </div>
           )}
           {!filesLoading && !filesError && visibleTasks.length === 0 && (
             <div className="wiki-organizer__complete">
-              <CheckCircle size={32} weight="duotone" aria-hidden="true" />
+              <CheckCircle size={24} aria-hidden="true" />
               <strong>当前关系已整理完成</strong>
               <span>新知识进入后，会自动出现在这里。</span>
               <button type="button" onClick={() => onModeChange("browse")}>
@@ -348,7 +348,7 @@ export default function WikiOrganizer({
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
                 >
                   <span className="wiki-organizer__task-icon">
-                    <Icon size={20} aria-hidden="true" />
+                    <Icon size={16} aria-hidden="true" />
                   </span>
                   <span className="wiki-organizer__task-copy">
                     <strong>{task.title}</strong>

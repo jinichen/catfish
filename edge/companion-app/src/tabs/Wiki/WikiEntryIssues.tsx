@@ -70,7 +70,7 @@ export default function WikiEntryIssues({
   return (
     <section className="wiki-entry-issues" aria-label="这一条待处理的事">
       <div className="wiki-entry-issues__head">
-        <WarningCircle size={20} aria-hidden="true" />
+        <WarningCircle size={16} aria-hidden="true" />
         <strong>这一条还有 {(relation.length > 0 ? 1 : 0) + (unverified ? 1 : 0) + others.length} 件事要处理</strong>
       </div>
       {relationSummary(relation).map((line) => (

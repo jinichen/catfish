@@ -201,7 +201,7 @@ export default function WikiRelationsEditor({
   return (
     <section className="wiki-workbench__section">
       <div className="wiki-workbench__section-title">
-        <CheckCircle size={22} aria-hidden="true" />
+        <CheckCircle size={16} aria-hidden="true" />
         <div>
           <h3>关系</h3>
           <p>
@@ -233,7 +233,7 @@ export default function WikiRelationsEditor({
                 <span className="wiki-relations__name">
                   <strong>{relation.name}</strong>
                   {issues[index] && issues[index] !== RELATION_MISSING && (
-                    <small><WarningCircle size={14} aria-hidden="true" />{issues[index]}</small>
+                    <small><WarningCircle size={16} aria-hidden="true" />{issues[index]}</small>
                   )}
                   {(() => {
                     const sug = suggestions[relation.name.trim()];
@@ -245,7 +245,7 @@ export default function WikiRelationsEditor({
                       const found = !!findEntryByName(files, relation.name.trim());
                       return (
                         <small className="wiki-relations__suggest">
-                          <Sparkle size={14} aria-hidden="true" />建议反过来记：{relation.name}「{sug.rel}」{info.title}{sug.reason && `：${sug.reason}`}
+                          建议反过来记：{relation.name}「{sug.rel}」{info.title}{sug.reason && `：${sug.reason}`}
                           {found
                             ? <button type="button" disabled={saving} onClick={() => void adoptOneReversed(index, sug)}>采纳</button>
                             : <> (知识库里没有「{relation.name}」条目, 记不过去)</>}
@@ -254,7 +254,7 @@ export default function WikiRelationsEditor({
                     }
                     return (
                       <small className="wiki-relations__suggest">
-                        <Sparkle size={14} aria-hidden="true" />建议「{sug.rel}」{sug.reason && `：${sug.reason}`}
+                        建议「{sug.rel}」{sug.reason && `：${sug.reason}`}
                         <button type="button" disabled={saving} onClick={() => changeType(index, sug.rel)}>采纳</button>
                       </small>
                     );
@@ -298,7 +298,7 @@ export default function WikiRelationsEditor({
             让小鲶建议这 {untypedNames.length} 条的类型
           </button>
           {adoptable.length > 1 && (
-            <button type="button" className="wiki-workbench__primary" disabled={saving} onClick={() => void adoptAll()}>
+            <button type="button" className="wiki-workbench__secondary" disabled={saving} onClick={() => void adoptAll()}>
               全部采纳 ({adoptable.length})
             </button>
           )}
@@ -327,7 +327,7 @@ export default function WikiRelationsEditor({
             {targets.map((title) => <option key={title} value={title} />)}
           </datalist>
           <button type="button" className="wiki-workbench__secondary" onClick={() => setAdding(false)}>取消</button>
-          <button type="button" className="wiki-workbench__primary" disabled={saving || !newRel || !targetValid} onClick={add}>
+          <button type="button" className="wiki-workbench__secondary" disabled={saving || !newRel || !targetValid} onClick={add}>
             加上
           </button>
         </div>
@@ -339,7 +339,7 @@ export default function WikiRelationsEditor({
 
       <div className="wiki-relation-editor__actions" ref={resultRef}>
         {error && <span className="wiki-workbench__error">{error}</span>}
-        {notice && <span className="wiki-workbench__success"><CheckCircle size={18} />{notice}</span>}
+        {notice && <span className="wiki-workbench__success"><CheckCircle size={16} />{notice}</span>}
         {isPending && issueCount > 0 && <span className="wiki-workbench__hint">先处理标红的关系再确认</span>}
         {onLater && (
           <button type="button" className="wiki-workbench__secondary" onClick={onLater}>稍后处理</button>
@@ -351,7 +351,7 @@ export default function WikiRelationsEditor({
             disabled={saving || issueCount > 0}
             onClick={() => void save(typed, true, "已确认")}
           >
-            {saving ? <SpinnerGap className="wiki-spin" size={20} /> : <Check size={20} />}
+            {saving ? <SpinnerGap className="wiki-spin" size={16} /> : <Check size={16} />}
             确认
           </button>
         )}

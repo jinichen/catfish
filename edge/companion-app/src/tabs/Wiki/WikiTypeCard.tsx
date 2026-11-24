@@ -85,7 +85,7 @@ export default function WikiTypeCard({ relPath, title, readOnly }: { relPath: st
   return (
     <section className="wiki-workbench__section wiki-type-card" aria-label={`${entry.label}属性`}>
       <div className="wiki-type-card__head">
-        <Tag size={18} aria-hidden="true" />
+        <Tag size={16} aria-hidden="true" />
         <strong>{entry.label}</strong>
         {entry.status && (
           <span className={`wiki-type-card__status ${STATUS_CLASS[entry.status.code] ?? ""}`}>
@@ -143,8 +143,8 @@ export default function WikiTypeCard({ relPath, title, readOnly }: { relPath: st
                 {!a.available && <small className="wiki-workbench__error">{a.reason || "当前不可用"}</small>}
               </div>
               <div className="wiki-action-card__buttons">
-                <button type="button" className="wiki-workbench__primary" onClick={() => run(a)} disabled={!a.available || editing}>
-                  <ChatCircleDots size={18} />交给小鲶
+                <button type="button" className="wiki-workbench__secondary" onClick={() => run(a)} disabled={!a.available || editing}>
+                  <ChatCircleDots size={16} />交给小鲶
                 </button>
               </div>
             </div>

@@ -289,7 +289,7 @@ export default function WikiTree() {
             aria-label="新建知识"
             className="wiki-tree__primary-action"
           >
-            <Plus size={17} aria-hidden="true" />新建
+            <Plus size={16} aria-hidden="true" />新建
           </button>
           <button
             onClick={() => void loadFiles()}
@@ -297,7 +297,7 @@ export default function WikiTree() {
             aria-label="刷新知识库"
             className="wiki-tree__icon-action"
           >
-            <ArrowClockwise size={18} aria-hidden="true" />
+            <ArrowClockwise size={16} aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -311,7 +311,7 @@ export default function WikiTree() {
       )}
 
       <label className="wiki-tree__search">
-        <MagnifyingGlass size={20} aria-hidden="true" />
+        <MagnifyingGlass size={16} aria-hidden="true" />
         <input
           type="text"
           value={search}
