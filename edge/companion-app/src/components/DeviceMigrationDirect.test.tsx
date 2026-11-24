@@ -92,7 +92,7 @@ describe("旧电脑: 直传到新电脑", () => {
   it("没有摄像头: 说清楚, 改成输配对码", async () => {
     invoke.mockResolvedValue(null);
     render(<DeviceMigrationDirectSend files={[]} filesBytes={0} />);
-    fireEvent.click(screen.getByText("📷 扫新电脑上的二维码"));
+    fireEvent.click(screen.getByText("扫新电脑上的二维码"));
     expect(await screen.findByText(/改输配对码/)).toBeTruthy();
     expect(screen.getByPlaceholderText("新电脑上的 8 位配对码")).toBeTruthy();
   });

@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { Info, Prohibit, Warning } from "@phosphor-icons/react";
 
 import {
   advisoryAck,
@@ -22,6 +23,7 @@ import {
 } from "../lib/advisory";
 import { useAdvisory } from "../hooks/useAdvisory";
 import type { Advisory } from "../types/advisory";
+import { Ico } from "./icons";
 
 export default function AdvisoryBanner() {
   const { banners, reload } = useAdvisory();
@@ -78,7 +80,7 @@ export default function AdvisoryBanner() {
   return (
     <div className={cls} role="alert" aria-live="polite">
       <div className="advisory-banner__icon">
-        {isCritical ? "⛔" : current.severity === "high" ? "⚠" : "ℹ"}
+        <Ico as={isCritical ? Prohibit : current.severity === "high" ? Warning : Info} gap={0} />
       </div>
       <div className="advisory-banner__body">
         <div className="advisory-banner__title">{current.title}</div>

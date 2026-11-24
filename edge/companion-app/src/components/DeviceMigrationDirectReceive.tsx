@@ -7,6 +7,7 @@
  */
 import * as React from "react";
 import QRCode from "qrcode";
+import { CheckCircle, Warning } from "@phosphor-icons/react";
 
 import {
   directImport,
@@ -19,6 +20,7 @@ import {
   type MigrationImportReport,
 } from "../lib/deviceMigration";
 import { errBox, ImportDone, PackageCheck, plainBtn, primaryBtn } from "./DeviceMigrationParts";
+import { Ico } from "./icons";
 
 const muted: React.CSSProperties = { fontSize: 11, color: "var(--catfish-text-muted)" };
 const ACTIVE = new Set(["waiting", "receiving", "verifying"]);
@@ -99,7 +101,7 @@ export default function DeviceMigrationDirectReceive({ beforeRestart }: { before
         <button type="button" style={{ ...primaryBtn(busy), marginTop: 6 }} onClick={() => void start()} disabled={busy}>
           {busy ? "准备中…" : "开始: 在这台出二维码"}
         </button>
-        {error && <div style={errBox}>🚫 {error}</div>}
+        {error && <div style={errBox}><Ico as={Warning} />{error}</div>}
       </div>
     );
   }
@@ -149,16 +151,16 @@ export default function DeviceMigrationDirectReceive({ beforeRestart }: { before
   if (st.state === "ready" && st.info) {
     return (
       <div>
-        <div style={{ color: "#16A34A", fontWeight: 600 }}>✓ 收齐了, 校验通过 (从 {st.fromDevice || "旧电脑"})</div>
+        <div style={{ color: "var(--status-ok)", fontWeight: 600 }}><Ico as={CheckCircle} />收齐了, 校验通过 (从 {st.fromDevice || "旧电脑"})</div>
         <PackageCheck info={st.info} busy={busy} onImport={(o) => void runImport(o)} />
-        {error && <div style={errBox}>🚫 {error}</div>}
+        {error && <div style={errBox}><Ico as={Warning} />{error}</div>}
       </div>
     );
   }
 
   return (
     <div>
-      <div style={errBox}>🚫 {st.error ?? error ?? "直传没成功"}</div>
+      <div style={errBox}><Ico as={Warning} />{st.error ?? error ?? "直传没成功"}</div>
       <button type="button" style={{ ...primaryBtn(busy), marginTop: 8 }} onClick={() => void start()} disabled={busy}>
         重新开始
       </button>

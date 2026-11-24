@@ -51,11 +51,11 @@ export function StepWelcome({ onNext, onSkip }: { onNext: () => void; onSkip: ()
           paddingLeft: 20,
         }}
       >
-        <li>📝 写汇报 / 周报 / 立项材料 — 一句话生成 .docx</li>
-        <li>💾 跨 session 记忆 — 它记得你最近做了什么</li>
-        <li>🔐 数据全在你本机, 中央只看用量不看内容</li>
-        {/* 🐠 是观赏鱼 emoji, 跟"鲶鱼"品牌容易混淆 → 换中性 ✨ */}
-        <li>✨ 越用越懂你, journal 自动总结你的工作</li>
+        <li>写汇报 / 周报 / 立项材料 — 一句话生成 .docx</li>
+        <li>跨 session 记忆 — 它记得你最近做了什么</li>
+        <li>数据全在你本机, 中央只看用量不看内容</li>
+        {/* 11/24 unslop: 列表前的 emoji 都去掉了, 用普通圆点 */}
+        <li>越用越懂你, journal 自动总结你的工作</li>
       </ul>
       <p style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginTop: "var(--space-3)" }}>
         几步简单设置, 大概 2 分钟.
@@ -193,11 +193,11 @@ export function StepServerConfig({
       {err && (
         <div
           style={{
-            color: "var(--catfish-danger, #ef4444)",
+            color: "var(--status-err)",
             fontSize: 12,
             marginBottom: "var(--space-3)",
-            padding: "8px 10px",
-            background: "rgba(239, 68, 68, 0.08)",
+            padding: "8px 12px",
+            background: "color-mix(in srgb, var(--status-err) 8%, transparent)",
             borderRadius: 6,
           }}
         >
@@ -216,7 +216,7 @@ export function StepServerConfig({
           marginBottom: "var(--space-3)",
         }}
       >
-        ℹ️ 之后可在 <strong>Dashboard → 服务器配置</strong> 卡片里修改. 测试期先用 IP, 正式上线可切域名.
+        之后可在 <strong>Dashboard → 服务器配置</strong> 卡片里修改. 测试期先用 IP, 正式上线可切域名.
       </div>
 
       <Buttons
@@ -353,7 +353,7 @@ export function StepAuth({
 }) {
   return (
     <>
-      <h3 style={{ marginTop: 0 }}>1️⃣ 登录</h3>
+      <h3 style={{ marginTop: 0 }}>登录</h3>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
         鲶鱼支持你公司的 SSO (飞书 / 钉钉 / 企微 / 自建 OIDC).
       </p>
@@ -371,7 +371,7 @@ export function StepAuth({
           marginTop: "var(--space-3)",
         }}
       >
-        ℹ️ 后续可在 设置 → 登录 切换. 现在直接走默认就行, gateway 自动用 .env dev_token.
+        后续可在 设置 → 登录 切换. 现在直接走默认就行, gateway 自动用 .env dev_token.
       </div>
       <Buttons onNext={onNext} onBack={onBack} onSkip={onSkip} />
     </>

@@ -5,17 +5,19 @@
  * 列出「还要重新做的事」(凭证刻意不带) → 重启 Companion。
  */
 import * as React from "react";
+import { Warning } from "@phosphor-icons/react";
 
 import { migrationImport, migrationInspect, migrationPickOpen, type MigrationImportReport, type MigrationInspectReport } from "../lib/deviceMigration";
 import DeviceMigrationDirectReceive from "./DeviceMigrationDirectReceive";
 import { errBox, ImportDone, inputStyle, PackageCheck, plainBtn, primaryBtn } from "./DeviceMigrationParts";
+import { Ico } from "./icons";
 
 export { inputStyle, plainBtn, primaryBtn } from "./DeviceMigrationParts";
 
 const tabBtn = (on: boolean): React.CSSProperties => ({
   ...plainBtn,
-  background: on ? "var(--catfish-cyan)" : "transparent",
-  color: on ? "white" : "var(--catfish-text)",
+  background: on ? "var(--catfish-cyan-tint)" : "transparent",
+  color: on ? "var(--catfish-cyan)" : "var(--catfish-text)",
   borderColor: on ? "var(--catfish-cyan)" : "var(--catfish-border)",
 });
 
@@ -23,7 +25,7 @@ export default function DeviceMigrationImport({ beforeRestart }: { beforeRestart
   const [mode, setMode] = React.useState<"direct" | "file">("direct");
   return (
     <div style={{ fontSize: 12 }}>
-      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
         <button type="button" style={tabBtn(mode === "direct")} onClick={() => setMode("direct")}>
           从旧电脑直传 (推荐)
         </button>
@@ -109,7 +111,7 @@ function FileImport({ beforeRestart }: { beforeRestart?: () => void }) {
         </div>
       )}
       {info && <PackageCheck info={info} busy={busy === "import"} onImport={(o) => void run(o)} />}
-      {error && <div style={errBox}>🚫 {error}</div>}
+      {error && <div style={errBox}><Ico as={Warning} />{error}</div>}
     </div>
   );
 }

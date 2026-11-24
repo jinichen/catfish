@@ -154,12 +154,11 @@ export default function FilePill({ path }: Props) {
             disabled={sending}
             style={{
               ...pillBtnStyle("primary"),
-              background: "var(--catfish-blue, #2563eb)",
               opacity: sending ? 0.5 : 1,
             }}
             title={`放 ${emailClientName()} 草稿箱 (自动切前台 + 草稿窗口弹), 你审改后 ⌘+Shift+D 发送`}
           >
-            {sending ? "放中…" : `📥 放 ${emailClientName()} 草稿箱`}
+            {sending ? "放中…" : `放 ${emailClientName()} 草稿箱`}
           </button>
         )}
         {canPreview && (
@@ -192,7 +191,7 @@ export default function FilePill({ path }: Props) {
       {sendOk && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: 11,
             color: "var(--status-ok, #065f46)",
             paddingLeft: 10,
             maxWidth: 360,
@@ -205,7 +204,7 @@ export default function FilePill({ path }: Props) {
       {err && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: 11,
             color: "var(--status-err)",
             paddingLeft: 10,
             fontFamily: "var(--font-mono)",
@@ -253,6 +252,7 @@ function pillBtnStyle(kind: "primary" | "secondary"): React.CSSProperties {
     borderRadius: 999,
     cursor: "pointer",
     whiteSpace: "nowrap",
+    flex: "none",
     fontFamily: "inherit",
   };
 }

@@ -1,29 +1,37 @@
 /** 换机迁移 · 导入两种方式 (迁移包文件 / 扫码直传) 共用的样式和两块界面: 「包里有什么 + 开始导入」「导入完成」。 */
 import * as React from "react";
+import { CheckCircle, Prohibit, Warning } from "@phosphor-icons/react";
 
 import { formatBytes, migrationRestartApp, type MigrationImportReport, type MigrationInspectReport } from "../lib/deviceMigration";
+import { Ico } from "./icons";
 
 export const box: React.CSSProperties = {
-  marginTop: 10,
+  marginTop: 12,
   padding: "8px 12px",
   borderRadius: 4,
   fontSize: 12,
   lineHeight: 1.7,
 };
-export const okBox: React.CSSProperties = { ...box, background: "rgba(22,163,74,0.05)", border: "1px solid rgba(22,163,74,0.3)" };
+export const okBox: React.CSSProperties = {
+  ...box,
+  background: "color-mix(in srgb, var(--status-ok) 6%, transparent)",
+  border: "1px solid color-mix(in srgb, var(--status-ok) 30%, transparent)",
+};
 export const errBox: React.CSSProperties = {
   ...box,
-  background: "rgba(220,38,38,0.05)",
-  border: "1px solid rgba(220,38,38,0.3)",
+  background: "color-mix(in srgb, var(--status-err) 6%, transparent)",
+  border: "1px solid color-mix(in srgb, var(--status-err) 30%, transparent)",
   color: "var(--status-err)",
 };
 export const primaryBtn = (busy: boolean): React.CSSProperties => ({
   background: "var(--catfish-cyan)",
   color: "white",
-  border: "none",
+  border: "1px solid var(--catfish-cyan)",
   borderRadius: 4,
-  padding: "6px 14px",
+  padding: "5px 12px",
   fontSize: 13,
+  whiteSpace: "nowrap",
+  flex: "none",
   cursor: busy ? "default" : "pointer",
   opacity: busy ? 0.6 : 1,
 });
@@ -32,7 +40,9 @@ export const plainBtn: React.CSSProperties = {
   border: "1px solid var(--catfish-border)",
   borderRadius: 4,
   padding: "5px 12px",
-  fontSize: 12,
+  fontSize: 13,
+  whiteSpace: "nowrap",
+  flex: "none",
   cursor: "pointer",
   color: "var(--catfish-text)",
 };
@@ -44,8 +54,8 @@ const OS: Record<string, string> = { macos: "Mac", windows: "Windows", linux: "L
 export function ImportDone({ done, beforeRestart }: { done: MigrationImportReport; beforeRestart?: () => void }) {
   return (
     <div style={okBox}>
-      <div style={{ fontWeight: 600, color: "#16A34A" }}>
-        ✓ 导入完成: {done.files} 个文件, {formatBytes(done.bytes)}
+      <div style={{ fontWeight: 600, color: "var(--status-ok)" }}>
+        <Ico as={CheckCircle} />导入完成: {done.files} 个文件, {formatBytes(done.bytes)}
       </div>
       {done.pathsRewritten > 0 && <div>· 文件里记着的旧电脑路径改成了这台的 ({done.pathsRewritten} 处)</div>}
       {done.keptExisting > 0 && <div>· 有 {done.keptExisting} 个技能这台已经自带, 保留了这台的版本</div>}
@@ -55,7 +65,7 @@ export function ImportDone({ done, beforeRestart }: { done: MigrationImportRepor
         </div>
       )}
       {done.warnings.map((w) => (
-        <div key={w} style={{ color: "var(--catfish-orange)" }}>⚠️ {w}</div>
+        <div key={w} style={{ color: "var(--catfish-orange)" }}><Ico as={Warning} />{w}</div>
       ))}
       <div style={{ marginTop: 6, fontWeight: 600 }}>还需要你重新做的 (账号和授权刻意没带过来):</div>
       {done.redo.map((r) => (
@@ -100,10 +110,10 @@ export function PackageCheck({
       </div>
       {!info.samePerson && (
         <div style={{ color: "var(--status-err)" }}>
-          🚫 这是 {info.userEmail} 的迁移包, 现在登录的是 {info.loggedInAs}。迁移包只能导给本人。
+          <Ico as={Prohibit} />这是 {info.userEmail} 的迁移包, 现在登录的是 {info.loggedInAs}。迁移包只能导给本人。
         </div>
       )}
-      {!info.versionOk && <div style={{ color: "var(--status-err)" }}>🚫 迁移包来自更新版本的 Companion, 请先把这台升级到最新。</div>}
+      {!info.versionOk && <div style={{ color: "var(--status-err)" }}><Ico as={Prohibit} />迁移包来自更新版本的 Companion, 请先把这台升级到最新。</div>}
       {info.targetHasData && !blocked && (
         <label style={{ display: "block", marginTop: 4, color: "var(--catfish-orange)" }}>
           <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /> 这台已经有鲶鱼数据:

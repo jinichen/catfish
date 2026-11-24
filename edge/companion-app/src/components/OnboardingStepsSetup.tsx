@@ -10,8 +10,10 @@
  */
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { FolderOpen } from "@phosphor-icons/react";
 
 import { Buttons } from "./OnboardingButtons";
+import { Ico } from "./icons";
 
 /** /v1/models catalog 里的一项。wizard 拉列表, StepModel 渲染。 */
 export interface ModelInfo {
@@ -33,7 +35,7 @@ export function StepModel({
 }) {
   return (
     <>
-      <h3 style={{ marginTop: 0 }}>2️⃣ 选默认模型</h3>
+      <h3 style={{ marginTop: 0 }}>选默认模型</h3>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
         鲶鱼支持多模型, 每次对话都能切. 我们建议默认走**内网模型** (数据不出公司).
       </p>
@@ -80,7 +82,7 @@ export function StepModel({
               {m.tier === "private" && (
                 <span
                   style={{
-                    fontSize: 10,
+                    fontSize: 11,
                     color: "var(--catfish-cyan)",
                     border: "1px solid var(--catfish-cyan)",
                     padding: "1px 6px",
@@ -160,7 +162,7 @@ export function StepCurator({
 
   return (
     <>
-      <h3 style={{ marginTop: 0 }}>3️⃣ 脚本整理</h3>
+      <h3 style={{ marginTop: 0 }}>脚本整理</h3>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
         鲶鱼可以定期帮你整理工作脚本 — 长时间没用的归档, 长得像的合并.
         <br />
@@ -171,7 +173,7 @@ export function StepCurator({
         style={{
           display: "flex",
           alignItems: "flex-start",
-          gap: 10,
+          gap: 12,
           padding: "var(--space-3)",
           background: "var(--catfish-bg)",
           border: "1px solid var(--catfish-border)",
@@ -272,7 +274,7 @@ export function StepDocDirs({
 
   return (
     <>
-      <h3 style={{ marginTop: 0 }}>4️⃣ 学你的文风</h3>
+      <h3 style={{ marginTop: 0 }}>学你的文风</h3>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
         鲶鱼会给这个文件夹建本地索引, 一来你能直接搜"上次那份合同", 二来它会从中
         抽你的写作特征 (句长 / 用词 / 标点习惯), 帮你起草汇报时模仿你的风格 —
@@ -308,14 +310,14 @@ export function StepDocDirs({
             padding: "10px",
             marginBottom: 8,
             fontSize: 13,
-            background: "var(--catfish-cyan, #0E5F66)",
-            color: "white",
-            border: "none",
+            background: "transparent",
+            color: "var(--catfish-cyan)",
+            border: "1px solid var(--catfish-cyan)",
             borderRadius: 4,
             cursor: saving ? "default" : "pointer",
           }}
         >
-          📂 选择文件夹…
+          <Ico as={FolderOpen} />选择文件夹…
         </button>
         <input
           type="text"
@@ -338,7 +340,7 @@ export function StepDocDirs({
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 8, lineHeight: 1.5 }}>
           访达里的「文稿 / 桌面 / 下载」磁盘上叫 <code>~/Documents</code> · <code>~/Desktop</code> · <code>~/Downloads</code> (写中文也认)
           <br />
-          后面在设置 "📂 搜索范围" 卡随时改 / 加多个.
+          后面在设置「搜索范围」卡随时改 / 加多个.
         </div>
       </div>
 
@@ -381,7 +383,7 @@ export function StepTryChat({
   ];
   return (
     <>
-      <h3 style={{ marginTop: 0 }}>5️⃣ 试聊 — 教小鲶记住你</h3>
+      <h3 style={{ marginTop: 0 }}>试聊 — 教小鲶记住你</h3>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
         小鲶有跨 session 长期记忆 (在你本机 <code>~/.hermes/memories/USER.md</code>, 永不上传).
         第一次聊建议**教它几条基础事实**, 今后它就懂你, 不用每次重复.
@@ -397,7 +399,7 @@ export function StepTryChat({
             onClick={() => setPicked(ex)}
             style={{
               textAlign: "left",
-              padding: "8px 10px",
+              padding: "8px 12px",
               border: `1.5px solid ${picked === ex ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
               borderRadius: 6,
               background: picked === ex ? "var(--catfish-bg-cream)" : "var(--catfish-bg)",
@@ -407,7 +409,7 @@ export function StepTryChat({
               fontFamily: "var(--font-mono)",
             }}
           >
-            💬 {ex}
+            {ex}
           </button>
         ))}
       </div>

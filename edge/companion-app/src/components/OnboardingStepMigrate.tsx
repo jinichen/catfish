@@ -23,7 +23,7 @@ export function StepMigrate({
   const [open, setOpen] = React.useState(false);
   return (
     <>
-      <h3 style={{ marginTop: 0 }}>🧳 换了新电脑?</h3>
+      <h3 style={{ marginTop: 0 }}>换了新电脑?</h3>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
         如果你在旧电脑上用过鲶鱼, 可以把那边的工作日志、记忆、知识库、技能、对话历史整个搬过来。
         旧电脑还开着: 这里出二维码, 在旧电脑「设置 → 隐私 / 本机数据 → 换机迁移 → 这台是旧电脑」扫一下就行;

@@ -76,7 +76,7 @@ export default function MobilePairDialog() {
         padding: "var(--space-6)", borderRadius: "var(--radius-md)", width: 420, boxShadow: "var(--shadow-md)" }}>
         {current ? (
           <>
-            <h3 style={{ marginTop: 0 }}>📱 有一台手机请求连接</h3>
+            <h3 style={{ marginTop: 0 }}>有一台手机请求连接</h3>
             <p style={{ fontSize: 13 }}>
               <b>{current.name}</b> 想连这台电脑上的小鲶。连上以后, 它能跟小鲶对话、批准小鲶要做的事 (只能单次)、看早安简报。
             </p>
