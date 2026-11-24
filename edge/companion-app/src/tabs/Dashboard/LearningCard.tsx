@@ -13,6 +13,8 @@ import { useLearning } from "../../hooks/useLearning";
 import { formatTokens } from "../../lib/format";
 import type { TodayLearningStats } from "../../types/learning";
 import { useAgentStore } from "../../store/agent";
+import { NotePencil, PushPin } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 export default function LearningCard() {
   const { stats, error } = useLearning();
@@ -31,7 +33,7 @@ export default function LearningCard() {
     try {
       await invoke("skill_proposal_accept", { args: { fullName } });
       showFlash(
-        `✅ 已标记接受 ${fullName}. 现在去对话 tab 跟${agentName}说: "装 ${fullName}" — ${agentName}会真创建 SKILL.md 文件.`,
+        `已标记接受 ${fullName}. 现在去对话 tab 跟${agentName}说: "装 ${fullName}" — ${agentName}会真创建 SKILL.md 文件.`,
       );
       // 刷新立刻看不到, useLearning 30s polling 自动更新
     } catch (e) {
@@ -166,7 +168,7 @@ export default function LearningCard() {
               }}
             >
               <div style={{ marginBottom: 6, color: "var(--catfish-cyan)", fontWeight: 600 }}>
-                💡 今天 {agentName}提议的 skill ({stats.proposedSkillsTodayCount}, 等你确认)
+                今天 {agentName}提议的 skill ({stats.proposedSkillsTodayCount}, 等你确认)
               </div>
               <ul style={{ ...listStyle, marginTop: 4 }}>
                 {stats.proposedSkillsToday.map((p) => (
@@ -186,7 +188,7 @@ export default function LearningCard() {
                     </span>
                     <span
                       style={{
-                        fontSize: 10,
+                        fontSize: 11,
                         padding: "1px 6px",
                         background:
                           p.status === "accepted"
@@ -231,17 +233,19 @@ export default function LearningCard() {
                           disabled={busyName === p.fullName}
                           style={{
                             padding: "2px 8px",
+                            minHeight: 24,
+                            whiteSpace: "nowrap",
                             border: "1px solid var(--catfish-cyan)",
                             borderRadius: 3,
-                            background: "var(--catfish-cyan)",
-                            color: "var(--catfish-bg)",
-                            fontSize: 10,
+                            background: "transparent",
+                            color: "var(--catfish-cyan)",
+                            fontSize: 11,
                             fontWeight: 600,
                             cursor: busyName === p.fullName ? "wait" : "pointer",
                             opacity: busyName === p.fullName ? 0.5 : 1,
                           }}
                         >
-                          ✅ 接受
+                          接受
                         </button>
                         <button
                           type="button"
@@ -249,16 +253,18 @@ export default function LearningCard() {
                           disabled={busyName === p.fullName}
                           style={{
                             padding: "2px 8px",
+                            minHeight: 24,
+                            whiteSpace: "nowrap",
                             border: "1px solid var(--catfish-text-muted)",
                             borderRadius: 3,
                             background: "transparent",
                             color: "var(--catfish-text-muted)",
-                            fontSize: 10,
+                            fontSize: 11,
                             cursor: busyName === p.fullName ? "wait" : "pointer",
                             opacity: busyName === p.fullName ? 0.5 : 1,
                           }}
                         >
-                          ✕ 拒
+                          拒
                         </button>
                       </>
                     )}
@@ -327,14 +333,14 @@ export default function LearningCard() {
                   lineHeight: 1.5,
                 }}
               >
-                📌 顶层 = 稳定身份档案 ({agentName}启动时自动加载, 永远记得)
+                <Ico as={PushPin} />顶层 = 稳定身份档案 ({agentName}启动时自动加载, 永远记得)
                 <br />
-                📝 memories/ = 对话中动态学到的, 按主题片段 ({agentName}按需检索)
+                <Ico as={NotePencil} />memories/ = 对话中动态学到的, 按主题片段 ({agentName}按需检索)
               </div>
               <ul style={listStyle}>
                 {stats.memories.map((m) => {
                   const isToplevel = !m.name.includes("/");
-                  const icon = isToplevel ? "📌" : "📝";
+                  const icon = isToplevel ? <Ico as={PushPin} /> : <Ico as={NotePencil} />;
                   const label = isToplevel
                     ? `${m.name} · 身份档案`
                     : m.name.replace("memories/", "memories/");
@@ -453,8 +459,6 @@ function Section({
           fontSize: 11,
           color: "var(--catfish-text-muted)",
           marginBottom: "var(--space-2)",
-          textTransform: "uppercase",
-          letterSpacing: 0.5,
           fontWeight: 600,
         }}
       >
@@ -518,8 +522,6 @@ function SoftSkillSection({ stats }: { stats: TodayLearningStats }) {
           fontSize: 11,
           color: "var(--catfish-text-muted)",
           marginBottom: "var(--space-3)",
-          textTransform: "uppercase",
-          letterSpacing: 0.5,
           fontWeight: 600,
         }}
       >

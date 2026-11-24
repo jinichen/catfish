@@ -12,6 +12,8 @@ import * as React from "react";
 
 import { auditExportXlsx, revealInFinder, type AuditExportResult } from "../../lib/tauri";
 import { fileManagerName } from "../../lib/platformLabels";
+import { FolderOpen, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 // P3.3.54 polish (6/12): 本地时区, 不走 toISOString UTC 漂移
 //   bug 现象: PT 时区 6/1 00:00 → toISOString → "2026-05-31..." (UTC 还在 5/31)
@@ -75,9 +77,9 @@ export default function AuditExportCard() {
   };
 
   return (
-    <div style={{ padding: 12 }}>
+    <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)" }}>
       <div style={{ marginBottom: 12 }}>
-        <h3 style={{ margin: 0, fontSize: 15 }}>📦 审计导出</h3>
+        <h3 style={{ margin: 0, fontSize: 15 }}>审计导出</h3>
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4 }}>
           按时间范围 + 数据源生成 xlsx, 落 ~/.catfish/exports/. 给信合规 / 内审 / 党办手动交付.
         </div>
@@ -170,7 +172,7 @@ export default function AuditExportCard() {
             color: "var(--status-err)",
           }}
         >
-          🚫 导出失败: {error}
+          <Ico as={XCircle} />导出失败: {error}
         </div>
       )}
 
@@ -211,11 +213,13 @@ export default function AuditExportCard() {
               border: "1px solid var(--catfish-border)",
               borderRadius: 3,
               padding: "3px 10px",
+              minHeight: 24,
+              whiteSpace: "nowrap",
               fontSize: 11,
               cursor: "pointer",
             }}
           >
-            📂 在 {fileManagerName()} 显示
+            <Ico as={FolderOpen} />在 {fileManagerName()} 显示
           </button>
         </div>
       )}

@@ -23,6 +23,8 @@ import { muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
 import { StepChain } from "./WorkflowParts";
 import { Detail } from "./WorkflowsCard";
+import { Clock } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 const KIND_TEXT: Record<BuildJob["kind"], string> = {
   reuse: "用你已有的", new: "新搭工作流", knowledge: "查知识库回答", teach: "还不会 · 要你先教一遍",
@@ -91,7 +93,7 @@ export default function ExpertBuildCard({ onApplied }: { onApplied: () => void }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <strong style={{ fontSize: 13 }}>✨ 一句话搭专家</strong>
+      <strong style={{ fontSize: 13 }}>一句话搭专家</strong>
       <span style={muted}>
         说要它管哪类事、具体做哪几件, 小鲶一次起草好: 能用你已有的就用, 缺的用积木新搭工作流, 网页上点点点的会请你先教一遍。看过再保存。
       </span>
@@ -210,7 +212,7 @@ function BuildView({ build: b, highlight, onChange, onGone, onApplied }: {
               <input type="checkbox" checked={e.include} disabled={!!busy} aria-label={`要不要搭「${e.name}」`}
                      onChange={(ev) => void patch(e, { include: ev.target.checked })} />
             )}
-            <strong style={{ fontSize: 13 }}>🧑‍💼 {e.name}</strong>
+            <strong style={{ fontSize: 13 }}>{e.name}</strong>
             <span style={{ ...muted, flex: 1, minWidth: 0 }}>{e.description}</span>
             {draft && <Btn kind="ghost" onClick={() => setPersona(persona === e.key ? null : e.key)}>{persona === e.key ? "收起人设" : "改人设"}</Btn>}
           </div>
@@ -229,7 +231,7 @@ function BuildView({ build: b, highlight, onChange, onGone, onApplied }: {
                 <span style={{ fontSize: 13 }}>
                   <strong>{j.title}</strong>
                   <span style={muted}> · {jobHow(j)}</span>
-                  {j.schedule && <span style={{ fontSize: 12, color: "var(--catfish-cyan)", whiteSpace: "nowrap" }}> · ⏰ {j.schedule.text}</span>}
+                  {j.schedule && <span style={{ fontSize: 12, color: "var(--catfish-cyan)", whiteSpace: "nowrap" }}> · <Ico as={Clock} />{j.schedule.text}</span>}
                 </span>
                 <span style={muted}>你会说: {j.when}</span>
                 {j.kind === "new" && j.chain && j.chain.length > 0 && <StepChain chain={j.chain} />}

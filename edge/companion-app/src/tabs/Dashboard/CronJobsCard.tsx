@@ -22,6 +22,7 @@ import {
   type CronJob,
   type CronOutputMeta,
 } from "../../lib/tauri";
+import { ArrowClockwise, CheckCircle, Circle, Pause, Play, Trash, XCircle } from "@phosphor-icons/react";
 
 const REFRESH_MS = 30_000;
 const OUTPUT_PREVIEW_LIMIT = 5;
@@ -52,19 +53,19 @@ function fmtRelative(iso: string | null | undefined): string {
   }
 }
 
-function statusIcon(job: CronJob): string {
-  if (!job.enabled) return "⏸";
+function statusIcon(job: CronJob): React.ReactNode {
+  if (!job.enabled) return <Pause size={14} weight="regular" />;
   // P27 (6/25): 真重试中 (attempt 1-3, exhausted=false) → 黄色 ↻
   if (
     job.last_status === "error" &&
     (job.catfish_retry_attempt ?? 0) > 0 &&
     !job.catfish_retry_exhausted
   ) {
-    return "↻";
+    return <ArrowClockwise size={14} weight="regular" />;
   }
-  if (job.last_status === "error") return "❌";
-  if (job.last_status === "ok") return "✓";
-  return "○"; // 还没跑过
+  if (job.last_status === "error") return <XCircle size={14} weight="regular" />;
+  if (job.last_status === "ok") return <CheckCircle size={14} weight="regular" />;
+  return <Circle size={14} weight="regular" />; // 还没跑过
 }
 
 function statusColor(job: CronJob): string {
@@ -160,14 +161,14 @@ export default function CronJobsCard() {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          padding: "12px 12px 8px 12px",
+          padding: "var(--space-4) var(--space-4) var(--space-2) var(--space-4)",
           borderBottom: "1px solid var(--catfish-border-soft, rgba(0,0,0,0.05))",
           background: "var(--catfish-bg-elevated, rgba(0,0,0,0.02))",
           flexShrink: 0,
         }}
       >
         <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-          <strong style={{ fontSize: 14 }}>⏰ 定时任务 ({jobs.length})</strong>
+          <strong style={{ fontSize: 15 }}>定时任务 ({jobs.length})</strong>
           {failCount > 0 && (
             <span
               style={{
@@ -218,6 +219,8 @@ export default function CronJobsCard() {
             border: "1px solid var(--catfish-border)",
             borderRadius: 4,
             padding: "2px 8px",
+            minHeight: 24,
+            whiteSpace: "nowrap",
             cursor: "pointer",
             fontSize: 11,
           }}
@@ -231,7 +234,7 @@ export default function CronJobsCard() {
         style={{
           flex: 1,
           overflowY: "auto",
-          padding: "8px 12px 12px 12px",
+          padding: "var(--space-2) var(--space-4) var(--space-4) var(--space-4)",
         }}
       >
         {/* 错误 */}
@@ -423,7 +426,7 @@ function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
           </div>
           <div
             style={{
-              fontSize: 10,
+              fontSize: 11,
               color: "var(--catfish-text-muted)",
               marginTop: 2,
             }}
@@ -471,18 +474,20 @@ function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
               onClick={handlePause}
               disabled={busy}
               title="暂停"
+              aria-label="暂停"
               style={btnStyle}
             >
-              ⏸
+              <Pause size={12} weight="regular" />
             </button>
           ) : (
             <button
               onClick={handleResume}
               disabled={busy}
               title="恢复"
+              aria-label="恢复"
               style={btnStyle}
             >
-              ▶
+              <Play size={12} weight="regular" />
             </button>
           )}
           <button
@@ -493,19 +498,19 @@ function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
               ...btnStyle,
               color: confirmingDelete ? "white" : "#d9534f",
               background: confirmingDelete ? "#d9534f" : btnStyle.background,
-              fontSize: confirmingDelete ? 10 : btnStyle.fontSize,
+              fontSize: btnStyle.fontSize,
               fontWeight: confirmingDelete ? 600 : undefined,
               minWidth: confirmingDelete ? 40 : btnStyle.minWidth,
             }}
           >
-            {confirmingDelete ? "确定?" : "🗑"}
+            {confirmingDelete ? "确定?" : <Trash size={12} weight="regular" aria-label="删除" />}
           </button>
         </div>
       </div>
       {opError && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: 11,
             color: "#d9534f",
             padding: "0 8px 4px 28px",
           }}
@@ -523,6 +528,8 @@ const btnStyle: React.CSSProperties = {
   border: "1px solid var(--catfish-border)",
   borderRadius: 3,
   padding: "1px 6px",
+  minHeight: 24,
+  whiteSpace: "nowrap",
   fontSize: 11,
   cursor: "pointer",
   minWidth: 22,
@@ -610,7 +617,7 @@ function OutputsExpansion({ jobId }: { jobId: string }) {
                 style={{
                   color: "var(--catfish-text-muted)",
                   paddingLeft: 14,
-                  fontSize: 10,
+                  fontSize: 11,
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -625,7 +632,7 @@ function OutputsExpansion({ jobId }: { jobId: string }) {
                     border: "1px solid var(--catfish-border)",
                     borderRadius: 4,
                     padding: 8,
-                    fontSize: 10,
+                    fontSize: 11,
                     margin: "4px 0 4px 14px",
                     maxHeight: 300,
                     overflow: "auto",

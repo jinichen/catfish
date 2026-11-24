@@ -25,6 +25,8 @@ import {
   type HermesMemoryView,
 } from "../../lib/tauri";
 import MemoryPendingPanel from "./MemoryPendingPanel";
+import { Trash, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 const REFRESH_MS = 30_000;  // 30s polling 跟其他卡一致
 
@@ -165,9 +167,9 @@ export default function HermesMemoryCard() {
       const failed = rs.find((r): r is PromiseRejectedResult => r.status === "rejected");
       setCompactNote(
         staged > 0
-          ? `✂️ 小鲶提了 ${staged} 条精简 / 合并建议, 全部同意能省约 ${saved} 字 —— 在上面「待你确认的整理建议」里逐条看`
+          ? `小鲶提了 ${staged} 条精简 / 合并建议, 全部同意能省约 ${saved} 字 —— 在上面「待你确认的整理建议」里逐条看`
           : failed ? `精简没做成: ${failed.reason instanceof Error ? failed.reason.message : String(failed.reason)}`
-          : "✂️ 没找到能再精简的条目",
+          : "没找到能再精简的条目",
       );
       setPendingKey((k) => k + 1);
     });
@@ -259,7 +261,7 @@ export default function HermesMemoryCard() {
       >
         <div>
           <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
-            🧠 我的记忆
+            我的记忆
           </h3>
           {/* 6/1 鸿波 ABBB: 改成员工能懂的语言, 删 dev 术语 (target=user, memory). */}
           <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 2 }}>
@@ -283,7 +285,7 @@ export default function HermesMemoryCard() {
             whiteSpace: "nowrap",
           }}
         >
-          {dedupeRunning ? "整理中 (一两分钟)..." : "🧹 整理记忆"}
+          {dedupeRunning ? "整理中 (一两分钟)..." : "整理记忆"}
         </button>
       </div>
 
@@ -306,8 +308,8 @@ export default function HermesMemoryCard() {
             borderRadius: 4,
           }}
         >
-          🚫 删除失败: {deleteError}
-          <div style={{ fontSize: 10, marginTop: 4, opacity: 0.8 }}>
+          <Ico as={XCircle} />删除失败: {deleteError}
+          <div style={{ fontSize: 11, marginTop: 4, opacity: 0.8 }}>
             常见原因: 记忆文件 entry 内容跟 UI 显示有细微差 (空格/换行/编码), 找不到完全匹配.
             检查 ~/.hermes/memories/ 真文件.
           </div>
@@ -339,11 +341,11 @@ export default function HermesMemoryCard() {
           }}
         >
           <div style={{ fontWeight: 600, color: "var(--catfish-cyan)", marginBottom: 6 }}>
-            🧹 LLM 真找到 {dedupeSuggestions.length} 条可能重复
+            LLM 真找到 {dedupeSuggestions.length} 条可能重复
             {proposeHints.length > 0 ? ` + ${proposeHints.length} 条像 skill 流程` : ""}
           </div>
           {dedupeSuggestions.length === 0 && proposeHints.length === 0 ? (
-            <div style={{ color: "var(--catfish-text-muted)", fontStyle: "italic" }}>
+            <div style={{ color: "var(--catfish-text-muted)" }}>
               没真找到重复 — 你的 memory 真干净 ✓
             </div>
           ) : (
@@ -361,7 +363,7 @@ export default function HermesMemoryCard() {
                       opacity: isApplying ? 0.4 : 1,
                     }}
                   >
-                    <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginBottom: 2 }}>
+                    <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 2 }}>
                       {s.target.toUpperCase()} · 相似度 {(s.similarity * 100).toFixed(0)}%
                       {s.llm_verdict ? ` · LLM 判: ${s.llm_verdict}` : " · jaccard fallback"}
                       {s.llm_reason ? ` · ${s.llm_reason}` : ""}
@@ -380,19 +382,21 @@ export default function HermesMemoryCard() {
                         onClick={() => void applySuggestion(s)}
                         disabled={isApplying}
                         style={{
-                          background: "var(--catfish-cyan)",
-                          color: "white",
-                          border: "none",
+                          background: "transparent",
+                          color: "var(--catfish-cyan)",
+                          border: "1px solid var(--catfish-cyan)",
                           borderRadius: 3,
                           padding: "2px 8px",
-                          fontSize: 10,
+                          minHeight: 24,
+                          whiteSpace: "nowrap",
+                          fontSize: 11,
                           cursor: isApplying ? "default" : "pointer",
                         }}
                       >
                         {isApplying ? "..." : "合并 (留长的, 删短的)"}
                       </button>
                     ) : (
-                      <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", fontStyle: "italic" }}>
+                      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
                         {s.hint ?? "主题相关但不重复 — 各留一条"}
                       </div>
                     )}
@@ -407,16 +411,16 @@ export default function HermesMemoryCard() {
                     borderBottom: "1px dotted var(--catfish-border)",
                   }}
                 >
-                  <div style={{ fontSize: 10, color: "var(--catfish-warning, #d70)", marginBottom: 2 }}>
-                    💡 {h.target.toUpperCase()} · 像 skill 流程 → 建议存成 skill
+                  <div style={{ fontSize: 11, color: "var(--catfish-warning, #d70)", marginBottom: 2 }}>
+                    {h.target.toUpperCase()} · 像 skill 流程 → 建议存成 skill
                   </div>
                   <div style={{ fontSize: 11, marginBottom: 2 }}>
                     {h.entry_text.slice(0, 150)}
                     {h.entry_text.length > 150 ? "..." : ""}
                   </div>
-                  <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", fontStyle: "italic" }}>
+                  <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
                     {h.reason} · 跟{" "}
-                    <code style={{ fontSize: 10 }}>{h.proposed_skill_name}</code>{" "}
+                    <code style={{ fontSize: 11 }}>{h.proposed_skill_name}</code>{" "}
                     说"存成 skill" 让鲶鱼帮你做
                   </div>
                 </div>
@@ -556,7 +560,6 @@ function EntrySection({
           style={{
             fontSize: 11,
             color: "var(--catfish-text-muted)",
-            fontStyle: "italic",
             padding: "4px 0",
           }}
         >
@@ -606,7 +609,7 @@ function EntrySection({
                     fontWeight: isConfirming ? 600 : 400,
                   }}
                 >
-                  {isRemoving ? "..." : isConfirming ? "确认删" : "🗑"}
+                  {isRemoving ? "..." : isConfirming ? "确认删" : <Trash size={14} weight="regular" aria-label="删除" />}
                 </button>
               </div>
             );

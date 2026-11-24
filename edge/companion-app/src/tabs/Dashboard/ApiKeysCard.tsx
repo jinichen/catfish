@@ -58,9 +58,9 @@ export default function ApiKeysCard() {
   };
 
   return (
-    <div style={{ padding: 12, fontSize: 12, display: "grid", gap: 12 }}>
+    <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)", fontSize: 12, display: "grid", gap: 12 }}>
       <div>
-        <h3 style={{ margin: 0, fontSize: 15 }}>🔑 Claude Code 钥匙</h3>
+        <h3 style={{ margin: 0, fontSize: 15 }}>Claude Code 钥匙</h3>
         <p style={{ ...muted, margin: "4px 0 0", lineHeight: 1.6 }}>
           让 Claude Code 这类工具直接用中央的模型。钥匙长期有效、算你本人的权限和配额, 但只能用模型, 不能做管理操作。
           只在生成时显示一次, 请马上复制保存; 不用了或怀疑泄露就吊销, 一分钟内失效。

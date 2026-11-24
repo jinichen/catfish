@@ -61,7 +61,7 @@ export default function DisabledSkillsPanel() {
                                    border: "1px solid var(--catfish-border)", borderRadius: 4 }}>
               {n}
               <button type="button" disabled={busy !== null} onClick={() => void enable([n], n)}
-                      style={{ fontSize: 11, padding: "0 4px", cursor: busy ? "wait" : "pointer" }}>
+                      style={{ fontSize: 11, padding: "0 8px", minHeight: 24, whiteSpace: "nowrap", cursor: busy ? "wait" : "pointer" }}>
                 {busy === n ? "…" : "启用"}
               </button>
             </span>

@@ -21,7 +21,7 @@ describe("AgentPrefsCard 小鲶秘书开关", () => {
     expect(screen.getByText(/发现周期性的事，问要不要托管/)).toBeTruthy();
     expect(screen.getByText(/群里 @我 交代的事挂到提醒条/)).toBeTruthy();
     expect(screen.queryByText(/定时任务做完就报/)).toBeNull();
-    const row = screen.getByText(/📋 提前准备/).closest("div")!;
+    const row = screen.getByText(/^提前准备/).closest("div")!;
     fireEvent.click(Array.from(row.querySelectorAll("button")).find((b) => b.textContent === "关")!);
     expect(setAbilityEnabled).toHaveBeenCalledWith(expect.objectContaining({ id: "advance-prep" }), false);
     expect(await screen.findByText("已关「提前准备」: 已经排上、还没做的 2 条准备任务撤了")).toBeTruthy();

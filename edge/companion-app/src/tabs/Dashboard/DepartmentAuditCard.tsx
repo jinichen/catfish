@@ -54,7 +54,7 @@ export default function DepartmentAuditCard({ department }: Props) {
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
-        <h3 style={{ margin: 0 }}>📊 部门审计 · {department}</h3>
+        <h3 style={{ margin: 0 }}>部门审计 · {department}</h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           经理视图 · 今日聚合 · 30s 刷新
         </span>

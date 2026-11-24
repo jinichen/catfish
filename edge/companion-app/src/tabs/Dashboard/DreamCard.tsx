@@ -22,6 +22,8 @@ import {
   type DreamStatus,
 } from "../../lib/dream";
 import { useChatStore } from "../../store/chat";
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 // ─── 类型 ──────────────────────────────────────────────────────
 
@@ -135,7 +137,7 @@ export default function DreamCard() {
   return (
     <div
       style={{
-        padding: "16px 18px",
+        padding: "var(--space-4)",
         background: "var(--catfish-bg-elevated)",
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
@@ -145,7 +147,7 @@ export default function DreamCard() {
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-        <strong style={{ fontSize: 16 }}>🌙 做梦 · 整理长期记忆</strong>
+        <strong style={{ fontSize: 15 }}>做梦 · 整理长期记忆</strong>
       </div>
 
       <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: 12 }}>
@@ -216,7 +218,7 @@ export default function DreamCard() {
             opacity: !model || journalEmpty ? 0.6 : 1,
           }}
         >
-          {isRunning ? "整理中…" : "🌙 现在整理"}
+          {isRunning ? "整理中…" : "现在整理"}
         </button>
 
         {isRunning && (
@@ -278,7 +280,7 @@ export default function DreamCard() {
             color: "var(--catfish-hint-amber-text)",
           }}
         >
-          ⚠ {phase.msg}
+          <Ico as={Warning} />{phase.msg}
         </div>
       )}
 
@@ -292,7 +294,7 @@ export default function DreamCard() {
           }}
         >
           <summary style={{ cursor: "pointer" }}>
-            🔍 诊断信息 ({stderrLines.length} 行, 出问题时给开发看)
+            诊断信息 ({stderrLines.length} 行, 出问题时给开发看)
           </summary>
           <pre
             style={{
@@ -301,7 +303,7 @@ export default function DreamCard() {
               background: "var(--catfish-bg)",
               border: "1px solid var(--catfish-border)",
               borderRadius: 4,
-              fontSize: 10,
+              fontSize: 11,
               fontFamily: "var(--font-mono)",
               whiteSpace: "pre-wrap",
               wordBreak: "break-all",
@@ -347,7 +349,7 @@ export function MemoryAlerts({ status }: { status: DreamStatus | null }) {
     <>
       {js && (
         <div style={alertBox} role="alert">
-          <strong>⚠ 工作日志少了一大半</strong>
+          <strong><Ico as={Warning} />工作日志少了一大半</strong>
           {js.at && <span style={{ marginLeft: 6, opacity: 0.8 }}>({js.at.replace("T", " ").slice(0, 16)} 发现)</span>}
           <div>
             上次整理时日志有 {(js.was_chars ?? 0).toLocaleString()} 字, 现在只剩 {(js.now_chars ?? 0).toLocaleString()} 字,
@@ -362,7 +364,7 @@ export function MemoryAlerts({ status }: { status: DreamStatus | null }) {
       )}
       {dr && (
         <div style={alertBox} role="alert">
-          <strong>⚠ 这次整理结果异常, 没有覆盖长期记忆</strong>
+          <strong><Ico as={Warning} />这次整理结果异常, 没有覆盖长期记忆</strong>
           {dr.at && <span style={{ marginLeft: 6, opacity: 0.8 }}>({dr.at.replace("T", " ").slice(0, 16)})</span>}
           <div>
             新整理出来的只有 {formatBytes(dr.new_bytes ?? 0)}, 原来有 {formatBytes(dr.old_bytes ?? 0)}, 少得太多,

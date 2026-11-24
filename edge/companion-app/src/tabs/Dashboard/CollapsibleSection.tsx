@@ -11,6 +11,7 @@
  *   gridSpan: 该组内部 grid 列数 (默认 2, 跟 Dashboard 主 grid 对齐)
  */
 import { useState, ReactNode } from "react";
+import { CaretDown } from "@phosphor-icons/react";
 
 interface Props {
   id: string;
@@ -102,15 +103,15 @@ export default function CollapsibleSection({
           display: "inline-block",
           transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
           transition: "transform 0.15s ease",
-          fontSize: 10,
           opacity: 0.5,
           // expanded 时三角跟标题首行对齐
-          marginTop: collapsed ? 0 : 6,
+          marginTop: collapsed ? 0 : 4,
+          lineHeight: 0,
           flexShrink: 0,
         }}
         aria-hidden
       >
-        ▼
+        <CaretDown size={12} weight="regular" />
       </span>
       <span style={{ lineHeight: 1.4 }}>{title}</span>
     </button>

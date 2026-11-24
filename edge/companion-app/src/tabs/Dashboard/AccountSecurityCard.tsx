@@ -236,7 +236,7 @@ export default function AccountSecurityCard() {
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
-        <h3 style={{ margin: 0 }}>🔐 账号安全</h3>
+        <h3 style={{ margin: 0 }}>账号安全</h3>
       </div>
 
       <div style={{ fontSize: 13, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)" }}>
@@ -331,7 +331,7 @@ export default function AccountSecurityCard() {
               <label className="install-dialog__label" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                 <span>新密码</span>
                 {strength.label && (
-                  <span style={{ fontSize: 10, color: strength.color, textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>
+                  <span style={{ fontSize: 11, color: strength.color, textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>
                     强度 · {strength.label}
                   </span>
                 )}
@@ -367,12 +367,12 @@ export default function AccountSecurityCard() {
               <label className="install-dialog__label" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                 <span>确认新密码</span>
                 {confirmMismatch && (
-                  <span style={{ fontSize: 10, color: "var(--status-err)", textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>
+                  <span style={{ fontSize: 11, color: "var(--status-err)", textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>
                     两次输入不一致
                   </span>
                 )}
                 {confirm && !confirmMismatch && (
-                  <span style={{ fontSize: 10, color: "var(--status-ok)", textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>
+                  <span style={{ fontSize: 11, color: "var(--status-ok)", textTransform: "none", letterSpacing: 0, fontWeight: 500 }}>
                     ✓ 一致
                   </span>
                 )}

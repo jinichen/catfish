@@ -19,6 +19,8 @@ import { useAudit } from "../../hooks/useAudit";
 import { formatTokens } from "../../lib/format";
 import type { AuditSummary } from "../../types/audit";
 import { useAgentStore } from "../../store/agent";
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 export default function AuditCard() {
   const { summary, error } = useAudit();
@@ -43,7 +45,7 @@ export default function AuditCard() {
           marginBottom: "var(--space-3)",
         }}
       >
-        <h3 style={{ margin: 0 }}>📊 今日审计</h3>
+        <h3 style={{ margin: 0 }}>今日审计</h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           中央只看 metadata (无对话内容) · 每 30s 自动刷新
         </span>
@@ -161,7 +163,7 @@ function SummaryGrid({ summary }: { summary: AuditSummary }) {
             <span
               style={{ color: "var(--status-warn, orange)", marginLeft: "auto" }}
             >
-              ⚠ p95 &gt; 30s, 上游可能拥堵
+              <Ico as={Warning} />p95 &gt; 30s, 上游可能拥堵
             </span>
           )}
         </div>
@@ -392,7 +394,7 @@ function SecurityRow({
         {/* 5/5 鸿波两轮反馈:
             v1 "今日安全事件 ×434" 看着吓人 → 改"提醒类型"中性化 (5/5 早)
             v2 "提醒类型 + 建议改用 secret_ref" 仍看不懂 → 改员工话 (5/5 晚) */}
-        💡 鲶鱼小贴士
+        鲶鱼小贴士
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
         {visible.map((c) => (
@@ -437,7 +439,7 @@ function SecurityRow({
             <div
               style={{
                 marginTop: 4,
-                fontSize: 10,
+                fontSize: 11,
                 color: "var(--catfish-text-muted)",
               }}
             >
@@ -448,7 +450,7 @@ function SecurityRow({
       </div>
       <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 8 }}>
         {/* P3.5.80 (7/28): 去掉内部编号 BL-FIX14 */}
-        ℹ️ 这些不是错误，也不影响使用。出现 {_TIP_MIN_COUNT} 次以上才会列在这里。
+        这些不是错误，也不影响使用。出现 {_TIP_MIN_COUNT} 次以上才会列在这里。
       </div>
     </div>
   );

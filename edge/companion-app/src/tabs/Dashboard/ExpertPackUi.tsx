@@ -16,6 +16,8 @@ import { trialExpertInstall } from "../../lib/tauri_trial";
 import { Overlay, StateTag, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
 import { splitMine } from "./wikiHubStatus";
+import { CheckCircle, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -40,7 +42,7 @@ export function PermissionSummary({ p }: { p: Partial<PackPermissions> }) {
       <Row label="写你电脑上的东西" items={p.local ?? []} />
       <Row label="对外 (跑到时会停下等你确认)" items={p.outward ?? []} tone="var(--status-warn, #d97706)" />
       <Row label="会打开的网站" items={p.sites ?? []} />
-      {p.code && <div style={{ fontSize: 12, color: "var(--status-error, #dc2626)" }}>⚠️ 要用终端 / 执行代码 / 读写文件</div>}
+      {p.code && <div style={{ fontSize: 12, color: "var(--status-error, #dc2626)" }}><Ico as={Warning} />要用终端 / 执行代码 / 读写文件</div>}
       {p.web && <div style={{ fontSize: 12 }}>要上网搜索</div>}
       {empty && <span style={muted}>只跑自带的工作流, 不额外用别的能力。</span>}
     </div>
@@ -89,9 +91,9 @@ export function InstallDialog({ info, source, onClose, onDone }: {
     <Overlay title={`${trial ? "试用" : upgrade ? "升级" : "安装"}专家 · ${info.name} ${info.version}`} onClose={onClose} width={640}>
       {info.description && <span style={{ fontSize: 13 }}>{info.description}</span>}
       <span style={muted}>
-        {fromFile ? "⚠️ 从文件装: 没有中央签名, 确认文件来源可靠再装。"
-          : trial ? "🧪 审批人试用: 装到你这台电脑 (7 天), 中央给的是带「试用」的临时签名; 不会给同事, 审核有结果后自动卸掉。"
-          : "✅ 从公司资源市场装: 装之前会核对中央签名。"}
+        {fromFile ? <><Ico as={Warning} />从文件装: 没有中央签名, 确认文件来源可靠再装。</>
+          : trial ? "审批人试用: 装到你这台电脑 (7 天), 中央给的是带「试用」的临时签名; 不会给同事, 审核有结果后自动卸掉。"
+          : <><Ico as={CheckCircle} />从公司资源市场装: 装之前会核对中央签名。</>}
         {upgrade && ` 本机现在是 ${info.installed_version}, 升级保留它的会话和记忆。`}
       </span>
       {upgrade && info.expanded.length > 0 && (

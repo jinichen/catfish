@@ -26,6 +26,8 @@ import {
   type ChainVerifyReport,
   type TransparentLogEntry,
 } from "../../lib/tauri";
+import { ArrowClockwise, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 type DataSource = "decisions" | "tool_calls" | "outbound";
 
@@ -142,7 +144,7 @@ export default function AuditViewCard() {
   const endIdx = Math.min(total, startIdx + PAGE_SIZE);
 
   return (
-    <div style={{ padding: 12 }}>
+    <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)" }}>
       {/* 顶部水印 */}
       <div
         style={{
@@ -155,7 +157,7 @@ export default function AuditViewCard() {
           marginBottom: 10,
         }}
       >
-        🔍 审计视图 · 数据本机, 不出端, 员工主权 · 审计员现场可点开 + 跑哈希校验
+        审计视图 · 数据本机, 不出端, 员工主权 · 审计员现场可点开 + 跑哈希校验
       </div>
 
       {/* 时间范围 + 数据源 */}
@@ -205,6 +207,8 @@ export default function AuditViewCard() {
           disabled={loading}
           style={{
             padding: "3px 10px",
+            minHeight: 24,
+            whiteSpace: "nowrap",
             fontSize: 12,
             background: "transparent",
             border: "1px solid var(--catfish-border)",
@@ -212,7 +216,7 @@ export default function AuditViewCard() {
             cursor: loading ? "default" : "pointer",
           }}
         >
-          {loading ? "加载中..." : "🔄 刷新"}
+          {loading ? "加载中..." : <><Ico as={ArrowClockwise} />刷新</>}
         </button>
       </div>
 
@@ -233,7 +237,7 @@ export default function AuditViewCard() {
             opacity: verifyRunning ? 0.6 : 1,
           }}
         >
-          {verifyRunning ? "校验中..." : "🔐 校验哈希链 (decisions.jsonl)"}
+          {verifyRunning ? "校验中..." : "校验哈希链 (decisions.jsonl)"}
         </button>
         <button
           type="button"
@@ -250,7 +254,7 @@ export default function AuditViewCard() {
             opacity: exportRunning ? 0.6 : 1,
           }}
         >
-          {exportRunning ? "导出中..." : "📦 导出当前视图为 xlsx"}
+          {exportRunning ? "导出中..." : "导出当前视图为 xlsx"}
         </button>
       </div>
 
@@ -281,7 +285,7 @@ export default function AuditViewCard() {
               ? ` · 断裂位置: 第 ${verifyReport.brokenAt} 行 (${verifyReport.brokenReason})`
               : ""}
           </div>
-          <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4 }}>
             起头 sha256: <code>{verifyReport.chainFirstSha256.slice(0, 20)}…</code>
             <br />
             末尾 sha256: <code>{verifyReport.chainLastSha256.slice(0, 20)}…</code>
@@ -319,7 +323,7 @@ export default function AuditViewCard() {
             color: "var(--status-err)",
           }}
         >
-          🚫 {error}
+          <Ico as={XCircle} />{error}
         </div>
       )}
 
@@ -368,7 +372,7 @@ export default function AuditViewCard() {
             type="button"
             disabled={page === 0}
             onClick={() => setPage((p) => Math.max(0, p - 1))}
-            style={{ padding: "3px 10px", fontSize: 12 }}
+            style={{ padding: "3px 10px", minHeight: 24, whiteSpace: "nowrap", fontSize: 12 }}
           >
             ← 上一页
           </button>
@@ -379,7 +383,7 @@ export default function AuditViewCard() {
             type="button"
             disabled={page >= totalPages - 1}
             onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-            style={{ padding: "3px 10px", fontSize: 12 }}
+            style={{ padding: "3px 10px", minHeight: 24, whiteSpace: "nowrap", fontSize: 12 }}
           >
             下一页 →
           </button>
@@ -443,7 +447,7 @@ function DecisionsTable({
                 <td style={tdStyle}>{String(r.taskTitle ?? "")}</td>
                 <td style={tdStyle}>{String(r.newStatus ?? "")}</td>
                 <td style={tdStyle}>
-                  <code style={{ fontSize: 10 }}>{sha}…</code>
+                  <code style={{ fontSize: 11 }}>{sha}…</code>
                 </td>
               </tr>
               {isExp && (
@@ -451,7 +455,7 @@ function DecisionsTable({
                   <td colSpan={5} style={{ ...tdStyle, background: "var(--catfish-bg-elevated)" }}>
                     <pre
                       style={{
-                        fontSize: 10,
+                        fontSize: 11,
                         margin: 0,
                         maxHeight: 200,
                         overflow: "auto",
@@ -518,7 +522,7 @@ function ToolCallsTable({
                   <td colSpan={5} style={{ ...tdStyle, background: "var(--catfish-bg-elevated)" }}>
                     <pre
                       style={{
-                        fontSize: 10,
+                        fontSize: 11,
                         margin: 0,
                         maxHeight: 200,
                         overflow: "auto",
@@ -575,7 +579,7 @@ function OutboundTable({
                 <td style={tdStyle}>{r.tsRequest}</td>
                 <td style={tdStyle}>{r.method}</td>
                 <td style={tdStyle}>
-                  <code style={{ fontSize: 10 }}>{r.url.length > 60 ? r.url.slice(0, 60) + "…" : r.url}</code>
+                  <code style={{ fontSize: 11 }}>{r.url.length > 60 ? r.url.slice(0, 60) + "…" : r.url}</code>
                 </td>
                 <td style={tdStyle}>{r.status ?? "—"}</td>
                 <td style={tdStyle}>{r.category ?? ""}</td>
@@ -585,7 +589,7 @@ function OutboundTable({
                   <td colSpan={5} style={{ ...tdStyle, background: "var(--catfish-bg-elevated)" }}>
                     <pre
                       style={{
-                        fontSize: 10,
+                        fontSize: 11,
                         margin: 0,
                         maxHeight: 200,
                         overflow: "auto",

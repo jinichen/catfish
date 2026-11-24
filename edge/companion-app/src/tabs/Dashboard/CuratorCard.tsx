@@ -169,7 +169,7 @@ export default function CuratorCard() {
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
-            🗂 脚本整理
+            脚本整理
           </h3>
           <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", paddingLeft: 28 }}>
             老脚本自动归档 (永不真删 · 可恢复)
@@ -307,7 +307,7 @@ export default function CuratorCard() {
 
           <div
             style={{
-              fontSize: 10,
+              fontSize: 11,
               color: "var(--catfish-text-muted)",
               textAlign: "center",
               marginTop: 6,
