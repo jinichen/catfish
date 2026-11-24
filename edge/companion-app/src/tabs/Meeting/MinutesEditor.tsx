@@ -19,15 +19,15 @@ import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 
 const fieldStyle: CSSProperties = {
   ...inputStyle, width: "100%", boxSizing: "border-box", resize: "none", overflow: "hidden",
-  lineHeight: 1.7, fontFamily: "inherit", fontSize: 14, padding: "8px 10px",
+  lineHeight: 1.7, fontFamily: "inherit", fontSize: 14, padding: "8px 12px",
 };
 const removeBtn: CSSProperties = {
   border: "1px solid var(--catfish-border)", background: "transparent", cursor: "pointer", borderRadius: 6,
-  padding: "4px 10px", fontSize: 12, color: "var(--catfish-text-muted)", whiteSpace: "nowrap", flexShrink: 0,
+  padding: "4px 12px", fontSize: 12, color: "var(--catfish-text-muted)", whiteSpace: "nowrap", flexShrink: 0,
 };
 const addBtn: CSSProperties = {
   border: "1px dashed var(--catfish-border)", background: "transparent", cursor: "pointer", borderRadius: 6,
-  padding: "6px 12px", fontSize: 13, color: "var(--catfish-cyan)", alignSelf: "flex-start",
+  padding: "8px 12px", fontSize: 13, color: "var(--catfish-cyan)", alignSelf: "flex-start",
 };
 const sectionTitle: CSSProperties = { fontWeight: 600, fontSize: 14, display: "flex", alignItems: "baseline", gap: 8 };
 const countStyle: CSSProperties = { fontWeight: 400, fontSize: 12, color: "var(--catfish-text-muted)" };
@@ -71,19 +71,19 @@ function ListEdit({ label, items, onChange }: { label: string; items: string[]; 
 function ItemsEdit({ items, onChange }: { items: ActionItem[]; onChange: (v: ActionItem[]) => void }) {
   const set = (i: number, patch: Partial<ActionItem>) => onChange(items.map((y, j) => (j === i ? { ...y, ...patch } : y)));
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={sectionTitle}>待办<span style={countStyle}>{items.length} 条 · 负责人、截止日期可不填</span></div>
       {items.map((it, i) => (
         <div key={i} style={{ display: "flex", flexDirection: "column", gap: 8, padding: 10, borderRadius: 8,
                               border: "1px solid var(--catfish-border)", background: "var(--catfish-bg)" }}>
           <AutoText label={`待办 ${i + 1}`} value={it.task} placeholder="要做的事" onChange={(v) => set(i, { task: v })} />
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--catfish-text-muted)" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--catfish-text-muted)" }}>
               负责人
               <input aria-label={`待办 ${i + 1} 负责人`} value={it.owner} placeholder="谁来做"
                      style={{ ...inputStyle, width: 150, fontSize: 13 }} onChange={(e) => set(i, { owner: e.target.value })} />
             </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--catfish-text-muted)" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--catfish-text-muted)" }}>
               截止
               <input aria-label={`待办 ${i + 1} 截止`} type="date" value={it.due}
                      style={{ ...inputStyle, width: 150, fontSize: 13 }} onChange={(e) => set(i, { due: e.target.value })} />
@@ -137,7 +137,7 @@ export default function MinutesEditor({ meetingId, title, minutes, markdownView,
       <div style={{ width: "min(960px, 100%)", maxHeight: "92vh", display: "flex", flexDirection: "column",
                     background: "var(--catfish-bg-elevated)", color: "var(--catfish-text)", border: "1px solid var(--catfish-border)",
                     borderRadius: 12, boxShadow: "0 16px 48px rgba(0,0,0,0.3)", overflow: "hidden" }}>
-        <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--catfish-border)", display: "flex", alignItems: "baseline", gap: 10 }}>
+        <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--catfish-border)", display: "flex", alignItems: "baseline", gap: 12 }}>
           <strong style={{ fontSize: 16 }}>编辑纪要</strong>
           <span style={{ fontSize: 13, color: "var(--catfish-text-muted)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
         </div>
@@ -160,7 +160,7 @@ export default function MinutesEditor({ meetingId, title, minutes, markdownView,
           {!markdownView && <ListEdit label="待定问题" items={questions} onChange={setQuestions} />}
           {!markdownView && carried.length > 0 && <ListEdit label="上次遗留事项进展" items={carried} onChange={setCarried} />}
         </div>
-        <div style={{ padding: "12px 24px", borderTop: "1px solid var(--catfish-border)", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ padding: "12px 24px", borderTop: "1px solid var(--catfish-border)", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ flex: "1 1 260px", fontSize: 12, color: "var(--catfish-text-muted)" }}>
             存了以后纪要里写「已人工核对修改」; 再点「重新生成」会先提醒你, 不会悄悄覆盖。
           </span>

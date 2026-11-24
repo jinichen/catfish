@@ -29,7 +29,7 @@ export function planLayers(plan: Plan): string[][] {
 }
 
 const pill = (state: "current" | "visited" | "todo"): CSSProperties => ({
-  padding: "4px 10px",
+  padding: "4px 12px",
   borderRadius: 999,
   fontSize: 12,
   border: `1px solid ${state === "current" ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
@@ -43,9 +43,9 @@ export default function PlanMap({ plan, current, visited }: { plan: Plan; curren
   const pre = (id: string) => plan.edges.filter(([, b]) => b === id).map(([a]) => title.get(a) ?? a);
   const done = new Set(visited ?? []);
   return (
-    <div aria-label="学习路线图" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <div aria-label="学习路线图" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {planLayers(plan).map((layer, i) => (
-        <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+        <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", width: 40, flexShrink: 0, whiteSpace: "nowrap" }}>{i === 0 ? "基础" : `第${i + 1}层`}</span>
           {layer.map((id) => {
             const st = id === current ? "current" : done.has(id) ? "visited" : "todo";

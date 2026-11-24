@@ -140,7 +140,7 @@ function RecipientNote({ named, who }: { named: boolean; who: ReturnType<typeof 
   if (!named) return <span style={muted}>说话人还是「说话人 1、2……」, 没法按名字找邮箱 —— 在会议页把说话人改成真名并保存, 再点「发邮件」就会自动填。</span>;
   if (!who) return null;
   return (
-    <span style={{ ...muted, display: "flex", flexDirection: "column", gap: 2 }}>
+    <span style={{ ...muted, display: "flex", flexDirection: "column", gap: 4 }}>
       {who.filled.length > 0 && <span style={{ color: "var(--status-ok)" }}>已按说话人从知识库填好: {who.filled.map((f) => f.name).join("、")}</span>}
       {who.ambiguous.map((a) => (
         <span key={a.name} style={{ color: "var(--status-warn)" }}>{a.name} 在知识库里有 {a.emails.length} 个邮箱 ({a.emails.join(" / ")}), 没自动填, 请选一个填进去</span>
@@ -188,7 +188,7 @@ function RoomDialog({ meta, body, onClose, onDone }: {
   const tooLong = text.length > ROOM_TEXT_MAX;
   return (
     <ModalShell onClose={onClose} maxWidth={640} themed>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, color: "var(--catfish-text)", fontSize: 13 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, color: "var(--catfish-text)", fontSize: 13 }}>
         <strong style={{ fontSize: 15 }}>发到协同群 · {meta.title}</strong>
         {rooms === null ? <span style={{ color: "var(--catfish-text-muted)" }}>正在读群列表…</span>
           : rooms.length === 0 ? <span style={{ color: "var(--catfish-text-muted)" }}>你还没加入任何协同群 —— 先在「协同」页建一个群或接受邀请。</span>
@@ -205,7 +205,7 @@ function RoomDialog({ meta, body, onClose, onDone }: {
                 <textarea aria-label="要发的文字" value={text} rows={10} onChange={(e) => setText(e.target.value)}
                           style={{ ...inputStyle, resize: "vertical", lineHeight: 1.6, fontFamily: "inherit" }} />
               </label>
-              <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <input type="checkbox" checked={withWord} onChange={(e) => setWithWord(e.target.checked)} />
                 同时附上纪要 Word 文件
               </label>

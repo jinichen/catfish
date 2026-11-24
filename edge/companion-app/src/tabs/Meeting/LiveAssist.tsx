@@ -16,13 +16,17 @@ import {
   meetingLiveNoteSet, meetingLiveNotes, meetingLiveRead, quoteLine,
   type LiveLine, type LiveNote, type LiveState, type NoteState,
 } from "../../lib/tauri_meeting_live";
+import { CheckCircle } from "@phosphor-icons/react";
+
 import { AskSources } from "../../components/AskSources";
+import { Ico } from "../../components/icons";
 import { Btn, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 
 export const HINT_EVERY_MS = 3 * 60 * 1000;
 const POLL_MS = 2000;
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
-const small: CSSProperties = { border: "none", background: "transparent", cursor: "pointer", padding: "0 4px", fontSize: 12 };
+const small: CSSProperties = { border: "none", background: "transparent", cursor: "pointer", padding: "0 4px", minHeight: 24, fontSize: 12,
+  whiteSpace: "nowrap", fontFamily: "inherit" };
 
 function useNotes(meetingId: string) {
   const [notes, setNotes] = useState<LiveNote[]>([]);
@@ -52,7 +56,7 @@ type NotesApi = ReturnType<typeof useNotes>;
 
 function PinBtn({ state, onSet }: { state: NoteState; onSet: (s: NoteState) => void }) {
   return state === "pinned"
-    ? <button type="button" style={{ ...small, color: "var(--status-ok)" }} title="点一下不记了" onClick={() => onSet("new")}>✓ 已记到纪要</button>
+    ? <button type="button" style={{ ...small, color: "var(--status-ok)" }} title="点一下不记了" onClick={() => onSet("new")}><Ico as={CheckCircle} />已记到纪要</button>
     : <button type="button" style={{ ...small, color: "var(--catfish-cyan)" }} onClick={() => onSet("pinned")}>记到纪要</button>;
 }
 
@@ -64,12 +68,12 @@ function NoteCards({ api, after }: { api: NotesApi; after?: boolean }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {shown.map((n) => (
         <div key={n.id} data-testid={`live-note-${n.kind}`}
-             style={{ border: "1px dashed var(--catfish-cyan)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 13,
+             style={{ border: "1px dashed var(--catfish-cyan)", borderRadius: "var(--radius-sm)", padding: "8px 12px", fontSize: 13,
                       display: "flex", flexDirection: "column", gap: 4 }}>
           {n.kind === "ask" ? (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <span style={muted}>[{clock(n.at)}] 你问 🐟 小鲶: <span style={{ color: "var(--catfish-text)" }}>{n.q}</span></span>
+                <span style={muted}>[{clock(n.at)}] 你问小鲶: <span style={{ color: "var(--catfish-text)" }}>{n.q}</span></span>
                 <span style={{ display: "flex", flexShrink: 0 }}>
                   <PinBtn state={n.state} onSet={(s) => void api.set(n.id, null, s)} />
                   <button type="button" style={{ ...small, color: "var(--catfish-text-muted)" }} onClick={() => void api.remove(n.id)}>删</button>
@@ -81,7 +85,7 @@ function NoteCards({ api, after }: { api: NotesApi; after?: boolean }) {
           ) : (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <span style={muted}>🐟 小鲶提示 · {clock(n.from)}–{clock(n.at)}</span>
+                <span style={muted}>小鲶提示 · {clock(n.from)}–{clock(n.at)}</span>
                 {after && <button type="button" style={{ ...small, color: "var(--catfish-text-muted)" }} onClick={() => void api.remove(n.id)}>整张删掉</button>}
               </div>
               {n.items.filter((it) => !(after && it.state === "ignored")).map((it) => (
@@ -195,7 +199,7 @@ export default function LiveAssist({ meta }: { meta: MeetingMeta }) {
   const status = liveStatusText(state, lines.length, (Date.now() - mountedAt) / 1000);
   const two = lines.some((l) => l.track === "system");
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
         <strong style={{ fontSize: 13 }}>实时文字</strong>
         <span style={muted}>边录边转, 晚几秒到半分钟; 不分说话人, 会后转写会分 · 点一句可以问小鲶</span>
@@ -203,7 +207,7 @@ export default function LiveAssist({ meta }: { meta: MeetingMeta }) {
       <div ref={box} data-testid="live-lines"
            onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}
            style={{ height: 220, overflowY: "auto", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-sm)",
-                    padding: "6px 10px", fontSize: 13, lineHeight: 1.7, background: "var(--catfish-bg)" }}>
+                    padding: "8px 12px", fontSize: 13, lineHeight: 1.7, background: "var(--catfish-bg)" }}>
         {lines.map((l, i) => (
           <div key={`${l.start}-${i}`} role="button" tabIndex={0} title="问小鲶这句"
                onClick={() => { setQ(quoteLine(l)); input.current?.focus(); }}
@@ -224,9 +228,10 @@ export default function LiveAssist({ meta }: { meta: MeetingMeta }) {
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void ask(); } }}
                   placeholder="问小鲶: 「刚才说的暂停通知流程是什么?」「对方说的这个标准是不是旧版?」(只有你看得到)"
                   style={{ ...inputStyle, flex: 1, resize: "none" }} />
-        <Btn kind="primary" disabled={asking || !q.trim()} onClick={() => void ask()}>{asking ? "小鲶在想…" : "🐟 问小鲶"}</Btn>
+        {/* 一屏一个实色主按钮 (左栏的「结束录音」), 这里用描边 */}
+        <Btn kind="ghost" disabled={asking || !q.trim()} onClick={() => void ask()}>{asking ? "小鲶在想…" : "问小鲶"}</Btn>
       </div>
-      <label style={{ ...muted, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+      <label style={{ ...muted, display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
         <input type="checkbox" checked={hintsOn} onChange={(e) => toggleHints(e.target.checked)} />
         小鲶主动提示: 每 3 分钟看一眼新说的话, 有决议 / 待办 / 没人答的问题 / 跟资料对不上的才出卡
         {hinting && " · 在看…"}

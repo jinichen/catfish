@@ -26,7 +26,7 @@ const VERDICT: Record<string, { text: string; color: string }> = {
 };
 
 const box: CSSProperties = {
-  border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "12px 14px",
+  border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "12px 16px",
   display: "flex", flexDirection: "column", gap: 8, background: "var(--catfish-bg-elevated)",
 };
 const muted: CSSProperties = { fontSize: 12, color: "var(--catfish-text-muted)" };
@@ -102,7 +102,7 @@ export function AnsweredQuestion({ q, answer, grade }: { q: LearnQuestion; answe
         const picked = answer?.picked?.includes(o.value);
         const right = correct.has(o.value);
         return (
-          <div key={o.value} style={{ fontSize: 13, display: "flex", gap: 6,
+          <div key={o.value} style={{ fontSize: 13, display: "flex", gap: 8,
             color: right ? "var(--status-ok)" : picked && q.type === "choice" ? "var(--status-err)" : "var(--catfish-text)" }}>
             <span style={{ width: 14 }}>{picked ? "●" : "○"}</span>
             <span><b>{o.value}.</b> {o.label}{right && q.type === "choice" ? " ← 正确答案" : ""}</span>
@@ -126,11 +126,21 @@ export function AnsweredQuestion({ q, answer, grade }: { q: LearnQuestion; answe
   );
 }
 
+/** 11/24 unslop: 按钮不换行、不被挤压; 高 32 (小号 24), 图标 + 字横排 */
 export const ghostBtn: CSSProperties = {
-  padding: "6px 14px", fontSize: 13, borderRadius: "var(--radius-sm)", border: "1px solid var(--catfish-border)",
+  display: "inline-flex", alignItems: "center", justifyContent: "center", minHeight: 32, padding: "4px 12px",
+  fontSize: 13, borderRadius: "var(--radius-sm)", border: "1px solid var(--catfish-border)",
   background: "transparent", color: "var(--catfish-text)", cursor: "pointer", fontFamily: "inherit",
+  whiteSpace: "nowrap", flex: "none",
 };
+/** 小号按钮 (听 / 慢点 / 删这份) */
+export const smallBtn: CSSProperties = { ...ghostBtn, fontSize: 12, minHeight: 24, padding: "0 8px" };
+/** 一屏只有一个实色主按钮; 其余要强调的用这个青色描边 */
+export const accentBtn = (disabled: boolean): CSSProperties => ({
+  ...ghostBtn, borderColor: "var(--catfish-cyan)", color: "var(--catfish-cyan)",
+  opacity: disabled ? 0.5 : 1, cursor: disabled ? "default" : "pointer",
+});
 export const primaryBtn = (disabled: boolean): CSSProperties => ({
-  ...ghostBtn, border: "none", background: "var(--catfish-cyan)", color: "#fff",
+  ...ghostBtn, border: "1px solid var(--catfish-cyan)", background: "var(--catfish-cyan)", color: "#fff",
   opacity: disabled ? 0.5 : 1, cursor: disabled ? "default" : "pointer",
 });

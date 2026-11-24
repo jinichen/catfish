@@ -20,6 +20,9 @@ import {
   type MeetingMeta,
   type Transcript,
 } from "../../lib/tauri_meeting";
+import { CheckCircle } from "@phosphor-icons/react";
+
+import { Ico } from "../../components/icons";
 import { Btn, cardStyle, ErrorLine, inputStyle } from "../Collab/roomLinkUi";
 import AsrSetup from "./AsrSetup";
 import LiveAssist, { LiveNotes } from "./LiveAssist";
@@ -207,7 +210,8 @@ export default function MeetingDetail({
     body = asr.installed ? (
       <>
         {meta.status === "failed" && meta.error && <ErrorLine>上次转写失败: {meta.error}</ErrorLine>}
-        <Btn kind="primary" disabled={asr.transcribing} onClick={() => void transcribe()}>
+        {/* 一屏一个实色主按钮 (左栏的「开始录音」), 这里用描边 */}
+        <Btn kind="ghost" disabled={asr.transcribing} onClick={() => void transcribe()}>
           {asr.transcribing ? "有别的会议在转写, 稍等" : meta.status === "failed" ? "重新转写" : "开始转写"}
         </Btn>
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
@@ -243,7 +247,7 @@ export default function MeetingDetail({
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
           <button type="button" onClick={() => setSpeakersOpen(!open)} aria-expanded={open}
-                  style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, fontSize: 13, fontWeight: 600,
+                  style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, minHeight: 24, fontSize: 13, fontWeight: 600,
                            color: "var(--catfish-text)", fontFamily: "inherit" }}>
             {open ? "▾" : "▸"} 说话人 {spks.length} 位
           </button>
@@ -255,7 +259,7 @@ export default function MeetingDetail({
                 ? spks.map((s) => names[String(s)]?.trim() || `说话人${s + 1}`).join("、")
                 : "还没填真名 · 点开填, 或者让小鲶在纪要里换"}
           </span>
-          {saved && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>已保存 ✓</span>}
+          {saved && <span style={{ fontSize: 12, color: "var(--status-ok)" }}><Ico as={CheckCircle} />已保存</span>}
           {/* 收起时也要看得到 (11/17 鸿波「没看到重新转写的按钮」—— 原来只在展开时出) */}
           {/* 11/17 鸿波「点了重新转写就直接进转写, 为什么还那么多确认」: 一点就转 —— 原转写和名字都自动备份
               (transcript.before-*.json / speakers.before-*.json), 不会丢 */}
@@ -286,7 +290,7 @@ export default function MeetingDetail({
               const sample = sampleSegment(transcript.segments, s);
               const color = SPK_COLORS[s % SPK_COLORS.length];
               return (
-                <span key={s} style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+                <span key={s} style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
                   <input
                     aria-label={`说话人${s + 1} 的名字`}
                     style={{ ...inputStyle, flex: 1, minWidth: 0, width: "auto", boxShadow: `inset 3px 0 0 ${color}` }}
@@ -303,7 +307,7 @@ export default function MeetingDetail({
                   {sample && (
                     <button type="button" aria-label={`听说话人${s + 1}`} title="听他说的一句, 认出是谁"
                             onClick={() => void toggleClip(`spk-${meta.id}-${s}`, meta.id, sample).catch((e) => setError(`放不了: ${String(e)}`))}
-                            style={{ border: "none", background: "transparent", cursor: "pointer", padding: "2px 4px", fontSize: 11,
+                            style={{ border: "none", background: "transparent", cursor: "pointer", padding: "4px", minWidth: 24, minHeight: 24, fontSize: 11,
                                      color: "var(--catfish-text-muted)" }}>▶</button>
                   )}
                 </span>
@@ -316,7 +320,7 @@ export default function MeetingDetail({
     const tabBtn = (t: "minutes" | "transcript", label: string) => (
       <button type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
               style={{ border: "none", background: tab === t ? "var(--catfish-bg-elevated)" : "transparent", cursor: "pointer",
-                       padding: "5px 14px", borderRadius: 6, fontSize: 13, fontFamily: "inherit",
+                       padding: "4px 16px", minHeight: 28, borderRadius: 6, fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap",
                        fontWeight: tab === t ? 600 : 400,
                        color: tab === t ? "var(--catfish-text)" : "var(--catfish-text-muted)",
                        boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.12)" : "none" }}>
@@ -327,7 +331,7 @@ export default function MeetingDetail({
       <>
         {speakers}
         <div role="tablist" aria-label="纪要 / 转写"
-             style={{ display: "inline-flex", alignSelf: "flex-start", gap: 2, padding: 3, borderRadius: 8,
+             style={{ display: "inline-flex", alignSelf: "flex-start", gap: 4, padding: 4, borderRadius: 8,
                       background: "var(--catfish-bg-cream)" }}>
           {tabBtn("minutes", "纪要")}
           {tabBtn("transcript", `转写 · ${transcript.segments.length} 句`)}

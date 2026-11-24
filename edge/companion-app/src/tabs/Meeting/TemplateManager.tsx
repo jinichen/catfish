@@ -137,7 +137,7 @@ export default function TemplateManager({ templates, onChanged, onClose }: Props
   return (
     <div style={backdrop} role="dialog" aria-modal="true" aria-label="纪要模版" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div style={modal}>
-        <div style={{ display: "flex", alignItems: "center", padding: "14px 18px", borderBottom: "1px solid var(--catfish-border)" }}>
+        <div style={{ display: "flex", alignItems: "center", padding: "12px 16px", borderBottom: "1px solid var(--catfish-border)" }}>
           <div style={{ fontWeight: 600, fontSize: 15, flex: 1 }}>纪要模版</div>
           <button type="button" aria-label="关闭" onClick={onClose} style={closeBtn}>×</button>
         </div>
@@ -241,10 +241,10 @@ const modal: CSSProperties = {
   color: "var(--catfish-text)", overflow: "hidden",
 };
 const itemBtn: CSSProperties = {
-  textAlign: "left", padding: "8px 10px", border: "none", borderRadius: "var(--radius-sm)",
+  textAlign: "left", padding: "8px 12px", border: "none", borderRadius: "var(--radius-sm)",
   color: "var(--catfish-text)", fontFamily: "inherit",
 };
 const closeBtn: CSSProperties = {
   border: "none", background: "transparent", fontSize: 20, lineHeight: 1, cursor: "pointer",
-  color: "var(--catfish-text-muted)", padding: "2px 6px",
+  color: "var(--catfish-text-muted)", padding: "4px 8px",
 };

@@ -68,7 +68,7 @@ export default function MeetingTab() {
                 onClick={() => setSelected(m.id)}
                 style={{
                   textAlign: "left",
-                  padding: "8px 10px",
+                  padding: "8px 12px",
                   border: "none",
                   borderRadius: "var(--radius-sm)",
                   background: m.id === selected ? "var(--catfish-bg-cream)" : "transparent",

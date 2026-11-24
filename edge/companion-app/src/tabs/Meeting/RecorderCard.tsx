@@ -170,7 +170,9 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
     const sysNotice = sys ? systemTrackNotice(sys, sysSilentFor, "系统设置 → 隐私与安全性 → 屏幕与系统录音 里打开 Catfish Companion") : null;
     return (
       <div style={{ ...cardStyle, ...COL_CARD }}>
-        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>🔴 录音中 · {formatClock(rec.seconds)}</h3>
+        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>
+          <span aria-hidden style={{ color: "var(--status-err)", marginRight: 4 }}>●</span>录音中 · {formatClock(rec.seconds)}
+        </h3>
         <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{sys ? "麦克风 (这边)" : "设备"}: {rec.device}</div>
         {meter(rec.level)}
         {sys && (
@@ -191,7 +193,7 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
         {recorderNotices(rec).map((text) => (
           <div key={text} style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{text}</div>
         ))}
-        <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>🐟 右边看实时文字, 随时问小鲶; 小鲶有要提醒的会出卡。</div>
+        <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>右边看实时文字, 随时问小鲶; 小鲶有要提醒的会出卡。</div>
         <Btn kind="primary" disabled={busy} onClick={() => void stop()}>结束录音</Btn>
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>录音只存在本机; 最长 4 小时, 到了会自动停。</div>
       </div>
@@ -200,7 +202,7 @@ export default function RecorderCard({ onChanged }: { onChanged: (selectId?: str
 
   return (
     <div style={{ ...cardStyle, ...COL_CARD }}>
-      <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>🎙 新会议</h3>
+      <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>新会议</h3>
       <input style={inputStyle} placeholder="会议标题 (可空)" value={title} onChange={(e) => setTitle(e.target.value)} />
       <input
         style={inputStyle}

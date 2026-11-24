@@ -21,6 +21,9 @@
  */
 import { useEffect, useState } from "react";
 
+import { CheckCircle } from "@phosphor-icons/react";
+
+import { fileKindIcon, Ico } from "../../components/icons";
 import { Markdown } from "../../lib/markdown";
 import { meetingMinutesCards } from "../../lib/tauri_learn";
 import { fetchCatalog, toolBridgeCallTool } from "../../lib/tauri_services";
@@ -209,7 +212,7 @@ export default function MinutesView({ meta, names = {} }: { meta: MeetingMeta; n
         ))}
         <option value={MANAGE}>管理模版…</option>
       </select>
-      <Btn kind={minutes ? "ghost" : "primary"} disabled={generating || editing || !!revise.proposal || revise.busy}
+      <Btn kind="ghost" disabled={generating || editing || !!revise.proposal || revise.busy}
            onClick={() => void generate()}>
         {generating ? generatingLabel : confirmRegen ? "再点一次: 覆盖改过的内容" : minutes ? "重新生成" : "生成纪要"}
       </Btn>
@@ -259,11 +262,11 @@ export default function MinutesView({ meta, names = {} }: { meta: MeetingMeta; n
       {m.output_file && (
         // Word / Excel 模版: 填好的那张表就是交出去的纪要; 下面照常显示缺省版给员工过目
         <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap", fontSize: 12,
-          padding: "8px 10px", borderRadius: "var(--radius-sm)", background: "var(--catfish-bg-cream)" }}>
+          padding: "8px 12px", borderRadius: "var(--radius-sm)", background: "var(--catfish-bg-cream)" }}>
           <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            📄 {m.output_file.split(/[\\/]/).pop()}
+            <Ico as={fileKindIcon(m.output_file)} />{m.output_file.split(/[\\/]/).pop()}
           </span>
-          <Btn kind="primary" onClick={() => void meetingMinutesOpenFile(meta.id, false).catch((e) => setError(String(e)))}>
+          <Btn kind="ghost" onClick={() => void meetingMinutesOpenFile(meta.id, false).catch((e) => setError(String(e)))}>
             打开 {m.template?.kind === "xlsx" ? "Excel" : "Word"}
           </Btn>
           <Btn kind="ghost" onClick={() => void meetingMinutesOpenFile(meta.id, true).catch((e) => setError(String(e)))}>
@@ -288,7 +291,7 @@ export default function MinutesView({ meta, names = {} }: { meta: MeetingMeta; n
             <div>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>待办</div>
               {m.action_items.map((it, i) => (
-                <label key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", lineHeight: 1.7 }}>
+                <label key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", lineHeight: 1.7 }}>
                   <input type="checkbox" checked={!!checked[i]} onChange={(e) => setChecked({ ...checked, [i]: e.target.checked })} />
                   <span>
                     {it.task}
@@ -310,15 +313,15 @@ export default function MinutesView({ meta, names = {} }: { meta: MeetingMeta; n
         <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center",
           borderTop: "1px solid var(--catfish-border)", paddingTop: "var(--space-3)" }}>
           {m.action_items.length > 0 && (
-            <Btn kind="primary" disabled={checkedCount === 0} onClick={() => void addTasks()}>
+            <Btn kind="ghost" disabled={checkedCount === 0} onClick={() => void addTasks()}>
               {checkedCount ? `勾选的 ${checkedCount} 项待办加入任务库` : "勾选待办加入任务库"}
             </Btn>
           )}
           <Btn kind="ghost" onClick={() => void saveWiki()}>存进知识库</Btn>
-          <Btn kind="ghost" disabled={carding} onClick={() => void makeCards()}>{carding ? "小鲶在做复习卡…" : "🔁 记住这几条"}</Btn>
+          <Btn kind="ghost" disabled={carding} onClick={() => void makeCards()}>{carding ? "小鲶在做复习卡…" : "记住这几条"}</Btn>
           <Btn kind="ghost" onClick={() => { setNote(null); setEditing(true); }}>编辑</Btn>
           <MinutesShare meta={meta} markdown={minutes.markdown} onNote={(t) => { setError(null); setNote(t); }} onError={setError} />
-          {note && <span style={{ fontSize: 12, color: "var(--status-ok)" }}>✓ {note}</span>}
+          {note && <span style={{ fontSize: 12, color: "var(--status-ok)" }}><Ico as={CheckCircle} />{note}</span>}
         </div>
       )}
       {manager}

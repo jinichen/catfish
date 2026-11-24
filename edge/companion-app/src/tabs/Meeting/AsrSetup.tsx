@@ -132,7 +132,7 @@ export default function AsrSetup({ status, onReady, upgradeFrom, kind = "base" }
     body = (
       <>
         <div>{K.what}已下载并校验 ({comp?.version ?? ""})。{upgradeFrom ? " 装的时候先别转写 (约一两分钟)。" : ""}</div>
-        <Btn kind="primary" disabled={!!status.transcribing} onClick={() => void run(K.install)}>
+        <Btn kind="ghost" disabled={!!status.transcribing} onClick={() => void run(K.install)}>
           {upgradeFrom ? (status.transcribing ? "等转写完再装" : "安装新版") : "安装"}
         </Btn>
       </>
@@ -154,7 +154,7 @@ export default function AsrSetup({ status, onReady, upgradeFrom, kind = "base" }
     body = (
       <>
         <div>发现 IT 放好的组件包, 先校验完整性。</div>
-        <Btn kind="primary" onClick={() => void run(() => componentsVerify(K.component))}>校验</Btn>
+        <Btn kind="ghost" onClick={() => void run(() => componentsVerify(K.component))}>校验</Btn>
       </>
     );
   } else if (comp) {
@@ -170,7 +170,7 @@ export default function AsrSetup({ status, onReady, upgradeFrom, kind = "base" }
               ? <>会议组件有新版 {comp.version} (你现在是 {upgradeFrom})。下载 {mb(comp.size)}, 转写仍然全程在本机, 录音不上传。</>
               : <>会议转写需要会议组件包 ({mb(comp.size)}, 版本 {comp.version})。只下载一次, 转写全程在本机进行, 录音不上传。</>}
         </div>
-        <Btn kind="primary" onClick={() => void run(() => componentsDownload(K.component))}>
+        <Btn kind="ghost" onClick={() => void run(() => componentsDownload(K.component))}>
           {partial ? `继续下载 (已下 ${mb(partial)})` : upgradeFrom ? "下载新版" : "下载"}
         </Btn>
       </>

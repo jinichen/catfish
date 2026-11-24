@@ -51,7 +51,7 @@ describe("外语", () => {
     api.lang.mockResolvedValue(view([], { code: "en", activity: "dialogue", ending: false }));
     await mount();
     fireEvent.change(screen.getByLabelText("情景"), { target: { value: "确认交付时间" } });
-    await act(async () => { fireEvent.click(screen.getByText("💬 情景对话")); });
+    await act(async () => { fireEvent.click(screen.getByText("情景对话")); });
     expect(api.lang).toHaveBeenCalledWith("lrn_1", "start", { activity: "dialogue", scene: "确认交付时间" });
   });
 
@@ -68,8 +68,8 @@ describe("外语", () => {
     expect(screen.getByText("能确认日期吗?")).toBeTruthy();
     expect(screen.getByText("by next Friday")).toBeTruthy();
     expect(screen.getByText(/小鲶扮: 客户 Tom/)).toBeTruthy();
-    await act(async () => { fireEvent.click(screen.getByText("🎤 说")); });
-    await act(async () => { fireEvent.click(screen.getByText("⏹ 说完了")); });
+    await act(async () => { fireEvent.click(screen.getByText("说")); });
+    await act(async () => { fireEvent.click(screen.getByText("说完了")); });
     expect(api.stop).toHaveBeenCalledWith("en");
     await act(async () => { fireEvent.click(screen.getByText("发送")); });
     expect(api.lang.mock.calls[0][1]).toBe("say");

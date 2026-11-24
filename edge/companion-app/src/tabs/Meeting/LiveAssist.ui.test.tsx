@@ -58,14 +58,14 @@ describe("LiveAssist (录音中)", () => {
     const box = screen.getByPlaceholderText(/问小鲶/) as HTMLTextAreaElement;
     expect(box.value).toBe("关于 [03:20]「严重不符合项要先发暂停通知。」: ");
     fireEvent.change(box, { target: { value: "暂停通知后多久交恢复申请?" } });
-    await act(async () => { fireEvent.click(screen.getByText("🐟 问小鲶")); });
+    await act(async () => { fireEvent.click(screen.getByText("问小鲶")); });
     expect(api.meetingLiveAsk).toHaveBeenCalledWith("mtg_1", "暂停通知后多久交恢复申请?");
     expect(screen.getByText("03:20 说的: 下个月前。")).toBeTruthy();
     expect(screen.getByText("依据 (你电脑上的): 邮件「关于现场评审会安排的通知」")).toBeTruthy();
     expect(box.value).toBe("");
     await act(async () => { fireEvent.click(screen.getByText("记到纪要")); });
     expect(api.meetingLiveNoteSet).toHaveBeenCalledWith("mtg_1", "a1", null, "pinned");
-    expect(screen.getByText("✓ 已记到纪要")).toBeTruthy();
+    expect(screen.getByText("已记到纪要")).toBeTruthy();
   });
 
   it("主动提示: 每 3 分钟看一次, 有东西才出卡; 关掉就不看", async () => {

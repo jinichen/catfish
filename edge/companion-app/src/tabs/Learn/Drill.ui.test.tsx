@@ -55,9 +55,9 @@ describe("答辩陪练", () => {
     await mount();
     expect(api.speak).toHaveBeenCalledWith("你们分级标准怎么定的?");
     expect(screen.getByText(/第 1 \/ 2 题/)).toBeTruthy();
-    await act(async () => { fireEvent.click(screen.getByText("🎤 口头回答")); });
+    await act(async () => { fireEvent.click(screen.getByText("口头回答")); });
     expect(api.start).toHaveBeenCalled();
-    await act(async () => { fireEvent.click(screen.getByText("⏹ 说完了")); });
+    await act(async () => { fireEvent.click(screen.getByText("说完了")); });
     expect((screen.getByLabelText("你的回答") as HTMLTextAreaElement).value).toBe("我们有正式发布的分级管理办法");
     await act(async () => { fireEvent.click(screen.getByText("交给评审")); });
     const [id, action, text, secs] = api.drill.mock.calls[0];
@@ -75,8 +75,8 @@ describe("答辩陪练", () => {
     expect(api.speak).not.toHaveBeenCalled();            // 最新的不是提问 (已经点评了), 不重读
     expect(screen.getByText("✓ 有分级管理办法")).toBeTruthy();
     expect(screen.getByText("✗ 报告写明依据哪条")).toBeTruthy();
-    expect(screen.getByText(/⚠ 你说「看情况定」—— 应该是: 按办法里的条款定/)).toBeTruthy();
-    expect(screen.getByText("🎤 说了 8 秒")).toBeTruthy();
+    expect(screen.getByText(/你说「看情况定」—— 应该是: 按办法里的条款定/)).toBeTruthy();
+    expect(screen.getByText("说了 8 秒")).toBeTruthy();
     fireEvent.click(screen.getByLabelText(/评审提问自动读出来/));
     expect(localStorage.getItem("catfish:learn:drill-voice")).toBe("off");
     await act(async () => { fireEvent.click(screen.getByText("下一题")); });
@@ -93,7 +93,7 @@ describe("答辩陪练", () => {
     expect(screen.getByText(/评分点讲到 3 \/ 5 \(60%\)/)).toBeTruthy();
     expect(screen.getByText("漏了: 报告写明依据哪条")).toBeTruthy();
     expect(screen.getByText(/漏掉的点做成了 2 张复习卡/)).toBeTruthy();
-    await act(async () => { fireEvent.click(screen.getByText("🎤 再来一轮")); });
+    await act(async () => { fireEvent.click(screen.getByText("再来一轮")); });
     expect(api.drill).toHaveBeenCalledWith("lrn_1", "start");
   });
 });

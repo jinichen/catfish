@@ -107,7 +107,7 @@ describe("说话人 / 纪要 · 转写 (11/17 UI 调整)", () => {
     fireEvent.change(box, { target: { value: "王总" } });
     await act(async () => { fireEvent.focusOut(box); });
     expect(api.setNames).toHaveBeenCalledWith("mtg_1", { "1": "王总" });
-    expect(screen.getByText("已保存 ✓")).toBeTruthy();
+    expect(screen.getByText("已保存")).toBeTruthy();
     expect(screen.queryByText("保存名字")).toBeNull();
   });
 
