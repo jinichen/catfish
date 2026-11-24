@@ -3,6 +3,7 @@
  * 跟 roomLinkUi 一样用 inline style (项目里没有全局 .btn / .input)。
  */
 import type { ReactNode } from "react";
+import { X } from "@phosphor-icons/react";
 
 import type { FieldValues, FormField } from "../../lib/tauri_forms";
 import { inputStyle } from "./roomLinkUi";
@@ -26,7 +27,7 @@ export function Overlay({ title, onClose, children, width = 640 }: {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>{title}</h3>
           <button type="button" aria-label="关闭" onClick={onClose}
-                  style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 16, color: "var(--catfish-text-muted)" }}>✕</button>
+                  style={{ border: "none", background: "transparent", cursor: "pointer", padding: 4, display: "inline-flex", color: "var(--catfish-text-muted)" }}><X size={16} weight="regular" /></button>
         </div>
         {children}
       </div>

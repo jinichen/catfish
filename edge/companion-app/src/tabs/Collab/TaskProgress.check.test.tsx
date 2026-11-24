@@ -27,7 +27,7 @@ describe("TaskProgress · 小鲶核对", () => {
     api.taskCheck.mockResolvedValue({ check: { at: "", summary: "1/2 对上", people: {} }, checked: ["zhang@example.com", "li@example.com"] });
     render(<TaskProgress taskId="t_1" onClose={vi.fn()} />);
     expect(await screen.findByText("客户名、金额、下一步")).toBeTruthy();
-    fireEvent.click(screen.getByText("🐟 小鲶核对结果"));
+    fireEvent.click(screen.getByText("小鲶核对结果"));
     expect(api.taskCheck).toHaveBeenCalledWith("t_1");
     expect(await screen.findByText("小鲶核对了 2 人: 1/2 对上")).toBeTruthy();
   });
@@ -44,7 +44,7 @@ describe("TaskProgress · 小鲶核对", () => {
     expect(screen.getByText(/对上了要求/)).toBeTruthy();
     fireEvent.click(screen.getByText("按小鲶的意见请他重做"));
     expect((screen.getByPlaceholderText("说一下要怎么改 (会发给他)") as HTMLInputElement).value).toBe("补上金额和下一步");
-    expect(screen.getByText("🐟 再核对一次")).toBeTruthy();
+    expect(screen.getByText("再核对一次")).toBeTruthy();
   });
 
   it("checkOf: 没交 / 没结果的不算", () => {

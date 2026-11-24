@@ -116,7 +116,7 @@ export default function PipelineProgress({ pipelineId, onClose, initialError }: 
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
         <Btn kind="ghost" disabled={busy} onClick={() => { startChat(`ctask-pipeline:${pipelineId}`, pipelineSummaryPrompt(p.title, p.stages)); onClose(); }}>
-          🐟 让小鲶汇总各段
+          让小鲶汇总各段
         </Btn>
         {open && !confirmCancel && <Btn kind="ghost" disabled={busy} onClick={() => setConfirmCancel(true)}>取消流程</Btn>}
         {open && confirmCancel && (

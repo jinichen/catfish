@@ -11,9 +11,9 @@ import { openFile } from "../../lib/tauri_app";
 import { reviseOpen, type RevisePendingItem } from "../../lib/tauri_room_revise";
 import { useUIStore } from "../../store/ui";
 import { muted } from "./formsUi";
-import { cardStyle, ErrorLine, itemStyle } from "./roomLinkUi";
+import { CardHead, cardStyle, ErrorLine, itemStyle } from "./roomLinkUi";
 
-const link = { border: "none", background: "transparent", cursor: "pointer", fontSize: 12, padding: 0, color: "var(--catfish-cyan)" } as const;
+const link = { border: "none", background: "transparent", cursor: "pointer", fontSize: 12, padding: "4px 0", minHeight: 24, color: "var(--catfish-cyan)" } as const;
 
 export default function ReviseTodoPanel() {
   const items = useColleagueRooms().revise;
@@ -35,13 +35,13 @@ export default function ReviseTodoPanel() {
     }
   }
   return (
-    <div style={{ ...cardStyle, height: "auto", gap: 8 }}>
-      <strong style={{ fontSize: 13 }}>📝 请你修改 ({items.length})</strong>
+    <div style={{ ...cardStyle, height: "auto" }}>
+      <CardHead title={`请你修改 (${items.length})`} />
       {error && <ErrorLine>{error}</ErrorLine>}
       {items.map((x) => {
         const urgent = x.days_left !== null && x.days_left <= 1;
         return (
-          <div key={x.rev_id} style={{ ...itemStyle, display: "flex", flexDirection: "column", gap: 4 }}>
+          <div key={x.rev_id} style={{ ...itemStyle, padding: "8px 12px", gap: "var(--space-1)" }}>
             <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={x.title}>
               《{x.title}》v{x.version}
             </span>

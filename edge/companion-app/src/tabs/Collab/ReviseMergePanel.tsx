@@ -6,6 +6,8 @@
  * 每点一下就存 (关了面板再开还在)。冲突没定完「发出」是灰的。
  */
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import {
   reviseDecide, reviseMerge, revisePublish, reviseReturn, reviseSelfClear, reviseSuggest,
@@ -105,7 +107,7 @@ export default function ReviseMergePanel({ roomId, revId, title, onClose, onDone
             </span>
             {mineRow}
             {an.same.length > 0 && <span style={muted}>看过没改: {an.same.map((w) => names[w] ?? w).join("、")}</span>}
-            {an.warnings.map((x) => <span key={x} style={{ ...muted, color: "var(--status-warn, #d97706)" }}>⚠ {x}</span>)}
+            {an.warnings.map((x) => <span key={x} style={{ ...muted, color: "var(--status-warn, #d97706)" }}><Ico as={Warning} size={12} />{x}</span>)}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: "56vh", overflowY: "auto", paddingRight: 4 }}>
             {an.conflicts.map((c, i) => (
@@ -169,7 +171,7 @@ function ConflictCard({ n, c, d, roomId, revId, onPick }: {
         <span style={{ ...muted, display: "flex", gap: 8, alignItems: "center" }}>
           <button type="button" disabled={asking} onClick={() => void ask()}
                   style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, fontSize: 12, color: "var(--catfish-cyan)" }}>
-            {asking ? "🐟 小鲶在看…" : "🐟 让小鲶给个兼顾的写法"}
+            {asking ? "小鲶在看…" : "让小鲶给个兼顾的写法"}
           </button>
           {sug?.reason && <span>{sug.reason}</span>}
         </span>

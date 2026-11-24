@@ -14,6 +14,8 @@
  * 11/09 「📋 发表」: 在群里发一张表给已加入的人填 (RoomFormMessage.tsx); 表本身走填表, 群里只有表卡和谁交了。
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { ArrowUUpLeft, CheckCircle, ClipboardText, Hourglass, Wrench, X } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import { refreshRooms, setActiveRoom, useColleagueRooms } from "../../lib/colleagueRoomsStore";
 import { refreshTasks, useColleagueTasks } from "../../lib/colleagueTasksStore";
@@ -129,7 +131,7 @@ const listButton = (on: boolean) => ({
 function Badge({ n, at }: { n: number; at?: boolean }) {
   if (!n) return null;
   return (
-    <span style={{ fontSize: 10, minWidth: 16, padding: "0 5px", borderRadius: 8, textAlign: "center",
+    <span style={{ fontSize: 11, lineHeight: "16px", minWidth: 16, padding: "0 4px", borderRadius: 8, textAlign: "center",
                    background: at ? "var(--status-warn, #d97706)" : "var(--status-error, #dc2626)", color: "white" }}>
       {at ? "@" : ""}{n > 99 ? "99+" : n}
     </span>
@@ -171,7 +173,7 @@ export default function RoomsPanel() {
         <div style={{ display: "flex", flexDirection: "column", gap: 6, minHeight: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
             <strong style={{ fontSize: 13 }} title="消息只存在每个成员自己的电脑上, 中央只转交加密内容、看不到原文, 取走即清空, 不保存记录; 每一条都是你点了才发">
-              💬 群聊
+              群聊
             </strong>
             <span style={{ display: "flex", gap: 4 }}>
               <Btn kind="ghost" onClick={() => setCreating(true)}>＋ 建群</Btn>
@@ -428,14 +430,14 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
               {room.retention ? `记录保留 ${daysLabel(room.retention.days)} (${room.retention.label})` : "记录保留"}
             </button>
             {room.purpose && <div style={{ ...muted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                                  title={room.purpose}>📌 {room.purpose}</div>}
+                                  title={room.purpose}>{room.purpose}</div>}
           </div>
           {/* 按钮不折行; 窄的时候让左边的群名 / 说明去折 */}
           <span style={{ display: "flex", gap: 8, flexShrink: 0, whiteSpace: "nowrap" }}>
-            {joined && <Btn kind="ghost" onClick={() => setFormUi({ compose: true })}>📋 发表</Btn>}
+            {joined && <Btn kind="ghost" onClick={() => setFormUi({ compose: true })}>发表</Btn>}
             <Btn kind="ghost" onClick={() => setShowTasks((v) => !v)}>{showTasks ? "收起任务" : tasksButtonLabel(tasksData)}</Btn>
-            <Btn kind="ghost" onClick={() => setSearching((v) => !v)}>🔍 搜索</Btn>
-            <Btn kind="ghost" onClick={() => setShowMembers((v) => !v)}>{showMembers ? "收起成员" : `👥 成员 ${room.joined}`}</Btn>
+            <Btn kind="ghost" onClick={() => setSearching((v) => !v)}>搜索</Btn>
+            <Btn kind="ghost" onClick={() => setShowMembers((v) => !v)}>{showMembers ? "收起成员" : `成员 ${room.joined}`}</Btn>
           </span>
         </div>
         <IssueBar issue={room.issue} />
@@ -534,7 +536,7 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
                   回复 {labelOf(members, replyTo.from)}: {replyTo.text}
                 </span>
                 <button type="button" aria-label="不回复了" onClick={() => setReplyTo(null)}
-                        style={{ border: "none", background: "transparent", cursor: "pointer" }}>✕</button>
+                        style={{ border: "none", background: "transparent", cursor: "pointer", padding: 0, color: "inherit", display: "inline-flex" }}><X size={12} /></button>
               </div>
             )}
             {atOpen && (
@@ -583,10 +585,10 @@ function RoomView({ roomId, notice, onNotice, onKeep }: { roomId: string; notice
             {helpOpen && <XiaonianMenu replyLabel={replyTo ? labelOf(members, replyTo.from) : undefined} onPick={(k) => void askXiaonian(k)}
                                        onAsk={() => { setHelpOpen(false); setText((t) => askQuestion(t) !== null ? t : `${XIAONIAN_AT} ${t}`); }} />}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <span style={{ ...muted, whiteSpace: "nowrap" }} title="长文字请用邮件; 文件点 📎 或直接拖进来 (最多 5 个, 合计 200MB)">{text.length}/{TEXT_MAX}</span>
+              <span style={{ ...muted, whiteSpace: "nowrap" }} title="长文字请用邮件; 文件点回形针按钮或直接拖进来 (最多 5 个, 合计 200MB)">{text.length}/{TEXT_MAX}</span>
               <span style={{ display: "flex", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>
                 <Btn kind="ghost" disabled={Boolean(helping)} onClick={() => setHelpOpen((v) => !v)}>
-                  {helping ? "🐟 小鲶在写…" : "🐟 小鲶"}
+                  {helping ? "小鲶在写…" : "小鲶"}
                 </Btn>
                 <span title="@ 提醒某人。要派任务就照常说, 如「@张三 周五前交拜访记录」, 再点出现的「派给@的人」"><Btn kind="ghost" onClick={() => setAtOpen((v) => !v)}>@</Btn></span>
                 <AttachButton disabled={busy} onPick={(l) => void addPicked(l)} />
@@ -690,7 +692,7 @@ function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged, onRe
   if (m.kind === "auto") {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 2 }}>
-        <span style={muted}>🤖 自动转发 · {mine ? "我" : labelOf(members, m.from)} 的电脑 · {timeLabel(m.at)}</span>
+        <span style={muted}>自动转发 · {mine ? "我" : labelOf(members, m.from)} 的电脑 · {timeLabel(m.at)}</span>
         <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
                       border: "1px dashed var(--catfish-border)", background: "var(--catfish-bg-subtle, rgba(0,0,0,0.03))" }}>
           {m.text}
@@ -700,13 +702,13 @@ function Bubble({ m, mine, members, me, quoted, onReply, roomId, onChanged, onRe
     );
   }
   if (m.kind === "deadline") {   // 11/07 发起人延期
-    return <span style={oneLine} title={m.text}>⏳ {m.text} · {timeLabel(m.at)}</span>;
+    return <span style={oneLine} title={m.text}><Ico as={Hourglass} size={12} />{m.text} · {timeLabel(m.at)}</span>;
   }
   if (m.kind === "status" || m.kind === "form_status") {
     // 只有那条任务 / 那张表不在眼前 (更早、没显示) 时才单独一行
     const st = m.status?.state ?? m.form_status?.state;
-    const icon = st === "done" || st === "submitted" ? "✅" : st === "accepted" ? "🛠" : st === "closed" ? "📋" : "↩️";
-    return <span style={oneLine} title={m.text}>{icon} {m.text} · {timeLabel(m.at)}</span>;
+    const icon = st === "done" || st === "submitted" ? CheckCircle : st === "accepted" ? Wrench : st === "closed" ? ClipboardText : ArrowUUpLeft;
+    return <span style={oneLine} title={m.text}><Ico as={icon} size={12} />{m.text} · {timeLabel(m.at)}</span>;
   }
   const atMe = !mine && (m.mentions ?? []).includes(me);
   return (
@@ -761,7 +763,7 @@ function TaskMessage({ m, me, members, messages, busy, local: rec, onAccept, onW
       {/* 11/5 鸿波: 状态别单独占一行 —— 跟「谁 · 几点」放同一行 */}
       <span style={{ ...muted, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: mine ? "flex-end" : "flex-start", maxWidth: "90%" }}>
         <span>{mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}</span>
-        <span>📋 {c.schedule ? `⏰ ${c.schedule}` : deadline ? `截止 ${shortWhen(deadline)}` : "不限时"}{c.auto_post ? " · 结果自动发群" : ""}</span>
+        <span>{c.schedule ? c.schedule : deadline ? `截止 ${shortWhen(deadline)}` : "不限时"}{c.auto_post ? " · 结果自动发群" : ""}</span>
         {states.map((x) => (
           <span key={x.email} title={x.email}
                 style={{ color: x.state === "done" ? "var(--status-ok, #059669)" : undefined }}>

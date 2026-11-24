@@ -8,6 +8,8 @@
  *   (这回我在, 确认照常弹); 也可以不补, 直接交回。
  */
 import { useState } from "react";
+import { Clock } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import { continueChatKey, continuePrompt, doChatKey, doNowPrompt } from "../../lib/taskPrompts";
 import {
@@ -44,7 +46,7 @@ function PeriodBox({ p, owner, busy, onSubmit, onContinue, onOpenMail }: {
           <div style={{ color: "var(--status-warn, #d97706)", marginBottom: 4 }}>到点时你不在, 这几步要你确认, 小鲶没做:</div>
           <ol style={{ margin: 0, paddingLeft: 20 }}>{(p.skipped ?? []).map((s) => <li key={s}>{s}</li>)}</ol>
           <div style={{ marginTop: 6 }}>
-            <Btn kind="primary" disabled={busy} onClick={onContinue}>🐟 我在了, 接着做</Btn>
+            <Btn kind="primary" disabled={busy} onClick={onContinue}>我在了, 接着做</Btn>
           </div>
         </div>
       )}
@@ -80,7 +82,7 @@ export default function TaskWorkScheduled({ rec, state, scheduleText, nextRun, b
 
   return (
     <>
-      <div style={{ fontSize: 13 }}>⏰ {scheduleText}{nextRun && !stopped && !needAccept ? ` · 下次 ${when(nextRun)}` : ""}</div>
+      <div style={{ fontSize: 13 }}><Ico as={Clock} size={14} />{scheduleText}{nextRun && !stopped && !needAccept ? ` · 下次 ${when(nextRun)}` : ""}</div>
       {state === "要重新同意" && <div style={{ ...muted, color: "var(--status-warn, #d97706)" }}>对方改了任务, 定时先停了, 看过再决定接不接。</div>}
       {state === "没做成" && <div style={{ ...muted, color: "var(--status-warn, #d97706)" }}>到点电脑没开 (补跑也没成), 可以现在让小鲶做一次。</div>}
       {state === "定时没了" && <div style={{ ...muted, color: "var(--status-warn, #d97706)" }}>这个任务的定时被删了。要继续就点「重新安排」, 不做了就退出。</div>}
@@ -97,7 +99,7 @@ export default function TaskWorkScheduled({ rec, state, scheduleText, nextRun, b
             <Btn kind="primary" disabled={busy} onClick={() => run(async () => {
               const r = await taskAccept(rec.task_id, auto);
               return `接下了, 到点小鲶会做${r.next_run ? ` (下次 ${when(r.next_run)})` : ""}`;
-            })}>🐟 接下, 到点让小鲶做</Btn>
+            })}>接下, 到点让小鲶做</Btn>
             <Btn kind="ghost" disabled={busy} onClick={() => setLeaving("decline")}>不接</Btn>
           </div>
           <span style={muted}>到点要开着电脑、鲶鱼在运行; 错过了开机补做。没人在旁边时要审批的步骤不会执行, 小鲶会在结果里写明。</span>
@@ -107,7 +109,7 @@ export default function TaskWorkScheduled({ rec, state, scheduleText, nextRun, b
       {!stopped && !needAccept && !leaving && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Btn kind="ghost" disabled={busy} onClick={() => { startChat(doChatKey(rec.task_id), doNowPrompt(rec)); onClose(); }}>
-            🐟 现在让小鲶做一次
+            现在让小鲶做一次
           </Btn>
           {state === "定时没了" && (
             <Btn kind="ghost" disabled={busy} onClick={() => run(async () => { await taskAccept(rec.task_id, !!rec.auto_return); return "重新安排好了"; })}>

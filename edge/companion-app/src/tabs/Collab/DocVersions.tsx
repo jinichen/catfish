@@ -6,6 +6,8 @@
  * 「基于 vN 发起新一轮」, 不再单独列成第二个「vN · 发起」(看着像版本号重复)。
  */
 import { useEffect, useState } from "react";
+import { EnvelopeSimple } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import { openFile } from "../../lib/tauri_app";
 import { roomFileSave } from "../../lib/tauri_colleague_rooms";
@@ -78,7 +80,7 @@ export default function DocVersions({ roomId, docId, me = "", onClose }: { roomI
             ))}
             {latest && v.files.length > 0 && (
               <span>
-                <button type="button" style={{ ...link, fontWeight: 600 }} onClick={() => { setNote(null); setMailing(v); }}>✉ 发邮件 (最新一版)</button>
+                <button type="button" style={{ ...link, fontWeight: 600 }} onClick={() => { setNote(null); setMailing(v); }}><Ico as={EnvelopeSimple} />发邮件 (最新一版)</button>
               </span>
             )}
           </div>

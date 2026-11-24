@@ -25,7 +25,7 @@ describe("ReviseTodoPanel", () => {
     h.revise = [item];
     h.reviseOpen.mockResolvedValue({ path: "/p.docx" });
     render(<ReviseTodoPanel />);
-    expect(screen.getByText("📝 请你修改 (1)")).toBeTruthy();
+    expect(screen.getByText("请你修改 (1)")).toBeTruthy();
     expect(screen.getByText("明天截止")).toBeTruthy();
     fireEvent.click(screen.getByText("下载修改"));
     await waitFor(() => expect(h.openFile).toHaveBeenCalledWith("/p.docx"));

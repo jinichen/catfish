@@ -47,7 +47,7 @@ describe("TaskWorkScheduled", () => {
     await open(REC, "待处理");
     expect(screen.getByText(/每周一 09:00, 最多 4 次/)).toBeTruthy();
     fireEvent.click(screen.getByLabelText(/每次做完直接交回/));
-    fireEvent.click(screen.getByText("🐟 接下, 到点让小鲶做"));
+    fireEvent.click(screen.getByText("接下, 到点让小鲶做"));
     await waitFor(() => expect(api.taskAccept).toHaveBeenCalledWith(REC.task_id, true));
   });
 
@@ -64,7 +64,7 @@ describe("TaskWorkScheduled", () => {
 
   it("现在让小鲶做一次: 提示词要它用 task_period", async () => {
     await open({ ...REC, accepted_at: "x", job_id: "j1" }, "已安排");
-    fireEvent.click(screen.getByText("🐟 现在让小鲶做一次"));
+    fireEvent.click(screen.getByText("现在让小鲶做一次"));
     expect(startChat).toHaveBeenCalled();
     expect(startChat.mock.calls[0][1]).toContain("task_period");
   });
@@ -83,7 +83,7 @@ describe("TaskWorkScheduled", () => {
                               skipped: ["把汇总发给销售部邮件组"] }] };
     await open(rec, "待确认");
     expect(screen.getByText("把汇总发给销售部邮件组")).toBeTruthy();
-    fireEvent.click(screen.getByText("🐟 我在了, 接着做"));
+    fireEvent.click(screen.getByText("我在了, 接着做"));
     expect(startChat.mock.calls[0][0]).toBe(`ctask-continue:${REC.task_id}:2`);
     const prompt = startChat.mock.calls[0][1] as string;
     expect(prompt).toContain("period=2");
@@ -96,6 +96,6 @@ describe("TaskWorkScheduled", () => {
   it("对方改了: 提示重新同意", async () => {
     await open({ ...REC, changed_at: "x" }, "要重新同意");
     expect(screen.getByText(/对方改了任务/)).toBeTruthy();
-    expect(screen.getByText("🐟 接下, 到点让小鲶做")).toBeTruthy();
+    expect(screen.getByText("接下, 到点让小鲶做")).toBeTruthy();
   });
 });

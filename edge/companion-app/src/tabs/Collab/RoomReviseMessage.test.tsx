@@ -172,7 +172,7 @@ describe("ReviseMergePanel", () => {
     render(<ReviseMergePanel roomId="r1" revId={card.rev_id} title="实施方案" onClose={vi.fn()} onDone={onDone} />);
     await screen.findByText(/自动合并: 张三 2 处、李四 1 处/);
     expect(screen.getByText("选你改的文件, 一起合")).toBeTruthy();   // 发起人自己也改了: 在这里选
-    expect(screen.getByText("⚠ 王五 只调了格式")).toBeTruthy();
+    expect(screen.getByText("王五 只调了格式")).toBeTruthy();
     expect(screen.getByText("还有 1 处没定")).toBeTruthy();
     expect((screen.getByText("发出合并版").closest("button") as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByText(/拼起来是这样/));
@@ -186,7 +186,7 @@ describe("ReviseMergePanel", () => {
     api.reviseMerge.mockResolvedValue(an);
     api.reviseSuggest.mockResolvedValue({ text: null, reason: "几种改法意思相反, 小鲶不硬合 —— 请你定" });
     render(<ReviseMergePanel roomId="r1" revId={card.rev_id} title="实施方案" onClose={vi.fn()} onDone={vi.fn()} />);
-    fireEvent.click(await screen.findByText("🐟 让小鲶给个兼顾的写法"));
+    fireEvent.click(await screen.findByText("让小鲶给个兼顾的写法"));
     await screen.findByText(/意思相反/);
   });
 });

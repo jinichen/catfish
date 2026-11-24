@@ -40,6 +40,28 @@ export const itemStyle: CSSProperties = {
   gap: "var(--space-2)",
 };
 
+/** 11/24: 协同页各卡片统一的标题行 —— 标题 (+ 一行说明) 在左, 计数 / 按钮在右, 上下对齐方式一致 */
+export function CardHead({ title, sub, subTitle, aside }: { title: ReactNode; sub?: ReactNode; subTitle?: string; aside?: ReactNode }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--space-3)", flexShrink: 0 }}>
+      <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600, lineHeight: "24px" }}>{title}</h3>
+        {sub && <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--catfish-text-muted)" }} title={subTitle}>{sub}</div>}
+      </div>
+      {aside && <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minHeight: 24, flexShrink: 0 }}>{aside}</div>}
+    </div>
+  );
+}
+
+/** 11/24: 筛选 chip (要处理的 / 全部): 选中 = 浅青底 + 青字, 不用实色青; 高 24 */
+export function chipStyle(on: boolean): CSSProperties {
+  return {
+    border: `1px solid ${on ? "var(--catfish-cyan)" : "var(--catfish-border)"}`, cursor: "pointer", font: "inherit", fontSize: 12,
+    minHeight: 24, padding: "2px 12px", borderRadius: 12, whiteSpace: "nowrap", flex: "none",
+    background: on ? "var(--catfish-cyan-tint)" : "transparent", color: on ? "var(--catfish-cyan)" : "var(--catfish-text)",
+  };
+}
+
 export function ErrorLine({ children }: { children: ReactNode }) {
   return (
     <div

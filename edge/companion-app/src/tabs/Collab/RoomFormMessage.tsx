@@ -30,7 +30,7 @@ export default function RoomFormMessage({ m, me, members, messages, roomId, onFi
     <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 2 }}>
       <span style={{ ...muted, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: mine ? "flex-end" : "flex-start", maxWidth: "90%" }}>
         <span>{mine ? "我" : labelOf(members, m.from)} · {timeLabel(m.at)}</span>
-        <span>📋 {closed ? "已结束收集" : c.deadline ? `截止 ${shortWhen(c.deadline)}` : "不限时"} · 已交 {done}/{people.length}</span>
+        <span>{closed ? "已结束收集" : c.deadline ? `截止 ${shortWhen(c.deadline)}` : "不限时"} · 已交 {done}/{people.length}</span>
         {people.map((p) => (
           <span key={p.email} title={p.email} style={{ color: p.state === "submitted" ? "var(--status-ok, #059669)" : undefined }}>
             {p.email === me ? "我" : p.name} {FORM_STATE_WORD[p.state]}

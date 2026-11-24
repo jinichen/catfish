@@ -6,6 +6,8 @@
  *   · hiddenReviseStatus 卡片就在眼前时, 「谁在改 / 谁交了」不再单独一行 (写在卡片上了)。
  */
 import { useRef, useState, type ChangeEvent } from "react";
+import { PencilSimple } from "@phosphor-icons/react";
+import { FileKindIcon } from "../../components/icons";
 
 import type { RoomMember, RoomMessage } from "../../lib/tauri_colleague_rooms";
 import { fmtNote, reviseDetect, reviseReturn, reviseStart } from "../../lib/tauri_room_revise";
@@ -68,7 +70,7 @@ export function ReviseStartDialog({ roomId, me, members, source, onClose, onDone
   }
   return (
     <Overlay title={continuing ? `在 v${(source as { version?: number }).version ?? ""} 上再请大家修改` : "请大家修改"} onClose={onClose} width={520}>
-      <span style={{ fontSize: 13 }}>📄 {name}</span>
+      <span style={{ fontSize: 13 }}><FileKindIcon name={name} />{name}</span>
       <span style={{ ...muted, color: fmt === "whole" ? "var(--status-warn, #d97706)" : undefined }}>
         {OLD[ext] ? `.${ext} 是老格式: 先另存为 .${OLD[ext]} 再发, 才能自动合并; 现在这样交回后只能整份选用。` : fmtNote(fmt)}
       </span>
@@ -133,8 +135,8 @@ export function ReviseStartButton({ disabled, onStaged, onError }: {
       <button type="button" disabled={disabled || prep !== null} onClick={() => ref.current?.click()}
               title="发一份文档请大家各自修改, 交回后系统合并 (Word / Excel / PPT / Markdown)"
               style={{ border: "1px solid var(--catfish-border)", background: "transparent", borderRadius: "var(--radius-sm, 6px)",
-                       cursor: disabled ? "default" : "pointer", padding: "4px 8px", fontSize: 13, color: "inherit" }}>
-        {prep !== null ? `${prep}%` : "📝"}
+                       cursor: disabled ? "default" : "pointer", padding: "4px 8px", fontSize: 13, color: "inherit", display: "inline-flex", alignItems: "center" }} aria-label="请大家修改">
+        {prep !== null ? `${prep}%` : <PencilSimple size={16} weight="regular" />}
       </button>
     </>
   );
@@ -183,7 +185,7 @@ export function useReviseDetect(roomId: string, onReturned: (text: string) => vo
   const banner = (onRemove: (f: PickedFile) => void) => found && (
     <div style={{ ...muted, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 8px", borderRadius: 6,
                   background: "var(--catfish-bg-subtle, rgba(0,0,0,0.04))", border: "1px solid var(--catfish-cyan)", color: "inherit" }}>
-      <span>📝 {found.file.name} 是《{found.title}》v{found.version} 的修改 —— 交回给 {found.owner_name}?</span>
+      <span>{found.file.name} 是《{found.title}》v{found.version} 的修改 —— 交回给 {found.owner_name}?</span>
       <Btn kind="primary" disabled={busy} onClick={() => void giveBack(Boolean(error?.includes("一点没改"))).then((f) => f && onRemove(f))}>
         {busy ? "交回中…" : "交回"}
       </Btn>

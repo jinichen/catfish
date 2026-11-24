@@ -33,8 +33,8 @@ export function shortDeadline(iso: string | null | undefined): string {
 
 /** 按钮上的数: 进行中的任务数; 有逾期的单独说 */
 export function tasksButtonLabel(d: RoomTasksData | null): string {
-  if (!d || !d.tasks.length) return "📋 任务";
-  return `📋 任务 ${d.open}${d.late ? ` · ${d.late} 逾期` : ""}`;
+  if (!d || !d.tasks.length) return "任务";
+  return `任务 ${d.open}${d.late ? ` · ${d.late} 逾期` : ""}`;
 }
 
 export function personColor(p: RoomTaskPerson, late: boolean): string | undefined {
@@ -109,7 +109,7 @@ export default function RoomTasksBoard({ data, me, members, onJump, onWatch, onW
                     {t.title}
                   </button>
                   <span style={{ ...muted, color: late ? "var(--status-error, #dc2626)" : undefined }}>
-                    {t.schedule ? `⏰ ${t.schedule}` : t.deadline ? `截止 ${shortDeadline(t.deadline)}${late ? ` · ${t.late} 人逾期` : ""}` : "不限时"}
+                    {t.schedule ? t.schedule : t.deadline ? `截止 ${shortDeadline(t.deadline)}${late ? ` · ${t.late} 人逾期` : ""}` : "不限时"}
                   </span>
                   <span style={muted}>{mine ? "我派的" : `${nameOf(members, t.owner, me)} 派的`}</span>
                   <span style={{ display: "flex", gap: 10, marginLeft: "auto" }}>

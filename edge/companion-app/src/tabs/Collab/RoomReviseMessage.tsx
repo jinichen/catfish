@@ -6,6 +6,8 @@
  *   revise_status  合并版那条 (带新版本文件, 一直显示, 能「接着改这一版」); 其它状态只在卡片不在眼前时单独一行。
  */
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { Alarm, ArrowUUpLeft, EnvelopeSimple, Eye, FileText, PencilSimple } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import { refreshRevisePending } from "../../lib/colleagueRoomsStore";
 import { openFile } from "../../lib/tauri_app";
@@ -51,7 +53,7 @@ export default function RoomReviseMessage({ m, me, members, roomId, tick, onChan
         </span>
         <div style={{ maxWidth: "78%", padding: "6px 10px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word",
                       border: "1px dashed var(--catfish-border)", background: "var(--catfish-bg-subtle, rgba(0,0,0,0.03))" }}>
-          {r.unchanged ? "👀 " : "📨 "}{m.text}
+          <Ico as={r.unchanged ? Eye : EnvelopeSimple} size={14} />{m.text}
           {m.files?.length ? <RoomFileList roomId={roomId} files={m.files} mine={false} /> : null}
         </div>
         <DeliveryLine roomId={roomId} msgId={m.msg_id} rows={m.delivery} members={members} align={mine ? "flex-end" : "flex-start"} onChanged={onChanged} />
@@ -82,8 +84,8 @@ export default function RoomReviseMessage({ m, me, members, roomId, tick, onChan
       </div>
     );
   }
-  const icon = st?.state === "returned" ? "📨" : st?.state === "declined" ? "↩️" : st?.state === "remind" ? "⏰" : st?.state === "closed" ? "📝" : "✏️";
-  return <span style={oneLine} title={m.text}>{icon} {m.text} · {timeLabel(m.at)}</span>;
+  const icon = st?.state === "returned" ? EnvelopeSimple : st?.state === "declined" ? ArrowUUpLeft : st?.state === "remind" ? Alarm : st?.state === "closed" ? FileText : PencilSimple;
+  return <span style={oneLine} title={m.text}><Ico as={icon} size={12} />{m.text} · {timeLabel(m.at)}</span>;
 }
 
 function ReviseCardView({ m, me, members, roomId, tick, onChanged, onNotice, onMerge, onVersions }: {

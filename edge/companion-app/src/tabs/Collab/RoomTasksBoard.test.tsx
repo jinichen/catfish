@@ -27,8 +27,8 @@ const data: RoomTasksData = {
 
 describe("RoomTasksBoard", () => {
   it("按钮上: 进行中几个、几个逾期", () => {
-    expect(tasksButtonLabel(data)).toBe("📋 任务 2 · 1 逾期");
-    expect(tasksButtonLabel({ tasks: [], open: 0, late: 0 })).toBe("📋 任务");
+    expect(tasksButtonLabel(data)).toBe("任务 2 · 1 逾期");
+    expect(tasksButtonLabel({ tasks: [], open: 0, late: 0 })).toBe("任务");
   });
 
   it("逾期的人标红; 我派的能催 / 看结果, 派给我的能去处理; 点标题跳到任务卡", () => {

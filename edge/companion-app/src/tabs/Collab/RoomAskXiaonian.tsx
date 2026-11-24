@@ -6,6 +6,8 @@
  *   · 成员栏、@ 菜单里给小鲶一个固定位置, 标明「你的助手 · 只有你看得到」, 不算成员。
  */
 import { useEffect, useRef, useState } from "react";
+import { LockSimple } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 import { roomAssist, type AskSource, type AssistKind, type RoomMessage } from "../../lib/tauri_colleague_rooms";
 import { AskSources } from "../../components/AskSources";
@@ -67,12 +69,12 @@ export function AskCards({ asks, onPost, onEdit, onDismiss, busy }: {
                       display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
             <span style={{ ...muted, minWidth: 0 }}>
-              你问 🐟 小鲶{a.about ? ` (关于 ${a.about} 那条)` : ""}: <span style={{ color: "var(--catfish-text)" }}>{a.q}</span>
+              你问小鲶{a.about ? ` (关于 ${a.about} 那条)` : ""}: <span style={{ color: "var(--catfish-text)" }}>{a.q}</span>
             </span>
-            <span style={{ ...muted, whiteSpace: "nowrap", flexShrink: 0 }}>🔒 只有你看得到</span>
+            <span style={{ ...muted, whiteSpace: "nowrap", flexShrink: 0 }}><Ico as={LockSimple} size={12} />只有你看得到</span>
           </div>
           {a.error ? <ErrorLine>{a.error}</ErrorLine>
-            : a.answer === undefined ? <span style={muted}>🐟 小鲶在查你电脑上的资料和群记录 (问公开资料时也上网查)…</span>
+            : a.answer === undefined ? <span style={muted}>小鲶在查你电脑上的资料和群记录 (问公开资料时也上网查)…</span>
             : <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{a.answer}</div>}
           {a.answer !== undefined && <AskSources sources={a.sources} style={muted} />}
           <span style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
@@ -116,7 +118,7 @@ export function XiaonianMenu({ replyLabel, onPick, onAsk }: {
 export function XiaonianAtItem({ onPick }: { onPick: () => void }) {
   return (
     <button type="button" onClick={onPick} className="room-menu-item" style={{ ...menuItem, padding: "4px 8px" }}>
-      🐟 @小鲶 <span style={muted}>{XIAONIAN_HINT}</span>
+      @小鲶 <span style={muted}>{XIAONIAN_HINT}</span>
     </button>
   );
 }
@@ -126,7 +128,7 @@ export function XiaonianMemberRow({ onAsk }: { onAsk?: () => void }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}
          title="小鲶不是群成员: 它在你电脑上, 只替你干活, 别人看不到你问了什么。在输入框打「@小鲶 问题」问它">
-      <span style={{ fontSize: 12, whiteSpace: "nowrap" }}>🐟 小鲶</span>
+      <span style={{ fontSize: 12, whiteSpace: "nowrap" }}>小鲶</span>
       {onAsk ? (
         <button type="button" onClick={onAsk}
                 style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 11, color: "var(--catfish-cyan)", whiteSpace: "nowrap" }}>
