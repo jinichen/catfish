@@ -32,6 +32,8 @@ import { fetchMySkills, toolBridgeCallTool } from "../../lib/tauri";
 import type { SkillEntry } from "../../types/identity";
 // 11/08 分享治理: 审批人「待我审」+ 装到我这里试用; 刷新时不在待审的试用自动卸 (SkillTrialUi.tsx)
 import { PendingSkillsSection, removedSkillText, syncSkillTrials } from "./SkillTrialUi";
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 /** 11/08: hub 每条带的审核状态 (skill_review.annotate_list) */
 interface SkillReview {
@@ -291,8 +293,8 @@ export default function SkillsHubCard() {
         }}
       >
         {/* P3.3.38 (6/12): "Skills Hub" → "技能分享" 中文化 */}
-        <h3 style={{ margin: 0 }}>
-          🛠️ {agentName} 技能分享
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>
+          {agentName} 技能分享
           <span
             style={{
               fontSize: 12,
@@ -316,7 +318,7 @@ export default function SkillsHubCard() {
               }}
               title={`${upgradeCount} 个已装 skill 在 hub 上有新版本`}
             >
-              ⬆ {upgradeCount} 有升级
+              {upgradeCount} 有升级
             </span>
           )}
         </h3>
@@ -342,7 +344,7 @@ export default function SkillsHubCard() {
             color: toast.kind === "ok" ? "#16a34a" : "#dc2626",
           }}
         >
-          {toast.kind === "ok" ? "✓ " : "⚠ "}{toast.text}
+          {toast.kind === "ok" ? "✓ " : <Ico as={Warning} />}{toast.text}
         </div>
       )}
 
@@ -451,7 +453,7 @@ function ReviewBadge({ review }: { review?: SkillReview }) {
     ? `等${who}审核; 通过前同事看不到, 装不了`
     : review.review_note ? `${label}: ${review.review_note}` : label;
   return (
-    <span title={title} style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: `1px solid ${tone}`, color: tone,
+    <span title={title} style={{ fontSize: 11, padding: "0 6px", borderRadius: 999, border: `1px solid ${tone}`, color: tone,
                                  fontFamily: "inherit", fontWeight: 400, whiteSpace: "nowrap" }}>
       {label}
     </span>
@@ -485,7 +487,7 @@ function SkillRow({
         }}
         title={`本机 v${status.installedVersion} → hub v${skill.latest_version}`}
       >
-        ⬆ v{status.installedVersion} → v{skill.latest_version}
+        可升级 v{status.installedVersion} → v{skill.latest_version}
       </span>
     );
     actionBtn = (
@@ -614,7 +616,7 @@ function SkillRow({
         }}
       >
         <span>
-          👤 {skill.published_by || "?"} · {humanTime(skill.published_at)}
+          {skill.published_by || "?"} · {humanTime(skill.published_at)}
         </span>
         {actionBtn}
       </div>

@@ -27,6 +27,8 @@ import {
   type ResetSummary,
 } from "../../lib/tauri";
 import { fileManagerName } from "../../lib/platformLabels";
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 // 30s 轮询 — 跟 AuditCard 同节奏 (避免一个卡 30s 一个卡 5s 让 UI 不同步)
 const POLL_MS = 30_000;
@@ -91,11 +93,11 @@ export default function PrivacyCard() {
           + 视觉分组更清晰. 6/6 删的副标 (那是顶部副标) 不变.
           6/1 BL-PRIVACY-CARD-SIMPLIFY 简化精神保留 — 仍 2 大块本机/服务器
           + 自助, 没折叠 / 没技术路径 / 没"看不到 X"暗示. */}
-      <h3 style={{ margin: "0 0 var(--space-3) 0" }}>🔒 隐私状态</h3>
+      <h3 style={{ margin: "0 0 var(--space-3) 0", fontSize: 15, fontWeight: 600 }}>隐私状态</h3>
 
       {/* row 1: 本机存储 */}
       <Row
-        title="🟢 本机存储"
+        title="本机存储"
         subtitle="只在你电脑上, 不上传"
       >
         <ul
@@ -126,7 +128,7 @@ export default function PrivacyCard() {
 
       {/* row 2: 服务器存储 */}
       <Row
-        title="🟡 服务器存储"
+        title="服务器存储"
         subtitle="只 meta data, 不存对话"
       >
         {error && (() => {
@@ -220,7 +222,7 @@ export default function PrivacyCard() {
 
       {/* row 3: 员工自助工具 (manifesto 公理 1 落地) */}
       <Row
-        title="🔧 员工自助工具"
+        title="员工自助工具"
         subtitle="你自己管, IT 不能动"
         last
       >
@@ -389,7 +391,7 @@ function SelfServeButtons() {
             checked={auditViewEnabled}
             onChange={(e) => setAuditViewEnabled(e.target.checked)}
           />
-          <span style={{ fontWeight: 500 }}>🔍 启用审计视图 tab</span>
+          <span style={{ fontWeight: 500 }}>启用审计视图 tab</span>
         </label>
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4, paddingLeft: 24 }}>
           打开后, 隐私 section 多一个 "审计视图" tab — 信合规 / 内审 / 党办上门时表格化呈现
@@ -426,7 +428,7 @@ function SelfServeButtons() {
             fontSize: 13,
           }}
         >
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>⚠ 真要重置吗?</div>
+          <div style={{ marginBottom: 8, fontWeight: 600, color: "var(--status-err)" }}><Ico as={Warning} />真要重置吗?</div>
           <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
             <li>{mode.summary.conversationsDeleted} 个对话历史</li>
             <li>{mode.summary.recordingsDeleted} 个录屏</li>
@@ -536,7 +538,7 @@ function SelfServeButtons() {
  *
  * 比单纯堆 h4 + content 短约 30%, 因为左右并排不重复占行.
  *
- * - title: section 标题 (e.g. "🟢 本机存储")
+ * - title: section 标题 (e.g. "本机存储")
  * - subtitle: 副标 (1 行内, e.g. "只在你电脑上, 不上传"), 帮员工 0.5s 理解 row 主旨
  * - last: 最后一 row 不画底分割线
  * - children: 右列内容 (list / progress / button group / ...)

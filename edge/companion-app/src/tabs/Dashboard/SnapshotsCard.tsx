@@ -19,6 +19,8 @@ import {
   type SnapshotInfo,
   type SnapshotsStatus,
 } from "../../lib/deviceMigration";
+import { Warning, XCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 const muted: React.CSSProperties = { fontSize: 11, color: "var(--catfish-text-muted)" };
 const h4: React.CSSProperties = { margin: "14px 0 6px", fontSize: 13 };
@@ -88,7 +90,7 @@ export default function SnapshotsCard() {
 
   if (done) {
     return (
-      <div style={{ padding: 12, fontSize: 12, lineHeight: 1.7 }}>
+      <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)", fontSize: 12, lineHeight: 1.7 }}>
         <div style={okBox}>
           <div style={{ fontWeight: 600, color: "#16A34A" }}>✓ 还原好了: {done.files} 个文件</div>
           {done.backupDir && (
@@ -97,7 +99,7 @@ export default function SnapshotsCard() {
             </div>
           )}
           {done.warnings.map((w) => (
-            <div key={w} style={{ color: "var(--catfish-orange)" }}>⚠️ {w}</div>
+            <div key={w} style={{ color: "var(--catfish-orange)" }}><Ico as={Warning} />{w}</div>
           ))}
           <div style={muted}>知识库 / 待办这些页面刷新一下就能看到; 对话、记忆、技能已经让小鲶重新加载了。</div>
           <button type="button" style={{ ...plainBtn, marginTop: 6 }} onClick={() => { setDone(null); refresh(); }}>
@@ -107,13 +109,13 @@ export default function SnapshotsCard() {
       </div>
     );
   }
-  if (!st) return <div style={{ padding: 12, ...muted }}>{error ?? "读取中…"}</div>;
+  if (!st) return <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)", ...muted }}>{error ?? "读取中…"}</div>;
 
   const s = st.settings;
   const choices = pick ? pick.entries.filter(restorable) : [];
   return (
-    <div style={{ padding: 12, fontSize: 12, lineHeight: 1.7 }}>
-      <h3 style={{ margin: 0, fontSize: 15 }}>🛟 误删保护</h3>
+    <div style={{ background: "var(--catfish-bg-elevated)", border: "1px solid var(--catfish-border)", borderRadius: "var(--radius-md)", padding: "var(--space-4)", fontSize: 12, lineHeight: 1.7 }}>
+      <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>误删保护</h3>
       <div style={{ ...muted, marginTop: 4 }}>
         每天在这台电脑上自动存一份快照: 工作日志、记忆和画像、知识库、对话历史、技能、待办等 (不含附件这类大文件)。
         快照加密存放, 密钥只在这台电脑的钥匙串里, 不上传。误删了东西, 挑一份快照把那几项还原回来。
@@ -138,7 +140,7 @@ export default function SnapshotsCard() {
           {busy === "make" ? "正在做快照… (几分钟)" : "现在做一份"}
         </button>
       </div>
-      {s.lastError && !made && <div style={{ ...muted, color: "var(--catfish-orange)" }}>⚠️ 上次没做成: {s.lastError}</div>}
+      {s.lastError && !made && <div style={{ ...muted, color: "var(--catfish-orange)" }}><Ico as={Warning} />上次没做成: {s.lastError}</div>}
       {made && (
         <div style={okBox}>
           ✓ 做好了: {when(made.createdAt)}, {made.files} 个文件, {formatBytes(made.bytes)}
@@ -217,7 +219,7 @@ export default function SnapshotsCard() {
           </div>
         </div>
       )}
-      {error && <div style={errBox}>🚫 {error}</div>}
+      {error && <div style={errBox}><Ico as={XCircle} />{error}</div>}
       <div style={{ ...muted, marginTop: 10 }}>
         存在 <code>{st.dir}</code>。换电脑请用「换机迁移」—— 快照只在这台电脑上打得开。
       </div>

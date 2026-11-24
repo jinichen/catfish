@@ -41,6 +41,8 @@ import { backfillNamesOnce, skillNameSet } from "../../lib/tauri_skill_names";
 import type { SkillEntry, SkillNamespace } from "../../types/identity";
 // 11/08 分享治理: 审批人试用装的技能 (trial.json) —— 「试用」标 + 回传试用结果 + 卸掉试用
 import { TrialSkillsList } from "./SkillTrialUi";
+import { BookOpenText, PencilSimple } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 // P3.3.24 (6/11): namespace 中文 label — 给员工看. unknown ns 走原名.
 //   department / external 是当前两个固定 namespace, 其他 (员工自起) 显原名.
@@ -221,8 +223,8 @@ export default function MySkillsCard() {
         {/* P3.3.34 (6/12): 删 📥 装 zip 按钮 + 3 态 banner — 挪去 SkillsMcpCard
             ("已装技能库" tab) 跟"+ 装 URL"并列, 集中所有装入口防割裂.
             这里"我的技能"只显员工自己教会的, 是展示中心, 没装入口. */}
-        <h3 style={{ margin: 0 }} title="你教会鲶鱼的技能 — 数据 100% 你本机, 公司服务器看不到. 想装 zip 外部 skill 切到 '已装技能库' tab.">
-          🧰 我的技能
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }} title="你教会鲶鱼的技能 — 数据 100% 你本机, 公司服务器看不到. 想装 zip 外部 skill 切到 '已装技能库' tab.">
+          我的技能
         </h3>
         {hasAny && (
           <span
@@ -261,12 +263,12 @@ export default function MySkillsCard() {
           {/* P3.3.34 (6/12): 空状态只引导教学 — 装入口挪去"已装技能库"了.
               员工自己教会的 skill 才显这卡; 装的 (zip / URL / 部门 publish) 全归"已装".
               10/20: 原来引导 🎬 录屏, 录屏学习拿掉后改指教学模式. */}
-          还没教过 skill. 聊天框点 <code style={{ fontSize: 11 }}>📚</code> 开教学模式
+          还没教过 skill. 聊天框点 <Ico as={BookOpenText} gap={0} /> 开教学模式
           (或直接说"我教你"), 带鲶鱼做一遍 → 下次说"帮我跑一次"就行.
           <br />
           <span style={{ fontSize: 11, opacity: 0.7 }}>
             (教会的存你本机 <code>~/.catfish/skills/</code>, 公司服务器看不到.
-            想装外部 skill (zip / URL / 部门共享) 切上方 <strong>📦 已装技能库</strong> tab.)
+            想装外部 skill (zip / URL / 部门共享) 切上方 <strong>已装技能库</strong> tab.)
           </span>
         </div>
       )}
@@ -403,7 +405,7 @@ function ShareStatusBar({
           </button>
         </div>
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 6 }}>
-          📋 共享前服务器自动跑 3 道扫描: 凭据 (密码/api key) / PII (身份证/手机号) / 内网 URL.
+          共享前服务器自动跑 3 道扫描: 凭据 (密码/api key) / PII (身份证/手机号) / 内网 URL.
           任一命中拒并提示改法.
         </div>
       </div>
@@ -532,7 +534,7 @@ function NamespaceBlock({
           {NAMESPACE_LABEL[ns.namespace] && (
             <span
               style={{
-                fontSize: 10,
+                fontSize: 11,
                 color: "var(--catfish-text-muted)",
                 fontWeight: 400,
                 fontFamily: "var(--font-mono)",
@@ -584,10 +586,10 @@ function NamespaceBlock({
               ) : (
                 <>
                   <span style={{ color: "var(--catfish-text)", fontWeight: 600 }}>{s.title || s.name}</span>
-                  <button type="button" title="改个好认的名字" onClick={() => setRenaming(s.path)}
-                          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 11, opacity: 0.6 }}>✏️</button>
+                  <button type="button" title="改个好认的名字" aria-label="改名" onClick={() => setRenaming(s.path)}
+                          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "inherit", opacity: 0.6, display: "inline-flex" }}><PencilSimple size={14} aria-hidden="true" /></button>
                   {s.title && s.title !== s.name && (
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, opacity: 0.55 }}>{s.name}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, opacity: 0.55 }}>{s.name}</span>
                   )}
                 </>
               )}

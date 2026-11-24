@@ -180,8 +180,8 @@ export default function TasksCard() {
           marginBottom: "var(--space-3)",
         }}
       >
-        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>
-          📋 后台任务
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>
+          后台任务
         </h3>
         <span style={{ fontSize: "var(--text-xs)", color: "var(--catfish-text-muted)" }}>
           {tasks.length === 0 ? "无任务" : `${tasks.length} 项`}
@@ -329,7 +329,7 @@ async function notifyTaskDone(task: Task) {
       : "";
     try {
       await invoke("notify", {
-        title: `✅ ${label} 完成${elapsed}`,
+        title: `${label} 完成${elapsed}`,
         body: preview || "鲶鱼后台任务执行完毕, 打开 Companion 查看结果.",
       });
     } catch (e) {
@@ -339,7 +339,7 @@ async function notifyTaskDone(task: Task) {
     const errPreview = task.error ? task.error.slice(0, 100) : "(无错误信息)";
     try {
       await invoke("notify", {
-        title: `❌ ${label} 失败`,
+        title: `${label} 失败`,
         body: errPreview,
       });
     } catch (e) {

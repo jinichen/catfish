@@ -131,7 +131,7 @@ export default function ServerConfigCard() {
   if (loading) {
     return (
       <div style={cardStyle}>
-        <h3 style={titleStyle}>🌐 服务器配置</h3>
+        <h3 style={titleStyle}>服务器配置</h3>
         <div style={{ color: "var(--catfish-text-muted)", fontSize: 12 }}>
           读取中…
         </div>
@@ -142,7 +142,7 @@ export default function ServerConfigCard() {
   return (
     <div style={cardStyle}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <h3 style={titleStyle}>🌐 服务器配置</h3>
+        <h3 style={titleStyle}>服务器配置</h3>
         {!editing && (
           <button onClick={startEdit} style={smallBtn}>
             改
@@ -357,12 +357,12 @@ const cardStyle: React.CSSProperties = {
   padding: "var(--space-4)",
   border: "1px solid var(--catfish-border)",
   borderRadius: "var(--radius-md, 6px)",
-  background: "var(--catfish-bg)",
+  background: "var(--catfish-bg-elevated)",
 };
 
 const titleStyle: React.CSSProperties = {
   margin: "0 0 4px",
-  fontSize: 14,
+  fontSize: 15,
   fontWeight: 600,
   color: "var(--catfish-text)",
 };
@@ -405,6 +405,8 @@ const smallBtn: React.CSSProperties = {
   padding: "3px 10px",
   fontSize: 11,
   cursor: "pointer",
+  whiteSpace: "nowrap",
+  flex: "none",
 };
 
 const primaryBtn: React.CSSProperties = {
@@ -416,4 +418,6 @@ const primaryBtn: React.CSSProperties = {
   fontSize: 12,
   cursor: "pointer",
   fontWeight: 500,
+  whiteSpace: "nowrap",
+  flex: "none",
 };

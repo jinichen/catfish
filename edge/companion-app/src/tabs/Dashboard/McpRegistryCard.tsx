@@ -23,6 +23,7 @@ import { mcpOauthTokenSave, mcpOauthTokenDelete } from "../../lib/tauri";
 import {
   PendingMcpSection, fetchPendingMcp, syncMcpTrials, trialSubscriptions, type McpSubmission, type McpSubscription,
 } from "./McpTrialUi";
+import { ArrowClockwise } from "@phosphor-icons/react";
 
 interface ConnectorTool {
   name: string;
@@ -283,11 +284,11 @@ export default function McpRegistryCard() {
         }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
-            🔌 MCP 连接器
+          <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 600 }}>
+            MCP 连接器
             <span
               style={{
-                fontSize: 10,
+                fontSize: 11,
                 fontWeight: 400,
                 color: "var(--catfish-text-muted)",
                 padding: "2px 6px",
@@ -298,7 +299,7 @@ export default function McpRegistryCard() {
               Phase 2 · 订阅可用
             </span>
           </h3>
-          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", paddingLeft: 28 }}>
+          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
             企业可订阅的 MCP 连接器 (Jira / GitLab / Filesystem / Time) — 展开订阅
           </span>
         </div>
@@ -306,6 +307,7 @@ export default function McpRegistryCard() {
           type="button"
           onClick={refresh}
           title="刷新"
+          aria-label="刷新"
           style={{
             background: "transparent",
             border: "none",
@@ -315,7 +317,7 @@ export default function McpRegistryCard() {
             padding: 4,
           }}
         >
-          ↻
+          <ArrowClockwise size={16} aria-hidden="true" />
         </button>
       </div>
 
@@ -396,7 +398,7 @@ export default function McpRegistryCard() {
                     <span style={{ fontWeight: 600 }}>{c.name}</span>
                     <span
                       style={{
-                        fontSize: 10,
+                        fontSize: 11,
                         color: "var(--catfish-bg)",
                         background: STATUS_BADGE_BG[c.status] ?? "#6b7280",
                         padding: "1px 6px",
@@ -405,7 +407,7 @@ export default function McpRegistryCard() {
                     >
                       {c.status}
                     </span>
-                    <span style={{ fontSize: 10, color: "var(--catfish-text-muted)" }}>
+                    <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
                       v{c.version} · {c.ui.category || c.provider}
                     </span>
                   </div>
@@ -413,7 +415,7 @@ export default function McpRegistryCard() {
                     {c.subscribed && (
                       <span
                         style={{
-                          fontSize: 10,
+                          fontSize: 11,
                           color: "var(--catfish-bg)",
                           background: "var(--catfish-cyan)",
                           padding: "1px 6px",
@@ -426,13 +428,13 @@ export default function McpRegistryCard() {
                     )}
                     {c.subscribed && trialSubs.has(c.id) && (
                       <span title="审批人试用订阅 (测试账号); 审核有结果后自动退订"
-                            style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: "1px solid #d97706", color: "#d97706" }}>
+                            style={{ fontSize: 11, padding: "0 6px", borderRadius: 999, border: "1px solid #d97706", color: "#d97706" }}>
                         试用
                       </span>
                     )}
                     <span
                       style={{
-                        fontSize: 10,
+                        fontSize: 11,
                         color: "var(--catfish-text-muted)",
                         padding: "1px 6px",
                         background: "var(--catfish-bg-elevated)",
@@ -443,13 +445,13 @@ export default function McpRegistryCard() {
                     </span>
                     <span
                       style={{
-                        fontSize: 10,
+                        fontSize: 11,
                         color: "var(--catfish-text-muted)",
                       }}
                     >
                       {c.tools.length} tools
                     </span>
-                    <span style={{ fontSize: 10, opacity: 0.5 }}>{expanded ? "▼" : "▶"}</span>
+                    <span style={{ fontSize: 11, opacity: 0.5 }}>{expanded ? "▼" : "▶"}</span>
                   </div>
                 </div>
 
@@ -469,7 +471,7 @@ export default function McpRegistryCard() {
                           <span
                             key={d}
                             style={{
-                              fontSize: 10,
+                              fontSize: 11,
                               padding: "1px 6px",
                               background: "var(--catfish-bg-elevated)",
                               borderRadius: 3,
@@ -519,7 +521,7 @@ export default function McpRegistryCard() {
                             opacity: busyId === c.id ? 0.5 : 1,
                           }}
                         >
-                          {busyId === c.id ? "处理中…" : "✕ 取消订阅"}
+                          {busyId === c.id ? "处理中…" : "取消订阅"}
                         </button>
                       ) : (
                         <button
@@ -531,8 +533,8 @@ export default function McpRegistryCard() {
                             padding: "4px 8px",
                             border: "1px solid var(--catfish-cyan)",
                             borderRadius: 4,
-                            background: "var(--catfish-cyan)",
-                            color: "var(--catfish-bg)",
+                            background: "transparent",
+                            color: "var(--catfish-cyan)",
                             fontSize: 11,
                             cursor: busyId === c.id ? "wait" : "pointer",
                             opacity: busyId === c.id ? 0.5 : 1,
@@ -563,7 +565,7 @@ export default function McpRegistryCard() {
       {data && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: 11,
             color: "var(--catfish-text-muted)",
             textAlign: "center",
             marginTop: 8,

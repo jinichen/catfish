@@ -10,6 +10,8 @@ import { useEffect, useState } from "react";
 import type { ChainStep, ParamSpec, RunSummary } from "../../lib/tauri_workflows";
 import { Overlay, muted } from "../Collab/formsUi";
 import { Btn, ErrorLine, inputStyle, itemStyle } from "../Collab/roomLinkUi";
+import { Bell, CheckCircle } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 export function StepChain({ chain }: { chain: ChainStep[] }) {
   return (
@@ -25,7 +27,7 @@ export function StepChain({ chain }: { chain: ChainStep[] }) {
               color: c.outward ? "var(--status-warn, #d97706)" : "var(--catfish-text)", whiteSpace: "nowrap",
             }}
           >
-            {c.outward ? "🔔 " : ""}{c.cond ? "◇ " : ""}{c.label}{c.each ? " (逐条)" : ""}
+            {c.outward && <Ico as={Bell} size={12} title="对外" />}{c.cond ? "◇ " : ""}{c.label}{c.each ? " (逐条)" : ""}
           </span>
         </span>
       ))}
@@ -213,14 +215,14 @@ export function RunLine({ r, onResume, onAsk, onDelete }: {
         </span>
       </div>
       <span style={muted}>{localTime(r.created_at)}</span>
-      {r.status === "done" && r.outcome && <span style={{ fontSize: 12 }}>✅ {r.outcome}</span>}
+      {r.status === "done" && r.outcome && <span style={{ fontSize: 12 }}><Ico as={CheckCircle} style={{ color: "var(--status-ok)" }} />{r.outcome}</span>}
       {r.status === "waiting_confirm" && r.pending && (
         <span style={{ fontSize: 12, color: "var(--status-warn, #d97706)" }}>停在「{r.pending.label}」—— 鲶鱼页面顶上点确认才继续</span>
       )}
       {r.status === "failed" && (
         <>
           <span style={{ fontSize: 12 }}>{r.error_human ?? `停在 ${r.failed_step}: ${r.error ?? ""}`}</span>
-          {r.error_fix && <span style={{ ...muted, color: "var(--status-warn, #d97706)" }}>👉 {FIX_TEXT[r.error_fix]}</span>}
+          {r.error_fix && <span style={{ ...muted, color: "var(--status-warn, #d97706)" }}>{FIX_TEXT[r.error_fix]}</span>}
           {r.error_human && r.error && (
             <button type="button" onClick={() => setRaw(!raw)}
                     style={{ ...muted, background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
@@ -229,7 +231,7 @@ export function RunLine({ r, onResume, onAsk, onDelete }: {
           )}
           <div style={{ display: "flex", gap: 8 }}>
             <Btn kind="ghost" onClick={onResume}>从这一步重跑</Btn>
-            <Btn kind="ghost" onClick={onAsk}>🙋 让小鲶看看</Btn>
+            <Btn kind="ghost" onClick={onAsk}>让小鲶看看</Btn>
           </div>
         </>
       )}

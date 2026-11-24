@@ -20,31 +20,34 @@ import { muted } from "../Collab/formsUi";
 import { cardStyle, itemStyle } from "../Collab/roomLinkUi";
 import DisabledSkillsPanel from "./DisabledSkillsPanel";
 import SkillsMcpCard from "./SkillsMcpCard";
+import type { Icon } from "@phosphor-icons/react";
+import { BookOpen, CalendarBlank, ChatCircle, Envelope, FileText, Globe, PencilLine, Repeat } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 interface Scene {
   key: string;
-  icon: string;
+  icon: Icon;
   title: string;
   what: string;
   examples: string[];
 }
 
 export const SCENES: Scene[] = [
-  { key: "email", icon: "📧", title: "邮件", what: "搜邮件、读正文和附件、起草回复 (不会替你发)",
+  { key: "email", icon: Envelope, title: "邮件", what: "搜邮件、读正文和附件、起草回复 (不会替你发)",
     examples: ["帮我找一下这周跟资质有关的邮件", "最近那封报价邮件的附件说了什么"] },
-  { key: "docs", icon: "📄", title: "文档表格", what: "读写 Word / Excel / PPT / PDF, 按模板生成报告",
+  { key: "docs", icon: FileText, title: "文档表格", what: "读写 Word / Excel / PPT / PDF, 按模板生成报告",
     examples: ["把这份 PDF 的要点整理成一页 Word", "帮我做一份本周工作汇报的 PPT"] },
-  { key: "meeting", icon: "🗓", title: "会议日程", what: "会议录音转纪要、建提醒和日程、列待办",
+  { key: "meeting", icon: CalendarBlank, title: "会议日程", what: "会议录音转纪要、建提醒和日程、列待办",
     examples: ["把刚才的会议录音整理成纪要", "明天下午三点提醒我交周报"] },
-  { key: "wiki", icon: "📚", title: "知识库", what: "查公司资料和你存过的东西, 好的回答存进知识库",
+  { key: "wiki", icon: BookOpen, title: "知识库", what: "查公司资料和你存过的东西, 好的回答存进知识库",
     examples: ["公司的差旅报销标准是什么", "把刚才这段说明存到知识库"] },
-  { key: "web", icon: "🌐", title: "网页操作", what: "登录内网系统、填表、下载文件 —— 你教过一次就会",
+  { key: "web", icon: Globe, title: "网页操作", what: "登录内网系统、填表、下载文件 —— 你教过一次就会",
     examples: ["登录 EIS 看看有没有待办", "我想教你做一件网页上的事"] },
-  { key: "writing", icon: "✍️", title: "写作", what: "周报、汇报、通知, 照你的文风写",
+  { key: "writing", icon: PencilLine, title: "写作", what: "周报、汇报、通知, 照你的文风写",
     examples: ["帮我写这周的周报", "起草一份给领导的情况汇报"] },
-  { key: "wechat", icon: "💬", title: "微信", what: "重要的事推送到你微信, 查微信聊天记录",
+  { key: "wechat", icon: ChatCircle, title: "微信", what: "重要的事推送到你微信, 查微信聊天记录",
     examples: ["把今天的待办推送到我微信", "找一下上周群里说的开会时间"] },
-  { key: "repeat", icon: "🔁", title: "反复做的事", what: "串成工作流, 以后一句话或定时整条跑完 (见「工作流」页)",
+  { key: "repeat", icon: Repeat, title: "反复做的事", what: "串成工作流, 以后一句话或定时整条跑完 (见「工作流」页)",
     examples: ["每周一帮我把资质相关的邮件理一下, 建个任务"] },
 ];
 
@@ -62,9 +65,9 @@ function exampleOf(s: SkillEntry): string | null {
 function Example({ text, onSend }: { text: string; onSend: (t: string) => void }) {
   return (
     <button type="button" onClick={() => onSend(text)} title="带到工作台, 直接发给小鲶"
-            style={{ fontSize: 12, padding: "3px 10px", borderRadius: 999, cursor: "pointer", textAlign: "left",
+            style={{ fontSize: 12, padding: "4px 12px", minHeight: 24, borderRadius: 999, cursor: "pointer", textAlign: "left",
                      border: "1px solid var(--catfish-border)", background: "var(--catfish-bg)", color: "var(--catfish-text)" }}>
-      💬 {text}
+      {text}
     </button>
   );
 }
@@ -90,7 +93,7 @@ export default function SkillsLibraryCard() {
   return (
     <div style={{ ...cardStyle, height: "auto" }}>
       <div>
-        <h3 style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 600 }}>📦 小鲶能帮你做的事</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>小鲶能帮你做的事</h3>
         <div style={{ ...muted, marginTop: 4 }}>
           不用记技能名字, 在工作台直接说就行。点下面的例句试试。
           {installed && ` 部门 / 团队给的技能 ${team.length} 个 · 你教会的 ${mineCount} 个。`}
@@ -100,7 +103,7 @@ export default function SkillsLibraryCard() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10 }}>
         {SCENES.map((sc) => (
           <div key={sc.key} style={{ ...itemStyle, gap: 6 }}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>{sc.icon} {sc.title}</span>
+            <span style={{ fontSize: 14, fontWeight: 600 }}><Ico as={sc.icon} gap={8} />{sc.title}</span>
             <span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{sc.what}</span>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
               {sc.examples.map((ex) => <Example key={ex} text={ex} onSend={send} />)}

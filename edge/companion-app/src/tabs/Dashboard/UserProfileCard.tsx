@@ -12,6 +12,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { toolBridgeCallTool } from "../../lib/tauri";
 import { useAgentStore } from "../../store/agent";
+import { LockSimple } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 interface FieldSummary {
   value: string | null;
@@ -124,7 +126,7 @@ export default function UserProfileCard() {
       padding: "var(--space-4)", height: "min(480px, 50vh)", boxSizing: "border-box", display: "flex", flexDirection: "column",
     }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
-        <h3 style={{ margin: 0 }}>👤 {agentName}对你的画像</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>{agentName}对你的画像</h3>
         {pending > 0 && <span style={{ fontSize: 12, color: "var(--status-warn)" }}>{pending} 项等你确认</span>}
       </div>
       <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)", lineHeight: 1.6 }}>
@@ -162,7 +164,7 @@ export default function UserProfileCard() {
                   <button type="button" onClick={() => toggleLock(field)} disabled={isBusy}
                           title={f.locked ? `解锁后${agentName}可以提议改这一项` : `锁定后${agentName}不再提议改这一项`}
                           style={smallBtn(f.locked ? "var(--catfish-cyan)" : undefined, f.locked ? "var(--catfish-cyan)" : undefined)}>
-                    {f.locked ? "🔒 已锁定" : "锁定"}
+                    {f.locked ? <><Ico as={LockSimple} size={12} />已锁定</> : "锁定"}
                   </button>
                 )}
               </div>

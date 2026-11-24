@@ -11,6 +11,7 @@
 import { useState, useEffect } from "react";
 import { sessionsBulkDeleteShort, type BulkDeleteResult } from "../../lib/tauri";
 import { invoke } from "@tauri-apps/api/core";
+import { X } from "@phosphor-icons/react";
 
 // BL-DASHBOARD-UI-CLEANUP-V3 (5/16 鸿波 '可恢复怎么恢复'): 把上次软删持久化到
 // localStorage, Companion 重启仍能看到"上次软删的 N 个 [恢复]" 按钮. 防"30 秒
@@ -168,12 +169,12 @@ export function SessionCleanupCard() {
         background: "var(--catfish-bg-elevated)",
         border: "1px solid var(--catfish-border)",
         borderRadius: 8,
-        padding: 16,
+        padding: "var(--space-4)",
         fontFamily: "var(--catfish-font-system, -apple-system, sans-serif)",
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>
           清理短 session
         </h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
@@ -279,9 +280,11 @@ export function SessionCleanupCard() {
               fontSize: 14,
               color: "var(--catfish-text-muted)",
               lineHeight: 1,
+              display: "inline-flex",
             }}
+            aria-label="关闭"
           >
-            ✕
+            <X size={16} aria-hidden="true" />
           </button>
         </div>
       )}
@@ -316,7 +319,7 @@ export function SessionCleanupCard() {
                     <span style={{
                       marginLeft: 8,
                       color: "var(--catfish-text-muted)",
-                      fontSize: 10,
+                      fontSize: 11,
                       fontFamily: "var(--catfish-font-mono, ui-monospace, monospace)",
                     }}>
                       {id.slice(-6)}

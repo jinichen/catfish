@@ -41,7 +41,7 @@ export default function SalesPublishCard() {
   const rows = pv?.summary.customers ?? [];
   return (
     <div style={card}>
-      <h3 style={{ margin: 0 }}>发布给主管</h3>
+      <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>发布给主管</h3>
       <div style={muted}>
         把下面这张表发到你部门的知识库, 部门主管在中央管理台「部门」页能看到全组漏斗。只发这些字段,
         <b>不发</b>聊天原话、时间线和联系人电话邮箱; 同部门同事看不到。点了才发, 之后客户有变化再点一次更新。

@@ -68,7 +68,7 @@ export default function WeChatReminderPushCard() {
   const last = prefs.last;
   return (
     <div style={card}>
-      <h3 style={{ margin: 0 }}>提醒同步到微信</h3>
+      <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>提醒同步到微信</h3>
       <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
         小鲶的提醒到点时, 除了电脑右下角的通知, 再推一条到你绑定的微信, 不在电脑前也能收到。只发提醒标题和时间。
       </div>

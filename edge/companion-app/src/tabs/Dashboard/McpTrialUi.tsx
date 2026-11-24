@@ -156,7 +156,7 @@ export function PendingMcpSection({ items, trialSubs, onChanged }: {
                 {s.name} <span style={muted}>v{s.version}</span>
                 {trial && (
                   <span title="你在试用订阅这个连接器 (测试账号); 审核有结果后自动退订"
-                        style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: "1px solid var(--status-warn, #d97706)",
+                        style={{ fontSize: 11, padding: "0 6px", borderRadius: 999, border: "1px solid var(--status-warn, #d97706)",
                                  color: "var(--status-warn, #d97706)" }}>试用</span>
                 )}
               </span>

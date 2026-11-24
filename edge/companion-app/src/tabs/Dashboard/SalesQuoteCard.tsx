@@ -61,7 +61,7 @@ export function PricebookCard() {
   const items = book?.items ?? [];
   return (
     <div style={card}>
-      <h3 style={{ margin: 0 }}>价格表</h3>
+      <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>价格表</h3>
       <div style={muted}>
         导入团队现有的 Excel 价格表。小鲶出报价单按它取价; 价格表里没有的商品会先问你单价, 不会自己编。
         表头写「商品 / 规格 / 单位 / 标价 / 最低价 / 备注」这类常见叫法就能认; 折后低于「最低价」要你确认才出单。
@@ -144,7 +144,7 @@ export function QuoteSettingsCard() {
 
   return (
     <div style={card}>
-      <h3 style={{ margin: 0 }}>报价单</h3>
+      <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>报价单</h3>
       <div style={muted}>报价单上的我方信息和条款。跟小鲶说「给 X 公司出个报价」就会按这里生成 Excel; 只生成文件, 发不发由你。</div>
       {field("报价方", "company", "我方公司全称")}
       {field("联系人", "contact", "留空 = 用客户档案里的负责销售")}

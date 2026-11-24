@@ -27,6 +27,8 @@ import {
 } from "../../lib/tauri";
 import { COMPANY_GROUP, groupOf, hasHubUpdate, sortGroups, splitMine, toolResultError } from "./wikiHubStatus";
 import { cleanPreview, personLabel, WikiDocPreview } from "./WikiHubPreview";
+import { Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 interface WikiDoc {
   namespace: string;
@@ -75,7 +77,7 @@ function ScopeBadge({ doc }: { doc: Pick<WikiDoc, "namespace" | "visible_to" | "
     return null;
   }
   return (
-    <span title={title} style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: `1px solid ${tone}`, color: tone,
+    <span title={title} style={{ fontSize: 11, padding: "0 6px", borderRadius: 999, border: `1px solid ${tone}`, color: tone,
                                  whiteSpace: "nowrap", marginLeft: 6 }}>
       {label}
     </span>
@@ -92,7 +94,7 @@ function ReviewBadge({ status, note, by }: { status?: string | null; note?: stri
     ? "部门同事分享的, 主管还没审过 —— 能看能装, 内容以主管审过为准"
     : `${by ? `${by} ` : ""}撤回了这页${note ? `: ${note}` : ""}`;
   return (
-    <span title={title} style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: `1px solid ${tone}`, color: tone,
+    <span title={title} style={{ fontSize: 11, padding: "0 6px", borderRadius: 999, border: `1px solid ${tone}`, color: tone,
                                  whiteSpace: "nowrap", marginLeft: 6 }}>
       {label}
     </span>
@@ -295,8 +297,8 @@ export default function WikiHubCard() {
         }}
       >
         {/* P3.3.38 (6/12): "Wiki Hub" → "知识库" 中文化 */}
-        <h3 style={{ margin: 0 }}>
-          📚 部门知识库
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>
+          部门知识库
           <span
             style={{
               fontSize: 12,
@@ -319,7 +321,7 @@ export default function WikiHubCard() {
               }}
               title={`${staleCount} 条已被撤回 (灰色显示, 无法安装)`}
             >
-              ⏸ {staleCount} 已撤回
+              {staleCount} 已撤回
             </span>
           )}
           {pendingCount > 0 && (
@@ -350,7 +352,7 @@ export default function WikiHubCard() {
               }}
               title={`${installedStaleCount} 条你本机有副本, 但原作者已撤回 — 你可以决定是否本机也卸 (manifesto 公理 4)`}
             >
-              ⚠ {installedStaleCount} 你装的已撤回
+              <Ico as={Warning} size={12} />{installedStaleCount} 你装的已撤回
             </span>
           )}
           {updateCount > 0 && (
@@ -366,7 +368,7 @@ export default function WikiHubCard() {
               }}
               title={`${updateCount} 条你装的副本, 发布人后来又改过`}
             >
-              ↻ {updateCount} 有更新
+              {updateCount} 有更新
             </span>
           )}
         </h3>
@@ -392,7 +394,7 @@ export default function WikiHubCard() {
             color: toast.kind === "ok" ? "#16a34a" : "#dc2626",
           }}
         >
-          {toast.kind === "ok" ? "✓ " : "⚠ "}{toast.text}
+          {toast.kind === "ok" ? "✓ " : <Ico as={Warning} />}{toast.text}
         </div>
       )}
 
@@ -564,7 +566,7 @@ function WikiRow({
           }}
           title={withdrawnNote || ""}
         >
-          ⚠ {withdrawnBy}已撤回 ({humanTime(withdrawnAt)}){withdrawnNote ? `, 原因: ${withdrawnNote}` : ""}. 你本机仍有副本
+          <Ico as={Warning} />{withdrawnBy}已撤回 ({humanTime(withdrawnAt)}){withdrawnNote ? `, 原因: ${withdrawnNote}` : ""}. 你本机仍有副本
           (~/.catfish/wiki-shared/{doc.namespace}/{doc.file_id}.md), 自己决定是否卸. (中央不强制清你本机)
           {installed.reviewStatus === "withdrawn" && " 本机副本已标「已撤回」, 搜索默认不列."}
         </div>
@@ -574,11 +576,10 @@ function WikiRow({
             color: "var(--catfish-text-muted)",
             fontSize: 12,
             marginBottom: "var(--space-1)",
-            fontStyle: "italic",
           }}
           title={withdrawnNote || ""}
         >
-          ⏸ 已被{withdrawnBy}撤回 ({humanTime(withdrawnAt)}). 内容已清零, 收不进资料库了.
+          已被{withdrawnBy}撤回 ({humanTime(withdrawnAt)}). 内容已清零, 收不进资料库了.
         </div>
       ) : (
         doc.description_preview && (
@@ -607,7 +608,7 @@ function WikiRow({
         }}
       >
         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={doc.published_by}>
-          👤 {personLabel(doc.published_by, humanTime(doc.updated_at || doc.published_at),
+          {personLabel(doc.published_by, humanTime(doc.updated_at || doc.published_at),
                           doc.review_status === "approved" && !doc.legacy ? doc.reviewed_by : null)}
         </span>
         <span style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
@@ -641,7 +642,7 @@ function WikiRow({
             }}
             title="把本机副本标成「已撤回」(不删文件; 搜索默认不再列出)"
           >
-            {installing ? "标记中…" : "↻ 标成已撤回"}
+            {installing ? "标记中…" : "标成已撤回"}
           </button>
         )}
         {!stale && isInstalled && updateAvailable && (
@@ -661,7 +662,7 @@ function WikiRow({
             }}
             title={`发布人 ${humanTime(doc.updated_at)} 改过, 你装的是 ${humanTime(installed.hubUpdatedAt || installed.installedAt)} 的版本`}
           >
-            {installing ? "更新中…" : "↻ 更新"}
+            {installing ? "更新中…" : "更新"}
           </button>
         )}
         {!stale && isInstalled && !updateAvailable && (
@@ -697,7 +698,7 @@ function WikiRow({
             }}
             title="主管审过了, 拉一次把本机副本的「待审」标去掉"
           >
-            {installing ? "更新中…" : "↻ 更新"}
+            {installing ? "更新中…" : "更新"}
           </button>
         )}
         {!stale && !isInstalled && (

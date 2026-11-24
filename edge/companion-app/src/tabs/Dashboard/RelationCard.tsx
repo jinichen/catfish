@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { useAgentStore } from "../../store/agent";
+import { ArrowClockwise } from "@phosphor-icons/react";
 
 interface JournalEntry {
   title: string;
@@ -92,7 +93,7 @@ export default function RelationCard() {
           marginBottom: "var(--space-3)",
         }}
       >
-        <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
+        <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 600 }}>
           <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
           {agentName}对你的印象
         </h3>
@@ -102,6 +103,7 @@ export default function RelationCard() {
           type="button"
           onClick={refresh}
           title="刷新"
+          aria-label="刷新"
           style={{
             background: "transparent",
             border: "none",
@@ -111,7 +113,7 @@ export default function RelationCard() {
             padding: 4,
           }}
         >
-          ↻
+          <ArrowClockwise size={16} aria-hidden="true" />
         </button>
       </div>
 
@@ -158,7 +160,6 @@ export default function RelationCard() {
               style={{
                 fontSize: 12,
                 color: "var(--catfish-text-muted)",
-                fontStyle: "italic",
                 padding: "var(--space-3) 0",
               }}
             >
@@ -310,7 +311,7 @@ function RelationEntry({ title, body }: { title: string; body: string }) {
       {hasMore && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: 11,
             color: "var(--catfish-text-muted)",
             textAlign: "right",
             marginTop: 4,

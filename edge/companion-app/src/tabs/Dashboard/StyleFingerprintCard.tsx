@@ -81,7 +81,7 @@ export default function StyleFingerprintCard() {
       padding: "var(--space-4)", height: "min(480px, 50vh)", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "var(--space-3)",
     }}>
       <div>
-        <h3 style={{ margin: 0 }}>✍️ 你的文书风格</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>你的文书风格</h3>
         <div style={{ ...muted, marginTop: 4 }}>
           挑 3–5 篇你自己写得满意的周报、汇报放进来。你让{agentName}写正式文书时, 它会照这几篇的写法来。范文只存在这台电脑上。
         </div>

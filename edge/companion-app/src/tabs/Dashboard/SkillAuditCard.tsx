@@ -10,6 +10,8 @@
 
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ThumbsDown, ThumbsUp, Warning } from "@phosphor-icons/react";
+import { Ico } from "../../components/icons";
 
 interface SkillQualityScore {
   skill_path: string;
@@ -80,7 +82,7 @@ export default function SkillAuditCard() {
         background: "var(--catfish-bg-elevated)",
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
-        padding: "var(--space-3) var(--space-4)",
+        padding: "var(--space-4)",
         gridColumn: "1 / -1",  // 整行宽 (跟 AuditCard 一致, 上下连排)
       }}
     >
@@ -92,8 +94,7 @@ export default function SkillAuditCard() {
           marginBottom: "var(--space-2)",
         }}
       >
-        <span style={{ fontSize: 16 }}>📑</span>
-        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Skill 调用审计</h3>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Skill 调用审计</h3>
         {summary && summary.today_count > 0 && (
           <span
             style={{
@@ -118,7 +119,7 @@ export default function SkillAuditCard() {
       </div>
 
       {error && (
-        <div style={{ color: "var(--status-err)", fontSize: 11 }}>⚠ {error}</div>
+        <div style={{ color: "var(--status-err)", fontSize: 11 }}><Ico as={Warning} />{error}</div>
       )}
 
       {!summary && !error && (
@@ -144,7 +145,7 @@ export default function SkillAuditCard() {
           {/* 最近失败 — 只在有失败时显示 */}
           {summary.failed_skills.length > 0 && (
             <div style={{ marginBottom: 4, color: "var(--status-warn)" }}>
-              ⚠ 近 24h 失败 ({summary.failed_skills.length}):{" "}
+              <Ico as={Warning} />近 24h 失败 ({summary.failed_skills.length}):{" "}
               {summary.failed_skills
                 .slice(0, 2)
                 .map((f) => f.skill_path)
@@ -156,7 +157,7 @@ export default function SkillAuditCard() {
           {summary.recently_shipped.length > 0 && (
             <div style={{ marginBottom: 2 }}>
               <span style={{ color: "var(--catfish-cyan)" }}>
-                🆕 最近 ship ({summary.recently_shipped.length})
+                最近 ship ({summary.recently_shipped.length})
               </span>
               : <code>{summary.recently_shipped.slice(0, 4).join(", ")}</code>
               {summary.recently_shipped.length > 4 &&
@@ -167,7 +168,7 @@ export default function SkillAuditCard() {
           {/* ⚠ 老 skill 真没用过 (audit 无记录, ≥7 天) — 评估删/留 */}
           {summary.never_called_old.length > 0 && (
             <div style={{ marginBottom: 2, color: "var(--status-warn)" }}>
-              ⚠ 老 skill 没用过 ({summary.never_called_old.length}):{" "}
+              <Ico as={Warning} />老 skill 没用过 ({summary.never_called_old.length}):{" "}
               <code>{summary.never_called_old.slice(0, 3).join(", ")}</code>
               {summary.never_called_old.length > 3 &&
                 ` +${summary.never_called_old.length - 3}`}
@@ -178,7 +179,7 @@ export default function SkillAuditCard() {
           {/* 💤 调过但 30 天没调 — 老 skill 评估 */}
           {summary.stale_30d.length > 0 && (
             <div style={{ marginBottom: 2 }}>
-              💤 30 天未用 ({summary.stale_30d.length}):{" "}
+              30 天未用 ({summary.stale_30d.length}):{" "}
               <code>{summary.stale_30d.slice(0, 3).join(", ")}</code>
               {summary.stale_30d.length > 3 && ` +${summary.stale_30d.length - 3}`}
             </div>
@@ -194,7 +195,7 @@ export default function SkillAuditCard() {
             <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px dashed var(--catfish-border)" }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>
                 {/* P3.5.80 (7/28): 去掉内部编号 BL-MM12 */}
-                📊 综合质量分（前 {Math.min(5, summary.quality_scores.length)} 名）
+                综合质量分（前 {Math.min(5, summary.quality_scores.length)} 名）
               </div>
               {summary.quality_scores.slice(0, 5).map((q) => (
                 <div
@@ -217,7 +218,7 @@ export default function SkillAuditCard() {
                       color: "white",
                       borderRadius: 3,
                       fontWeight: 600,
-                      fontSize: 10,
+                      fontSize: 11,
                       textAlign: "center",
                     }}
                   >
@@ -226,17 +227,18 @@ export default function SkillAuditCard() {
                   <code style={{ fontSize: 11, flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
                     {q.skill_path}
                   </code>
-                  <span style={{ color: "var(--catfish-text-muted)", fontSize: 10 }}>
+                  <span style={{ color: "var(--catfish-text-muted)", fontSize: 11 }}>
                     {q.call_count} 次
                     {q.thumbs_up + q.thumbs_down > 0 && (
                       <span style={{ marginLeft: 4 }}>
-                        👍{q.thumbs_up} 👎{q.thumbs_down}
+                        <Ico as={ThumbsUp} size={12} gap={2} title="有用" />{q.thumbs_up}{" "}
+                        <Ico as={ThumbsDown} size={12} gap={2} title="没用" />{q.thumbs_down}
                       </span>
                     )}
                   </span>
                 </div>
               ))}
-              <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginTop: 2 }}>
+              <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 2 }}>
                 公式: 50×成功率 + 30×频次(归一化) + 20×员工评分. 鼠标悬停看明细.
               </div>
             </div>

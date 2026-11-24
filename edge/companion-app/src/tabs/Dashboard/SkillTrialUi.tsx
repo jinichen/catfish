@@ -23,7 +23,7 @@ export function TrialTag({ expires, by }: { expires?: number; by?: string }) {
   const days = expires ? trialDaysLeft(expires) : null;
   return (
     <span title={`审批人试用安装${by ? ` (${by})` : ""}${days !== null ? `, 还有 ${days} 天到期` : ""}; 只有你能用, 不会给同事, 也不能再发布`}
-          style={{ fontSize: 10, padding: "0 6px", borderRadius: 999, border: "1px solid var(--status-warn, #d97706)",
+          style={{ fontSize: 11, padding: "0 6px", borderRadius: 999, border: "1px solid var(--status-warn, #d97706)",
                    color: "var(--status-warn, #d97706)", whiteSpace: "nowrap" }}>
       试用{days !== null && days <= 2 ? ` · ${days} 天到期` : ""}
     </span>

@@ -15,7 +15,7 @@ describe("portal diagnostics", () => {
     mocks.fetch.mockRejectedValue("SEC_E_UNTRUSTED_ROOT (0x80090325)");
     await act(async () => { render(<WebPortalLink />); });
     expect(screen.getByText(/客户端尚未信任服务器证书/)).toBeTruthy();
-    fireEvent.click(screen.getByText("📦 资源市场"));
+    fireEvent.click(screen.getByText("资源市场"));
     await act(async () => {});
     expect(mocks.open).toHaveBeenCalledWith("https://127.0.0.1/market");
   });
