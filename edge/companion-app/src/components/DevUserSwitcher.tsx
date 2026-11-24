@@ -51,7 +51,7 @@ export default function DevUserSwitcher() {
     <div
       style={{
         background: "var(--catfish-bg-elevated)",
-        borderBottom: "1px solid var(--catfish-warning, #d70)",
+        borderBottom: "1px solid var(--status-warn)",
         padding: "var(--space-2) var(--space-4)",
         display: "flex",
         alignItems: "center",
@@ -60,8 +60,8 @@ export default function DevUserSwitcher() {
       }}
       title="dev 模式多账号切换器, 生产模式自动隐藏"
     >
-      <span style={{ fontFamily: "var(--font-mono)", color: "var(--catfish-warning, #d70)" }}>
-        🧪 DEV
+      <span style={{ fontFamily: "var(--font-mono)", color: "var(--status-warn)" }}>
+        DEV
       </span>
       <span style={{ color: "var(--catfish-text-muted)" }}>测试账号:</span>
       <select

@@ -22,7 +22,10 @@
  * warning. 平时 OIDC 正常登录 → AuthBanner 静默, 不打扰员工.
  */
 
+import { Warning } from "@phosphor-icons/react";
+
 import { useAuth } from "../hooks/useAuth";
+import { Ico } from "./icons";
 
 const BANNER_BASE: React.CSSProperties = {
   borderBottom: "1px solid",
@@ -42,12 +45,12 @@ export default function AuthBanner() {
       <div
         style={{
           ...BANNER_BASE,
-          background: "rgba(56, 189, 248, 0.15)",
-          borderBottomColor: "rgba(56, 189, 248, 0.4)",
-          color: "#38bdf8",
+          background: "var(--catfish-hint-blue-bg)",
+          borderBottomColor: "var(--catfish-hint-blue-border)",
+          color: "var(--catfish-hint-blue-text)",
         }}
       >
-        🔄 正在续登... (浏览器会自动打开 SSO 页面, 已登录的话秒过)
+        正在续登... (浏览器会自动打开 SSO 页面, 已登录的话秒过)
       </div>
     );
   }
@@ -64,15 +67,15 @@ export default function AuthBanner() {
     <div
       style={{
         ...BANNER_BASE,
-        background: "rgba(251, 191, 36, 0.15)",
-        borderBottomColor: "rgba(251, 191, 36, 0.4)",
-        color: "#fbbf24",
+        background: "var(--catfish-hint-amber-bg)",
+        borderBottomColor: "var(--catfish-hint-amber-border)",
+        color: "var(--catfish-hint-amber-text)",
       }}
     >
       {/* P3.5.80 (7/28): 原文是 "生产环境应该 unset CATFISH_DEV_TOKEN, 走真 SSO" ——
           员工不知道 unset 是什么, 也没有权限做. 这条横幅的目的是让员工知道
           "现在不是正式登录状态", 具体怎么切回去是 IT 的事. */}
-      ⚠ 当前是<strong>临时登录</strong>，不是公司账号登录。演示或应急时才用，正式使用请找 IT 切回公司账号。
+      <Ico as={Warning} />当前是<strong>临时登录</strong>，不是公司账号登录。演示或应急时才用，正式使用请找 IT 切回公司账号。
     </div>
   );
 }

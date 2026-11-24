@@ -13,6 +13,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ServerReachableState } from "../hooks/useServerReachable";
+import StatusDot from "./StatusDot";
 import { needsPairing, pairServerCertificate, parseConnectLink, PAIRING_CODE_PLACEHOLDER } from "../lib/serverPairing";
 
 interface ServerSetupCardProps {
@@ -148,13 +149,13 @@ export default function ServerSetupCard({ state, onRetest, onSaved }: ServerSetu
         >
           <div style={{ marginBottom: 6 }}>
             {state.checking ? (
-              <span>⏳ 正在检测服务器连通性…</span>
+              <span>正在检测服务器连通性…</span>
             ) : (
               <>
                 <span style={{ marginRight: 12 }}>
-                  {state.identityReachable ? "🟢" : "🔴"} 认证服务
+                  <StatusDot status={state.identityReachable ? "ok" : "err"} label="认证服务" />
                 </span>
-                <span>{state.gatewayReachable ? "🟢" : "🔴"} 网关</span>
+                <StatusDot status={state.gatewayReachable ? "ok" : "err"} label="网关" />
               </>
             )}
           </div>
@@ -359,7 +360,7 @@ export default function ServerSetupCard({ state, onRetest, onSaved }: ServerSetu
         </div>
 
         <p style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 16, marginBottom: 0 }}>
-          💡 单机测试: 网关 <code>http://127.0.0.1:8999</code>, 认证服务{" "}
+          单机测试: 网关 <code>http://127.0.0.1:8999</code>, 认证服务{" "}
           <code>http://127.0.0.1:8998</code>
         </p>
       </div>

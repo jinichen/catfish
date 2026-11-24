@@ -50,6 +50,7 @@ export function Buttons({
           fontSize: 12,
           cursor: "pointer",
           padding: 4,
+          whiteSpace: "nowrap",
         }}
       >
         {skipLabel}
@@ -66,6 +67,8 @@ export function Buttons({
               cursor: "pointer",
               color: "var(--catfish-text)",
               fontSize: 13,
+              whiteSpace: "nowrap",
+              flex: "none",
             }}
           >
             ← 返回
@@ -83,6 +86,8 @@ export function Buttons({
             cursor: nextDisabled ? "not-allowed" : "pointer",
             fontSize: 13,
             fontWeight: 500,
+            whiteSpace: "nowrap",
+            flex: "none",
             opacity: nextDisabled ? 0.6 : 1,
           }}
         >

@@ -4,6 +4,7 @@
  * 新电脑收齐后在那边导入。离开这一页不打断 (后台接着传)。
  */
 import * as React from "react";
+import { Camera, CheckCircle, Warning } from "@phosphor-icons/react";
 
 import {
   directFromQr,
@@ -19,6 +20,7 @@ import {
 } from "../lib/deviceMigration";
 import { ProgressBar } from "./DeviceMigrationDirectReceive";
 import { errBox, inputStyle, okBox, plainBtn, primaryBtn } from "./DeviceMigrationParts";
+import { Ico } from "./icons";
 import QrScanner from "./QrScanner";
 
 const muted: React.CSSProperties = { fontSize: 11, color: "var(--catfish-text-muted)" };
@@ -82,8 +84,8 @@ export default function DeviceMigrationDirectSend({ files, filesBytes }: { files
     if (st.state === "done") {
       return (
         <div style={okBox}>
-          <div style={{ fontWeight: 600, color: "#16A34A" }}>
-            ✓ 已经传到 {st.toDevice || "新电脑"}: {st.files} 个文件, {formatBytes(st.size)}
+          <div style={{ fontWeight: 600, color: "var(--status-ok)" }}>
+            <Ico as={CheckCircle} />已经传到 {st.toDevice || "新电脑"}: {st.files} 个文件, {formatBytes(st.size)}
           </div>
           <div>到新电脑上点「开始导入」。这台电脑上的数据没有删除; 建议新电脑导入成功后, 在这台上退出登录。</div>
           <button type="button" style={{ ...plainBtn, marginTop: 6 }} onClick={() => void reset()}>
@@ -95,7 +97,7 @@ export default function DeviceMigrationDirectSend({ files, filesBytes }: { files
     if (st.state === "failed") {
       return (
         <div>
-          <div style={errBox}>🚫 {st.error ?? "直传没成功"}</div>
+          <div style={errBox}><Ico as={Warning} />{st.error ?? "直传没成功"}</div>
           <button type="button" style={{ ...plainBtn, marginTop: 8 }} onClick={() => void reset()}>
             重新来
           </button>
@@ -146,7 +148,7 @@ export default function DeviceMigrationDirectSend({ files, filesBytes }: { files
             不一样 / 换一台
           </button>
         </div>
-        {error && <div style={errBox}>🚫 {error}</div>}
+        {error && <div style={errBox}><Ico as={Warning} />{error}</div>}
       </div>
     );
   }
@@ -160,7 +162,7 @@ export default function DeviceMigrationDirectSend({ files, filesBytes }: { files
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
         <button type="button" style={primaryBtn(busy)} onClick={() => { setError(null); setMode("scan"); }} disabled={busy}>
-          📷 扫新电脑上的二维码
+          <Ico as={Camera} />扫新电脑上的二维码
         </button>
         <button type="button" style={plainBtn} onClick={() => { setError(null); setMode("code"); }} disabled={busy}>
           输配对码
@@ -197,7 +199,7 @@ export default function DeviceMigrationDirectSend({ files, filesBytes }: { files
           </button>
         </div>
       )}
-      {error && <div style={errBox}>🚫 {error}</div>}
+      {error && <div style={errBox}><Ico as={Warning} />{error}</div>}
     </div>
   );
 }

@@ -3,7 +3,9 @@
  *   · 本机的 (知识库 / 文件 / 邮件) 一行 —— sourcesLine
  *   · 上网查到的 (tool-bridge web_lookup) 列标题 + 网站, 点开用系统浏览器看原文
  */
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { Globe } from "@phosphor-icons/react";
+import { Ico } from "./icons";
 
 export type AskSource = { kind: string; title: string; where: string };
 
@@ -27,14 +29,14 @@ async function openLink(url: string) {
   } catch { /* 不在 Tauri 里 / 打不开就算了 */ }
 }
 
-export function AskSources({ sources, style, localIcon = "" }: { sources?: AskSource[]; style: CSSProperties; localIcon?: string }) {
+export function AskSources({ sources, style, localIcon = "" }: { sources?: AskSource[]; style: CSSProperties; localIcon?: ReactNode }) {
   const web = (sources ?? []).filter(isWeb);
   const line = sourcesLine(sources);
   return (
     <>
       {web.length > 0 && (
         <div style={style}>
-          🌐 网上查到的:{" "}
+          <Ico as={Globe} />网上查到的:{" "}
           {web.map((s, i) => (
             <span key={s.where}>
               {i > 0 && " · "}
