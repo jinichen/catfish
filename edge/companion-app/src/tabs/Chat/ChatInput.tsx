@@ -18,6 +18,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { ArrowBendDownLeft, Microphone, Paperclip } from "@phosphor-icons/react";
 import type { Attachment } from "../../types/chat";
 import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
+import { useChatStore } from "../../store/chat";
+import { draftKey, loadDraft, saveDraft } from "../../store/composerDraft";  // 11/24 切页不丢草稿
 import { useAgentStore } from "../../store/agent";  // BL-E11 后续: 员工自定义名
 // 5/20 拆: useTeachingStore / useAutoContinueStore / useChatStore 移到子组件
 // P3.5.167 (7/3 鸿波拍板 B): 教学入口叠成 📚 EduPopover 省空间。
@@ -80,8 +82,22 @@ export default function ChatInput({
 }: Props) {
   // BL-E11 后续: placeholder 用员工自定义名 ("跟老李说话…")
   const agentName = useAgentStore((s) => s.name);
-  const [text, setText] = useState("");
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // 11/24 鸿波「切换到其他 TAB 再切回来输入被清空了」: 字和附件存在组件外面 (store/composerDraft), 按会话分开 ——
+  // 切页时这个组件会卸掉, 回来从那里接着; 换会话换成那个会话自己的草稿
+  const sessionKey = draftKey(useChatStore((s) => s.persistedSessionId));
+  const [text, setText] = useState(() => loadDraft(sessionKey).text);
+  const [attachments, setAttachments] = useState<Attachment[]>(() => loadDraft(sessionKey).attachments);
+  const draftKeyRef = useRef(sessionKey);
+  useEffect(() => {
+    if (draftKeyRef.current === sessionKey) return;
+    draftKeyRef.current = sessionKey;
+    const d = loadDraft(sessionKey);
+    setText(d.text);
+    setAttachments(d.attachments);
+  }, [sessionKey]);
+  useEffect(() => {
+    saveDraft(draftKeyRef.current, { text, attachments });
+  }, [text, attachments]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [wechatStage, setWechatStage] = useState<WeChatStage | null>(null);
