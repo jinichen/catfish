@@ -22,7 +22,7 @@ export interface QueuedMessage {
 
 // P3.3.19 C Phase 2b (6/11): db→chat 转换 + tool result join 抽到 lib/sessionMessages
 import {
-  loadSessionMessagesAsChat,
+  keepStableIds, loadSessionMessagesAsChat,
   loadSessionMessagesAsChatAsync,
 } from "../lib/sessionMessages";
 
@@ -337,7 +337,7 @@ export const useChatStore = create<ChatState>((set) => ({
   clearQueue: () => set({ queue: [] }),
   loadSession: (detail) => {
     noteSessionLoaded(detail.meta.id); // 10/18: 打开旧会话 = 切回当时聊的那个人 (专家 / 小鲶)
-    return set({
+    return set((s) => ({
       // P27.3 真根因 fix (6/5 鸿波 audit 后): dbMessageToChat 1-to-1 map 丢了
       // tool_calls[i].result. state.db 里 tool result 存在另一行 role:"tool" +
       // tool_call_id 的 message content. 历史加载时必须 join 回 tool_calls[i].result,
@@ -346,7 +346,10 @@ export const useChatStore = create<ChatState>((set) => ({
       // 25h+ 一直 debug "button 不弹" — 真根因不是 UI render 路径, 是历史加载丢字段.
       // P3.3.19 C Phase 2b (6/11): 整段 logic 抽到 lib/sessionMessages.ts
       // loadSessionMessagesAsChat. useTaskChat 共用. 行为不变.
-      messages: loadSessionMessagesAsChat(detail),
+      // 11/24: 重读的是屏幕上这同一个会话 → 对得上的消息沿用原来的 id, 原地更新不闪
+      messages: s.persistedSessionId === detail.meta.id
+        ? keepStableIds(s.messages, loadSessionMessagesAsChat(detail))
+        : loadSessionMessagesAsChat(detail),
       isStreaming: false,
       isCancelling: false,
       streamingId: null,
@@ -363,7 +366,7 @@ export const useChatStore = create<ChatState>((set) => ({
       // 注: 即使现在不覆盖 model, prevSentModel 仍然必须按 session 自身的 model 走 —
       // 这样 picker 当前 model ≠ session 上次 model 时, gateway 才知道要做转译.
       prevSentModel: detail.meta.model,
-    });
+    }));
   },
   loadSessionAttachments: async (sessionId: string) => {
     if (!sessionId) return;
@@ -395,7 +398,7 @@ export const useChatStore = create<ChatState>((set) => ({
         // 也防 race: streaming 中可能新 message 已 push, restored 是切前的快照
         // 不能直接覆盖. 但 restore 通常在切会话刚发生时跑, 那时 isStreaming=false,
         // 这种 race 极少. 简单起见: 直接覆盖. 复杂场景由下次 loadSession 兜底.
-        return { messages: restored };
+        return { messages: keepStableIds(s.messages, restored) };
       });
     } catch (e) {
       console.warn(

@@ -302,3 +302,38 @@ export async function loadSessionMessagesAsChatAsync(
 
   return mapped;
 }
+
+/** 11/24 鸿波「把结尾那一下重读也改成原地更新」: 小鲶答完后从库里重读同一个会话 (补上后台动作 / 外面进来的消息),
+ *  读回来的每条消息都换了 id (`db-…`), React 按 id 认人 —— 全部消息拆掉重挂, 看着就是闪一下。
+ *  同一个会话重读时, 内容对得上的消息沿用屏幕上那条的 id (和它带着的图片附件), 只有真新增的才是新节点。
+ *  按顺序对: 角色相同 + 正文相同; 最后一条小鲶回复就算正文差几个空白也认。 */
+export function keepStableIds(prev: ChatMessage[], next: ChatMessage[]): ChatMessage[] {
+  if (prev.length === 0) return next;
+  const norm = (s: string | undefined) => (s ?? "").trim();
+  const shown = (m: ChatMessage) => m.role === "user" || m.role === "assistant";
+  const lastAnswer = (list: ChatMessage[]) => {
+    for (let i = list.length - 1; i >= 0; i--) if (list[i].role === "assistant" && norm(list[i].content)) return list[i];
+    return null;
+  };
+  const prevLast = lastAnswer(prev);
+  const nextLast = lastAnswer(next);
+  const used = new Set<string>();
+  let from = 0;
+  const out = next.map((m) => {
+    if (!shown(m)) return m;
+    let hit: ChatMessage | null = null;
+    for (let i = from; i < prev.length; i++) {
+      const p = prev[i];
+      if (p.role === m.role && norm(p.content) === norm(m.content) && !used.has(p.id)) {
+        hit = p;
+        from = i + 1;
+        break;
+      }
+    }
+    if (!hit && m === nextLast && prevLast && !used.has(prevLast.id)) hit = prevLast;
+    if (!hit) return m;
+    used.add(hit.id);
+    return { ...m, id: hit.id, attachments: m.attachments?.length ? m.attachments : hit.attachments };
+  });
+  return out;
+}
