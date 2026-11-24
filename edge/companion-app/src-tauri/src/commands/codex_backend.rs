@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use super::codex_gateway::{hermes_api_ready, restart_hermes_gateway};
+use super::codex_gateway::{hermes_api_ready, restart_hermes_gateway_if_down};
 use super::codex_helper::{run_hermes_helper, HermesState};
 use super::codex_probe::{probe_codex, CodexProbe};
 use super::codex_shim::{ensure_hermes_codex_shim, remove_hermes_codex_shim};
@@ -245,8 +245,9 @@ pub async fn codex_backend_select_model(model: String) -> Result<CodexBackendSta
         // API server 的每条消息本来就是新 AIAgent，config.yaml + picker_state
         // 会在下一次请求即时生效。完整 gateway 重启要 10–30 秒，只在服务已经
         // 不健康时兜底；健康路径是真热切换。
+        // 11/24: 不通可能只是正在重启 —— 先等它起来, 真起不来才重启 (restart_hermes_gateway_if_down)
         if !hermes_api_ready() {
-            restart_hermes_gateway()?;
+            restart_hermes_gateway_if_down()?;
         }
         // ⚠ 这一位必须**如实**回传 Hermes 说的话。
         //

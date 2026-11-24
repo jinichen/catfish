@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::codex_helper::prepend_path;
@@ -122,8 +123,62 @@ fn gateway_process_ids() -> HashSet<u32> {
 /// 仅用于异常兜底。API server 每条消息都会创建新 AIAgent 并重新读取 runtime，
 /// 正常模型切换无需重启整个 gateway；只有 gateway 本来就不健康时才走这里。
 pub(crate) fn restart_hermes_gateway() -> Result<(), String> {
+    // 11/24: 排队期间别人已经重启过一次 → 我要的那次重启已经发生了, 不再来第二遍。
+    // (原来两个调用方同时要重启 = 连重启两次, 第二次隔一分钟落在员工刚发的新一轮上。)
+    let seen = RESTARTS_DONE.load(Ordering::SeqCst);
     // 11/3: 跟其他启停排队, 连「等新网关就绪」那段一起 (见 services::gateway_ops)
-    crate::services::gateway_ops::serialized("重启网关", restart_hermes_gateway_now)
+    crate::services::gateway_ops::serialized("重启网关", || {
+        if restart_already_happened(seen, RESTARTS_DONE.load(Ordering::SeqCst)) {
+            log::info!("[hermes-gateway] 排队期间网关已经重启过, 不再重启第二遍");
+            return Ok(());
+        }
+        let done = restart_hermes_gateway_now();
+        if done.is_ok() {
+            RESTARTS_DONE.fetch_add(1, Ordering::SeqCst);
+        }
+        done
+    })
+}
+
+static RESTARTS_DONE: AtomicU64 = AtomicU64::new(0);
+
+fn restart_already_happened(seen_at_request: u64, now: u64) -> bool {
+    now != seen_at_request
+}
+
+/// 网关正在起 (刚被重启 / 开机自启还没好) 时最多等这么久再判「坏了」。实测重启一次 25~60 秒。
+const STARTING_GRACE: Duration = Duration::from_secs(75);
+
+/// 11/24 鸿波「又卡住了, 要仔细分析怎么彻底解决」—— 「网关不通就重启」这条兜底的正确版本。
+///
+/// 当晚的连环: Companion 一启动就对齐模型 (codex_backend), 那一刻网关正好在重启 (8642 暂时不通),
+/// 原来立刻判成「坏了」再重启一遍; 两个调用方同时判 = 再排队重启第二遍。一次启动 → 网关连重启三回,
+/// 每回都把正在跑的那一轮打断, 对话被记成「结果未知」暂停 (unknown_execution), 员工看到的就是卡住。
+///
+/// 不通 ≠ 坏了: 先等它起来 (STARTING_GRACE), 起来了就什么都不做; 真等不来才重启, 且排队期间别人
+/// 重启过也不再重启 (restart_hermes_gateway)。
+pub(crate) fn restart_hermes_gateway_if_down() -> Result<(), String> {
+    if wait_until_ready(STARTING_GRACE, hermes_api_ready, std::thread::sleep) {
+        return Ok(());
+    }
+    log::warn!("[hermes-gateway] 等了 {} 秒网关还是不通, 重启它", STARTING_GRACE.as_secs());
+    restart_hermes_gateway()
+}
+
+/// 每 2 秒探一次, 通了返回 true; 超过 `limit` 还不通返回 false。
+fn wait_until_ready(limit: Duration, ready: impl Fn() -> bool, sleep: impl Fn(Duration)) -> bool {
+    let step = Duration::from_secs(2);
+    let mut waited = Duration::ZERO;
+    loop {
+        if ready() {
+            return true;
+        }
+        if waited >= limit {
+            return false;
+        }
+        sleep(step);
+        waited += step;
+    }
 }
 
 fn restart_hermes_gateway_now() -> Result<(), String> {
@@ -190,6 +245,25 @@ fn restart_hermes_gateway_now() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 网关正在起就等它_不重启() {
+        use std::cell::Cell;
+        // 第 3 次探才通 (正在重启): 等到了, 不该走到重启
+        let n = Cell::new(0);
+        assert!(wait_until_ready(Duration::from_secs(75), || { n.set(n.get() + 1); n.get() >= 3 }, |_| {}));
+        assert_eq!(n.get(), 3);
+        // 一直不通: 等满才放弃
+        let m = Cell::new(0);
+        assert!(!wait_until_ready(Duration::from_secs(10), || { m.set(m.get() + 1); false }, |_| {}));
+        assert_eq!(m.get(), 6); // 0,2,4,6,8,10 秒各探一次
+    }
+
+    #[test]
+    fn 排队期间别人重启过_就不再重启第二遍() {
+        assert!(!restart_already_happened(3, 3));
+        assert!(restart_already_happened(3, 4));
+    }
 
     #[test]
     #[cfg(unix)] // parse_gateway_pids 是 unix-only (pgrep); 9/23 Windows 上 --tests 编不过
