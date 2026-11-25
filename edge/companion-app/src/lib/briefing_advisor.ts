@@ -17,6 +17,7 @@
  * 由 caller (AdvisorView component) 拉好传进来. 单一职责.
  */
 
+import { shelveStaleTodos } from "./briefing_todo_shelf";
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import type { TaskStatus } from "./advisor_cache";
@@ -275,7 +276,18 @@ async function raceWithTimeout(
   }
 }
 
+/** 11/25: 没截止日期又很久没动的任务不喂给模型, 收到「搁置很久」一组 (briefing_todo_shelf.ts)。 */
 async function _fetchBriefingAdvisorImpl(
+  input: AdvisorInput,
+  signal: AbortSignal,
+): Promise<AdvisorResult | null> {
+  const { active, shelved } = shelveStaleTodos(input.todos);
+  const result = await _fetchAdvisorCore({ ...input, todos: active }, signal);
+  if (!result || shelved.length === 0) return result;
+  return { ...result, handledSilently: [...result.handledSilently, ...shelved] };
+}
+
+async function _fetchAdvisorCore(
   input: AdvisorInput,
   signal: AbortSignal,
 ): Promise<AdvisorResult | null> {

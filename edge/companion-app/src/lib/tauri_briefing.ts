@@ -57,6 +57,8 @@ export interface ReminderTodo {
   due_date_iso?: string | null;
   priority?: number;
   body?: string;
+  /** 任务最后一次改动 (秒)。11/25: 早安用它把很久没动的收到「搁置很久」 */
+  updated_at?: number;
 }
 
 interface ReminderToolItem {
@@ -70,6 +72,7 @@ interface ReminderToolItem {
   due_date_iso?: unknown;
   priority?: unknown;
   body?: unknown;
+  updated_at?: unknown;
 }
 
 interface ReminderToolResult {
@@ -118,6 +121,7 @@ export async function remindersWeekFetch(): Promise<string> {
         due_date_iso: typeof item.due_date_iso === "string" ? item.due_date_iso : null,
         priority,
         body: typeof item.body === "string" ? item.body : "",
+        updated_at: typeof item.updated_at === "number" ? item.updated_at : undefined,
       };
     });
   return JSON.stringify(todos);

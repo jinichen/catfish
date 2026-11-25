@@ -80,6 +80,17 @@ def _meta_set(key: str, value: str) -> None:
         conn.commit()
 
 
+def _meta_get(key: str) -> str | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return str(row["value"]) if row else None
+
+
+def _reminder_fingerprint(reminder: dict[str, Any]) -> str:
+    raw = "\0".join(str(reminder.get(k) or "") for k in ("title", "body", "due_date_iso", "priority", "list_name"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
 def _now() -> float:
     return time.time()
 
@@ -208,24 +219,45 @@ def upsert_reminders(reminders: list[dict[str, Any]]) -> int:
         else:
             task_id = _stable_id("reminders", reminder_id, title, reminder.get("due_date_iso"))
         with _connect() as conn:
-            prev = conn.execute("SELECT status FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+            prev = conn.execute("SELECT status, source_id FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
         status = "completed" if reminder.get("completed") else "pending"
         # 11/07: 已完成也同理 —— 员工在 Companion 提醒条上点「已完成」/ 小鲶按 task_id
         # 标完成, 写的是任务库; Reminders 里那条没勾, 不说明事情又没做完。以前这里只护
         # cancelled, 标完成 5 分钟后下一轮导入就把它改回 pending, 第二天又提醒一遍。
         if prev is not None and prev["status"] in _COMPLETED_STATUSES and status == "pending":
             status = prev["status"]
-        upsert_task({
-            "task_id": task_id,
-            "title": title,
-            "status": status,
-            "due_date_iso": reminder.get("due_date_iso"),
-            "body": body,
-            "priority": reminder.get("priority"),
-            "source": "reminders",
-            "source_id": reminder_id,
-            "list_name": reminder.get("list_name"),
-        })
+        # 11/25: 提醒本身没变 (跟上次导入时一样) → 任务库这行的标题 / 正文 / 截止时间不动。
+        # 以前每次导入都拿提醒的内容盖一遍: 小鲶在任务库里把进展改成「两包均已定第一成交候选人」,
+        # 半小时后被提醒事项里 11/07 的旧标题旧备注盖回去, 早安第二天还在说「11/13 递交节点已过」。
+        # 提醒变了 (员工在 Reminders 里改的) 才以提醒为准。顺带: 没变就不碰 updated_at。
+        seen = _reminder_fingerprint(reminder)
+        seen_key = f"reminder_seen:{reminder_id}" if reminder_id else None
+        last_seen = _meta_get(seen_key) if seen_key else None
+        if seen_key and last_seen != seen:
+            _meta_set(seen_key, seen)
+        linked = prev is not None and prev["source_id"] == reminder_id  # 还没挂上这条提醒的行, 照常整行写
+        if linked and seen_key and last_seen in (None, seen):
+            # last_seen 为 None = 这一版之前导入过的老行: 以前每轮都盖, 库里的要么等于提醒, 要么是更新的改动
+            with _connect() as conn:
+                # 归属照旧纠回 reminders (10/21 那个 source 被冲成 conversation 的老行), 不算改动
+                conn.execute("UPDATE tasks SET source = 'reminders' WHERE task_id = ? AND source != 'reminders'",
+                             (task_id,))
+                if prev["status"] != status:
+                    conn.execute("UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?",
+                                 (status, _now(), task_id))
+                conn.commit()
+        else:
+            upsert_task({
+                "task_id": task_id,
+                "title": title,
+                "status": status,
+                "due_date_iso": reminder.get("due_date_iso"),
+                "body": body,
+                "priority": reminder.get("priority"),
+                "source": "reminders",
+                "source_id": reminder_id,
+                "list_name": reminder.get("list_name"),
+            })
         for row in existing:
             if row["task_id"] != task_id and row["status"] not in _COMPLETED_STATUSES:
                 _close_row(row, "cancelled", f"重复：同一条提醒已由 {task_id} 承载")
@@ -364,6 +396,18 @@ def tool_create_task(args: dict[str, Any]) -> dict[str, Any]:
         "task": task,
         "summary": f"✅ 已写入本机任务库：{task['title']}",
     }
+    # 11/25: 按期滚动的任务 (标题带日期区间), 新一期建出来就把上一期收口 (task_library_series.py)
+    if task["status"] in ("pending", "in_progress"):
+        from . import task_library_series as series
+        with _connect() as conn:
+            superseded = series.supersede_previous(conn, task, _close_row)
+        if superseded:
+            note = series.carry_over_note(superseded)
+            result["task"] = task = upsert_task({**task, "body": _append_note(task["body"], note)})
+            result["superseded"] = superseded
+            result["summary"] += "\n" + note
+            gone = {c["task_id"] for c in superseded}
+            similar = [t for t in similar if t["task_id"] not in gone]
     if similar:
         result["possible_duplicates"] = similar
         result["summary"] += (

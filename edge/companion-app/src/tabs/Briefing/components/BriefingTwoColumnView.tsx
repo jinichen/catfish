@@ -14,6 +14,7 @@
  * 数据 0 后端改动: 复用 MainTask / HandledSilentlyItem / advisorTaskState.
  */
 
+import { SHELVED_TYPE } from "../../../lib/briefing_todo_shelf";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Alarm } from "@phosphor-icons/react";
 import { Ico } from "../../../components/icons";
@@ -190,6 +191,9 @@ export default function BriefingTwoColumnView({
     );
   };
 
+  const shelvedItems = handledItems.filter((h) => h.type === SHELVED_TYPE);
+  const otherHandled = handledItems.filter((h) => h.type !== SHELVED_TYPE);
+
   if (tasks.length === 0 && handledItems.length === 0) {
     return (
       <div className="briefing-2col__empty">
@@ -235,12 +239,25 @@ export default function BriefingTwoColumnView({
           </div>
         )}
 
-        {handledItems.length > 0 && (
+        {/* 11/25: 没截止日期又很久没动的任务, 不占主列表, 单独一组 (briefing_todo_shelf.ts) */}
+        {shelvedItems.length > 0 && (
+          <div className="briefing-2col__handled">
+            <div className="briefing-2col__group-header" style={{ color: "var(--catfish-text-muted)" }}
+                 title="这些任务没有截止日期，也很久没动过。办完了就去任务里标完成；还要办就给它定个日期。">
+              搁置很久 · {shelvedItems.length}
+            </div>
+            {shelvedItems.map((h, i) => (
+              <div key={i} className="briefing-2col__handled-row">{h.category}</div>
+            ))}
+          </div>
+        )}
+
+        {otherHandled.length > 0 && (
           <div className="briefing-2col__handled">
             <div className="briefing-2col__group-header" style={{ color: "var(--catfish-text-muted)" }}>
-              已默认处理 · {handledItems.length}
+              已默认处理 · {otherHandled.length}
             </div>
-            {handledItems.map((h, i) => (
+            {otherHandled.map((h, i) => (
               <div key={i} className="briefing-2col__handled-row">
                 {h.category} {h.count > 0 && <span style={{ opacity: 0.7 }}>· {h.count}</span>}
               </div>

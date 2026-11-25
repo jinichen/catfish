@@ -18,6 +18,7 @@
  * 加字段要三处一起动 —— 只改 schema 不改 prompt, 模型不知道该填;
  * 只改 prompt 不改 schema, tool_call 会被 API 拒。
  */
+import { groupSameMatter } from "./briefing_todo_shelf";
 import type { AdvisorInput } from "./briefing_advisor_common";
 
 
@@ -485,13 +486,22 @@ ${input.wikiRelevant.trim()}`);
   // 「责任: 推进 X; 时间: 截止 Y」—— 小鲶在对话里记下的进展 (邮件已发 / 等谁回数 /
   // 下一步) 早安页一个字都看不到。正文约定最新状态写在最前面, 截一段就够。
   if (todos.length > 0) {
-    const lines = todos.map((t) => {
+    const one = (t: (typeof todos)[number]) => {
       const star = t.is_priority ? "⭐ " : "";
       const head = `${star}${t.text} (${t.source}; 任务 ID: ${t.reminder_id || "未知"}; 截止时间: ${t.due_date_iso || "未知"})`;
       const progress = latestProgress(t.body);
       return progress ? `${head}\n  └ 最新进展: ${progress}` : head;
-    });
-    parts.push(`# 当前未完成任务（${todos.length} 件；截止时间仅用于排序）\n${lines.join("\n")}`);
+    };
+    // 11/25: 同一件事挂了几条 (主线 + 某个节点) 并成一组, 只出一张卡
+    const lines = groupSameMatter(todos).map((group) => group.length === 1
+      ? one(group[0])
+      : `〔同一件事，共 ${group.length} 条，只出一张卡〕\n${group.map((t) => `  · ${one(t).replace(/\n/g, "\n  ")}`).join("\n")}`);
+    parts.push(
+      `# 当前未完成任务（${todos.length} 件；截止时间仅用于排序）\n`
+      + "同一件事在清单里有多条时（标了〔同一件事〕的，或者一条是总条目、另一条是它的某个节点），"
+      + "合成一张卡：标题写最近要办的那个节点，context_refs 把这几条都列上，不要各出一张。\n"
+      + lines.join("\n"),
+    );
   }
 
   // P3.3.9 (6/10): 上次 advisor 输出 — 让 LLM 复用 task_uid (跨 refresh 稳定)
