@@ -4001,7 +4001,13 @@ button {
   border-top-color: color-mix(in srgb, var(--catfish-cyan) 48%, var(--catfish-border));
 }
 
+/* 11/25: 输入框有毛玻璃 (workspace-glass.css 的 backdrop-filter), 那会自成层叠上下文 ——
+ * 教学入口的浮层 (.chat-composer__edu-menu) 的 z-index 被关在里面, 往上溢出时被提醒条
+ * (.reminder-bar-slot, z-index 3) 盖住一半。输入框自己抬到 4: 高过提醒条, 低过左导航 (20)。
+ * styles/stacking.test.ts 盯着这条。 */
 .chat-composer__surface {
+  position: relative;
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -4111,6 +4117,22 @@ button {
   align-items: center;
   margin-left: 3px;
   padding-left: 7px;
+}
+
+.chat-composer__edu-menu {
+  position: absolute;
+  bottom: 44px;
+  left: 0;
+  z-index: 100;
+  min-width: 280px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-sm);
+  background: var(--catfish-bg);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .chat-composer__popover-anchor::before {

@@ -59,9 +59,14 @@ const POPOVER_HOSTS = [
     popovers: [".reminder-bar__menu"],
     note: "11/07 提醒条的「稍后提醒」「…」菜单从输入框上方往上溢出到消息区; container-type 自带层叠上下文",
   },
+  {
+    selector: ".chat-composer__surface",
+    popovers: [".chat-composer__edu-menu"],
+    note: "11/25 输入框的毛玻璃 (backdrop-filter) 自成层叠上下文, 教学入口浮层往上溢出时被提醒条盖住",
+  },
 ];
 
-const CSS_FILES = ["globals.css", "refresh.css", "reminders.css"];
+const CSS_FILES = ["globals.css", "refresh.css", "reminders.css", "workspace-glass.css"];
 
 /** 极简 CSS 规则提取: 返回该选择器在所有文件里的声明合并结果（后加载的覆盖前面）。
  *
@@ -131,6 +136,13 @@ describe("层叠上下文 × 溢出浮层", () => {
         expect(Number(d["z-index"]), `${p} 缺 z-index`).toBeGreaterThan(0);
       }
     }
+  });
+
+  it("输入框要盖过提醒条 (浮层从输入框往上溢出, 正好叠在提醒条上)", () => {
+    const composer = Number(declarationsFor(".chat-composer__surface")["z-index"]);
+    const reminder = Number(declarationsFor(".reminder-bar-slot")["z-index"]);
+    expect(composer).toBeGreaterThan(reminder);
+    expect(composer).toBeLessThan(20);
   });
 
   it("host 的 z-index 要低于全局遮罩层（不能盖住弹窗和 toast）", () => {

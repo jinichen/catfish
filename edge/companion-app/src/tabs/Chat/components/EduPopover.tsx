@@ -85,24 +85,7 @@ export default function EduPopover({ isStreaming }: Props) {
       </button>
 
       {open && (
-        <div
-          role="menu"
-          style={{
-            position: "absolute",
-            bottom: 44,
-            left: 0,
-            minWidth: 280,
-            padding: 6,
-            border: "1px solid var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--catfish-bg)",
-            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-            zIndex: 100,
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-          }}
-        >
+        <div role="menu" className="chat-composer__edu-menu">
           {/* P3.5.171 (7/3 鸿波 catch): hint 员工语义化, 去技术抽象 —— 只说
               "员工做什么" + "鲶鱼做什么", 不露内部术语. */}
 
