@@ -31,8 +31,23 @@ pub(crate) struct StoppedGateway {
 #[cfg(target_os = "macos")]
 const LAUNCHD_LABEL: &str = "ai.hermes.gateway";
 
+/// launchd 里的 `ai.hermes.gateway` 只属于**本机这个用户**的 hermes (`$HOME/.hermes`)。
+///
+/// 11/25 事故: 打 1.2.267 时跑离线装机 e2e (临时 HOME, 见 hermes_install_native::e2e), 装机流程的
+/// stop_for_install 不看 paths, 直接 `launchctl bootout gui/<uid>/ai.hermes.gateway` —— 把鸿波**真机**
+/// 的网关卸了 (19:13:40 SIGTERM, 日志 supervisor=launchd)。之后装 1.2.267 时网关本来就没在跑,
+/// 装完不重新生成服务, plist 还指着被换掉的老安装目录里的启动器 → 网关起不来, 直到 19:50 重开 Companion。
+/// 所以: paths 不是本机用户家目录 (测试 / 别的 HOME) 的, 一律不碰 launchd。
 #[cfg(target_os = "macos")]
-fn launchd_target() -> Option<(String, std::path::PathBuf)> {
+fn owns_launchd_service(paths: &BootstrapPaths) -> bool {
+    crate::util::paths::home_env().map(|h| std::path::Path::new(&h) == paths.home).unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn launchd_target(paths: &BootstrapPaths) -> Option<(String, std::path::PathBuf)> {
+    if !owns_launchd_service(paths) {
+        return None;
+    }
     let out = std::process::Command::new("/usr/bin/id").arg("-u").output().ok()?;
     let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let home = crate::util::paths::home_env().ok()?;
@@ -46,8 +61,7 @@ fn launchd_target() -> Option<(String, std::path::PathBuf)> {
 pub(crate) fn stop_for_install(paths: &BootstrapPaths) -> StoppedGateway {
     #[cfg(target_os = "macos")]
     {
-        let _ = paths;
-        let Some((domain, _plist)) = launchd_target() else {
+        let Some((domain, _plist)) = launchd_target(paths) else {
             return StoppedGateway::default();
         };
         let service = format!("{domain}/{LAUNCHD_LABEL}");
@@ -122,6 +136,10 @@ pub(crate) fn stop_for_install(paths: &BootstrapPaths) -> StoppedGateway {
 /// 用新安装自己的 `hermes gateway install --force` 重新生成 plist + 发布启动器 + 装回 launchd。
 #[cfg(target_os = "macos")]
 fn reinstall_launchd_service(paths: &BootstrapPaths) -> bool {
+    // `hermes gateway install --force` 写的是真 ~/Library/LaunchAgents (子进程继承本进程 HOME), 测试装机不许碰
+    if !owns_launchd_service(paths) {
+        return false;
+    }
     let cli = crate::services::catfish_paths::hermes_venv_tool(&paths.install_dir, "hermes");
     if !cli.exists() {
         return false;
@@ -163,7 +181,7 @@ const INSTALL_LAUNCHER: &str = ".hermes/bin/hermes"; // windows-parity: macOS la
 /// 启动时 / 网关没起来时调; 已经受影响的机器 (装过 1.2.79 那一版) 下次打开 Companion 就好了。
 #[cfg(target_os = "macos")]
 pub(crate) fn repair_launchd_launcher(paths: &BootstrapPaths) -> bool {
-    let Some((_domain, plist)) = launchd_target() else { return false };
+    let Some((_domain, plist)) = launchd_target(paths) else { return false };
     let Ok(text) = std::fs::read_to_string(&plist) else { return false };
     let launcher = paths.install_dir.join(INSTALL_LAUNCHER);
     if !text.contains(&*launcher.to_string_lossy()) || launcher.exists() {
@@ -176,6 +194,11 @@ pub(crate) fn repair_launchd_launcher(paths: &BootstrapPaths) -> bool {
 /// 装完 (成功或回滚之后) 调: 原来在跑的就重新起来。
 pub(crate) fn resume_after_install(paths: &BootstrapPaths, stopped: StoppedGateway) {
     if !stopped.resume {
+        // 11/25: 换目录前网关本来就没在跑 (崩了 / 被卸了), 但 plist 还在、还指着老目录里的启动器 ——
+        // 不管它的话, 之后谁 (Companion 75 秒兜底 / 登录时 launchd) 拉起网关都是 `cannot execute`。
+        // 启动器不在才重新生成, 在的话什么都不做。
+        #[cfg(target_os = "macos")]
+        repair_launchd_launcher(paths);
         return;
     }
     #[cfg(target_os = "macos")]
@@ -184,7 +207,7 @@ pub(crate) fn resume_after_install(paths: &BootstrapPaths, stopped: StoppedGatew
         if reinstall_launchd_service(paths) {
             return;
         }
-        let Some((domain, plist)) = launchd_target() else { return };
+        let Some((domain, plist)) = launchd_target(paths) else { return };
         if !plist.is_file() {
             log::warn!("[hermes-install] {} 不在了, 没法把网关装回 launchd", plist.display());
             return;
@@ -261,5 +284,24 @@ fn wait_until_down() {
             return;
         }
         std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    /// 11/25: 装机测试 (临时 HOME) 的 paths 不许碰本机 launchd 网关; 本机家目录的才算。
+    #[test]
+    fn 只有本机家目录的安装才碰launchd网关() {
+        let tmp = tempfile::tempdir().unwrap();
+        let test_paths = BootstrapPaths::new(tmp.path().to_path_buf());
+        assert!(!owns_launchd_service(&test_paths));
+        assert!(launchd_target(&test_paths).is_none(), "测试装机拿到了真 launchd 服务");
+        assert!(!reinstall_launchd_service(&test_paths));
+        assert!(!repair_launchd_launcher(&test_paths));
+
+        let home = crate::util::paths::home_env().unwrap();
+        assert!(owns_launchd_service(&BootstrapPaths::new(std::path::PathBuf::from(home))));
     }
 }

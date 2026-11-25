@@ -162,6 +162,15 @@ pub(crate) fn restart_hermes_gateway_if_down() -> Result<(), String> {
         return Ok(());
     }
     log::warn!("[hermes-gateway] 等了 {} 秒网关还是不通, 重启它", STARTING_GRACE.as_secs());
+    // 11/25: 不通的原因可能是 launchd 服务指着已经不在的启动器 (换过安装目录) —— 那样重启多少次都是
+    // `cannot execute`。先修服务 (启动器在就什么都不做); 修了就是用新安装重新装回并拉起, 不用再重启。
+    #[cfg(target_os = "macos")]
+    if let Ok(home) = crate::util::paths::home_env() {
+        let paths = super::hermes_install_state::BootstrapPaths::new(std::path::PathBuf::from(home));
+        if super::hermes_install_gateway::repair_launchd_launcher(&paths) {
+            return Ok(());
+        }
+    }
     restart_hermes_gateway()
 }
 
