@@ -415,6 +415,11 @@ sign_wheels() {
   return 0
 }
 
+# 解开后的树的内容指纹 (只看文件内容和路径, 不看 mtime / 属主)
+tree_digest() {
+  ( cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-64 )
+}
+
 sign_archive() {
   local archive="$1"
   local name="$(basename "$archive")"
@@ -424,10 +429,21 @@ sign_archive() {
   echo "→ 解压并签名 · $archive"
   mkdir -p "$unpack"
   tar xzf "$archive" -C "$unpack"
+  local before; before="$(tree_digest "$unpack")"
   sign_wheels "$unpack"          # 先处理嵌套的 zip, 再签外层散文件
   sign_tree "$unpack" quiet
   verify_tree "$unpack"
   verify_requirements_hashes "$unpack"
+
+  # 11/25: 里面没有要签的 (邮件 / 微信读取这种纯 Python 组件), 原归档一字不动。
+  # 原来一律用系统 tar 重打 —— 根目录条目带当时的时间和本机属主, 同样内容每版字节都不同;
+  # 员工机按归档指纹判断「是不是这个安装包里那一份」, 于是每升一版都白重装一次
+  # (build-email-resource.sh 的 repro_tar 做到逐字节一样, 在这里被抹掉了)。
+  if [[ "$(tree_digest "$unpack")" == "$before" ]]; then
+    echo "   · 没有要签的, 原归档不动"
+    rm -rf "$unpack"
+    return 0
+  fi
 
   # 8/5: 原来先 find 出顶层条目再 `tar czf ... "${entries[@]}"`。两个毛病:
   #   1. macOS 自带 bash 3.2 下, 空数组展开 "${entries[@]}" 在 `set -u` 里直接
