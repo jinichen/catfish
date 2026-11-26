@@ -108,7 +108,7 @@ export default function WikiTypeDefsModal({ onClose }: { onClose: () => void }) 
             <div style={{ overflowY: "auto", paddingRight: 4 }}>
               {def ? (
                 <>
-                  <WikiTypeDefEditor def={def} apply={apply} busy={busy} />
+                  <WikiTypeDefEditor def={def} apply={apply} busy={busy} formats={view?.formats} />
                   {def.origin === "local" && (
                     <button type="button" disabled={busy} onClick={() => void apply({ op: "delete_type", type: def.key })}
                       style={{ marginTop: 16, border: 0, background: "transparent", color: V.error, cursor: "pointer", fontSize: 13 }}>

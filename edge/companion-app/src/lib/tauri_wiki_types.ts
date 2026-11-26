@@ -7,6 +7,12 @@ export interface WikiTypeProperty {
   type: string;
   hint: string;
   value: string;
+  /** 11/26 约束 */
+  required?: boolean;
+  options?: string[];
+  format?: string;
+  /** 已经写着的值不合规时的说法 (老数据) */
+  problem?: string | null;
 }
 
 export interface WikiTypeStatus {
@@ -38,6 +44,9 @@ export interface WikiTypeEntry {
   properties?: WikiTypeProperty[];
   status?: WikiTypeStatus | null;
   actions?: WikiTypeAction[];
+  /** 11/26 必填没填的属性名 / 属性之间对不上的说法 */
+  missing_required?: string[];
+  rule_problems?: string[];
 }
 
 export interface WikiPropsProposal {
@@ -67,7 +76,53 @@ export interface WikiPropsApplyResult {
   written: number;
   errors: { rel_path: string; error: string }[];
   backup_dir: string | null;
+  /** 11/26 改属性时顺手补上的关系 / 没补的原因 */
+  aligned?: string[];
 }
+
+// ─── 11/26 约束检查 ─────────────────────────────────────────────────────────
+
+export type ConstraintKind =
+  | "missing_required" | "bad_value" | "duplicate" | "rule"
+  | "relation_max" | "relation_cycle" | "link_relation" | "link_prop" | "link_conflict";
+
+export interface ConstraintFix {
+  op: "set_prop" | "add_relation" | "replace_relation";
+  key?: string;
+  value?: string;
+  rel?: string;
+  name?: string;
+  old?: string;
+  /** 补关系写在哪一页 (默认本条) */
+  on?: string;
+}
+
+export interface ConstraintIssue {
+  rel_path: string;
+  title: string;
+  type: string;
+  type_label: string;
+  kind: ConstraintKind;
+  key?: string;
+  label?: string;
+  value?: string;
+  message: string;
+  options?: string[];
+  fix?: ConstraintFix | null;
+  alt_fix?: ConstraintFix | null;
+}
+
+export interface ConstraintReport {
+  ok: boolean;
+  summary: Partial<Record<ConstraintKind, number>>;
+  total: number;
+  types: { key: string; label: string; entries: number; missing: Record<string, number> }[];
+  issues: ConstraintIssue[];
+}
+
+export const wikiConstraintsReport = (typeKey?: string) => invoke<ConstraintReport>("wiki_constraints_report", { typeKey: typeKey ?? null });
+export const wikiConstraintsFix = (items: (ConstraintFix & { rel_path: string })[]) =>
+  invoke<{ ok: boolean; done: number; errors: { rel_path: string; error: string }[] }>("wiki_constraints_fix", { items });
 
 export const wikiTypesList = () => invoke<{ ok: boolean; types: { key: string; label: string }[] }>("wiki_types_list");
 export const wikiTypeEntry = (relPath: string) => invoke<WikiTypeEntry>("wiki_type_entry", { relPath });
@@ -98,6 +153,12 @@ export interface TypeDefProperty {
   type: string;
   hint?: string;
   keywords?: string[];
+  /** 11/26 约束: 取值范围 / 必填 / 同类不重复 / 格式 / 日期不晚于今天 */
+  options?: string[];
+  required?: boolean;
+  unique?: boolean;
+  format?: string;
+  not_future?: boolean;
   origin: DefOrigin;
   hidden: boolean;
 }
@@ -119,6 +180,9 @@ export interface TypeDef {
   status: { label?: string; from?: string; warn_days?: number } | null;
   properties: TypeDefProperty[];
   actions: TypeDefAction[];
+  /** 11/26 内置的属性之间规则 / 关系「最多几个」, 只显示 */
+  rules?: string[];
+  relation_limits?: string[];
 }
 
 export interface TypeDefsView {
@@ -126,6 +190,8 @@ export interface TypeDefsView {
   types: TypeDef[];
   /** 知识库里有、还没定义的细分类型 (新建类型从这里挑) */
   subtypes: { key: string; count: number }[];
+  /** 11/26 可选的格式 {key: 中文名} */
+  formats?: Record<string, string>;
 }
 
 export type TypeDefChange =

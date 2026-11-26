@@ -328,7 +328,7 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
             "比全文搜索准. type 是类型 key (现有: cert=资质证书, software=软件产品/软著, project=项目, person=人, department=部门, org=组织); "
             "属性 key 见 catfish_wiki_read 返参 type_info.properties. "
             "日期属性用 before / after (YYYY-MM-DD, 含当天). 属性没填的条目不满足条件, 要找没填的用 empty: true. "
-            "返回 total 是符合条件的总数, items 最多 limit 条."
+            "返回 total 是符合条件的总数, items 最多 limit 条. check: true 查哪些不合约束."
         ),
         "input_schema": {
             "type": "object",

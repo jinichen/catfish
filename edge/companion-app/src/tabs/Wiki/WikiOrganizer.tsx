@@ -28,6 +28,7 @@ import { customHierarchy, useRelationVocab } from "../../lib/wikiRelationVocab";
 import WikiRelationTypesModal from "./WikiRelationTypesModal";
 import WikiPropsReview from "./WikiPropsReview";
 import WikiTypeDefsModal from "./WikiTypeDefsModal";
+import WikiConstraintsModal from "./WikiConstraintsModal";
 import {
   buildConfirmedWikiContent,
   buildWikiRelationshipTasks,
@@ -98,6 +99,7 @@ export default function WikiOrganizer({
   const [showRelationTypes, setShowRelationTypes] = useState(false);
   const [showPropsReview, setShowPropsReview] = useState(false);
   const [showTypeDefs, setShowTypeDefs] = useState(false);
+  const [showConstraints, setShowConstraints] = useState(false);
   useEffect(() => {
     void loadRelationVocab();
   }, [loadRelationVocab]);
@@ -244,6 +246,7 @@ export default function WikiOrganizer({
           {showRelationTypes && <WikiRelationTypesModal onClose={() => setShowRelationTypes(false)} />}
           {showPropsReview && <WikiPropsReview onClose={() => setShowPropsReview(false)} />}
           {showTypeDefs && <WikiTypeDefsModal onClose={() => setShowTypeDefs(false)} />}
+          {showConstraints && <WikiConstraintsModal onClose={() => setShowConstraints(false)} />}
 
           <div className="wiki-organizer__summary" aria-label="关系健康概览">
             {visibleKinds.map((kind) => {
@@ -373,6 +376,10 @@ export default function WikiOrganizer({
             <button type="button" onClick={() => setShowTypeDefs(true)}>
               <TreeStructure size={16} aria-hidden="true" />
               <span><strong>类型定义</strong><small>每一类知识有哪些属性、到期前几天提醒、能做哪些事</small></span>
+            </button>
+            <button type="button" onClick={() => setShowConstraints(true)}>
+              <SealWarning size={16} aria-hidden="true" />
+              <span><strong>约束检查</strong><small>必填没填、值不在选项里、编号重复、属性和关系对不上</small></span>
             </button>
           </section>
         </>

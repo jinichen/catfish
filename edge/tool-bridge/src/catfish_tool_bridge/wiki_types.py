@@ -77,7 +77,17 @@ def load_local() -> dict[str, dict[str, Any]]:
     except (OSError, ValueError) as e:
         logger.warning("本机类型定义读失败 %s: %s", local, e)
         return {}
-    return {k: v for k, v in data.items() if isinstance(v, dict)}
+    return {k: _migrate_local(k, v) for k, v in data.items() if isinstance(v, dict)}
+
+
+def _migrate_local(type_key: str, tdef: dict[str, Any]) -> dict[str, Any]:
+    """11/26: 人的「职务」key 从 title 改成 job_title (title 是条目标题的字段) —— 本机补充里改过职务名字 / 藏过职务的跟着改。"""
+    if type_key != "person":
+        return tdef
+    tdef = dict(tdef)
+    tdef["properties"] = [{**p, "key": "job_title"} if p.get("key") == "title" else p for p in tdef.get("properties") or []]
+    tdef["hidden_properties"] = ["job_title" if k == "title" else k for k in tdef.get("hidden_properties") or []]
+    return tdef
 
 
 def merge_types(builtin: dict[str, dict[str, Any]], local: dict[str, dict[str, Any]],
@@ -93,7 +103,13 @@ def merge_types(builtin: dict[str, dict[str, Any]], local: dict[str, dict[str, A
         if isinstance(tdef.get("status"), dict) or isinstance(base.get("status"), dict):
             merged["status"] = {**(base.get("status") or {}), **(tdef.get("status") or {})}
         types[key] = merged
+    from .wiki_constraints import RESERVED_KEYS  # noqa: PLC0415
     for key, tdef in types.items():
+        # 属性 key 跟文件头已有字段重名的不认 (改它会改掉标题 / 关系 …)
+        bad = [p.get("key") for p in tdef.get("properties") or [] if p.get("key") in RESERVED_KEYS]
+        if bad:
+            logger.warning("类型 %s 的属性 key 跟文件头字段重名, 跳过: %s", key, bad)
+            tdef["properties"] = [p for p in tdef.get("properties") or [] if p.get("key") not in RESERVED_KEYS]
         hide_p, hide_a = set(tdef.get("hidden_properties") or []), set(tdef.get("hidden_actions") or [])
         if keep_hidden:
             tdef["properties"] = [{**p, "hidden": p.get("key") in hide_p} for p in tdef.get("properties") or []]
@@ -159,11 +175,11 @@ def normalize_date(value: str) -> str:
 
 
 def _clean(prop: dict[str, Any], value: Any) -> str:
-    text = re.sub(r"\s+", " ", str(value if value is not None else "")).strip()
+    from .wiki_constraints import normalize  # noqa: PLC0415
+    text = normalize(prop, re.sub(r"\s+", " ", str(value if value is not None else "")).strip())
     if prop.get("type") == "date":
         text = normalize_date(text)
-    text = (prop.get("aliases") or {}).get(text, text)
-    return text[:400]
+    return (prop.get("aliases") or {}).get(text, text)
 
 
 # 正文说「待核 / 疑似 / 未录入 / 占位」的不是值 (11/07 实测: 小鲶把正文标了「疑似误录」的编号、「未录入（占位值 1）」都抽了出来)
@@ -171,13 +187,10 @@ _NOT_A_VALUE = re.compile(r"待核|待补|待确认|疑似|误录|未录入|未�
 
 
 def _usable(prop: dict[str, Any], value: str) -> bool:
-    """抽出来的值能不能当属性: 不是「待核 / 未录入」这类说明; 日期必须是真日期 (「无限期」这种不算)。"""
-    if not value or _NOT_A_VALUE.search(value):
-        return False
-    if prop.get("type") == "date":
-        return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))
-    # 太长的不是一个值, 是一段话 (11/07 实测: 一条「人员与邮箱对照」被当成人, 整段对照表抽进了「部门」)
-    return len(value) <= int(prop.get("max_len") or 60)
+    """抽出来的值能不能当属性 —— 跟写入同一道校验 (11/26 wiki_constraints.value_problem): 不是「待核 / 未录入」这类说明;
+    日期必须是真日期; 不能太长 (11/07 实测整段对照表抽进了「部门」); 有选项的必须在选项里; 格式要对。"""
+    from .wiki_constraints import value_problem  # noqa: PLC0415
+    return bool(value) and value_problem(prop, _clean(prop, value)) is None
 
 
 def read_props(fm: str, tdef: dict[str, Any]) -> dict[str, str]:
@@ -250,6 +263,7 @@ def fill_instruction(text: str, props: dict[str, str], tdef: dict[str, Any] | No
 # ─── 一条知识的类型信息 (界面属性卡片 / catfish_wiki_read 用) ─────────────────
 
 def describe_content(content: str, schema: dict[str, dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    from . import wiki_constraints  # noqa: PLC0415
     schema = load_schema() if schema is None else schema
     fm, _ = wiki_files._split_frontmatter(content)
     key = type_of(fm, schema)
@@ -262,9 +276,14 @@ def describe_content(content: str, schema: dict[str, dict[str, Any]] | None = No
         "label": tdef.get("label", key),
         "properties": [
             {"key": p["key"], "label": p.get("label", p["key"]), "type": p.get("type", "text"),
-             "hint": p.get("hint", ""), "value": props.get(p["key"], "")}
+             "hint": p.get("hint", ""), "value": props.get(p["key"], ""),
+             # 11/26 约束: 界面上有选项的给下拉、必填的标出来、已经写着的不合规的值点名 (老数据)
+             "required": bool(p.get("required")), "options": list(p.get("options") or []), "format": p.get("format") or "",
+             "problem": _card_problem(p, props.get(p["key"], ""))}
             for p in tdef.get("properties") or []
         ],
+        "missing_required": wiki_constraints.missing_required(props, tdef),
+        "rule_problems": [r["error"] for r in wiki_constraints.rule_problems(props, tdef)],
         "status": status_of(props, tdef),
         "actions": [
             {"id": a["id"], "label": a.get("label", a["id"]), "description": a.get("description", ""),
@@ -272,6 +291,13 @@ def describe_content(content: str, schema: dict[str, dict[str, Any]] | None = No
             for a in tdef.get("actions") or [] if a.get("id")
         ],
     }
+
+
+def _card_problem(prop: dict[str, Any], value: str) -> str | None:
+    """属性卡片上老数据的问题: 有选项的不再列一遍选项 (卡片「改属性」给下拉)。"""
+    from . import wiki_constraints  # noqa: PLC0415
+    why = wiki_constraints.value_problem(prop, _clean(prop, value)) if value else None
+    return "不在选项里，点「改属性」从下拉里选" if why and prop.get("options") and why.startswith("只能是") else why
 
 
 def describe(rel_path: str) -> dict[str, Any]:
@@ -448,7 +474,9 @@ def _llm_extract(batch: list[dict[str, Any]], tdef: dict[str, Any]) -> dict[str,
     props_def = {p["key"]: p for p in tdef.get("properties") or []}
     blocks = []
     for i, item in enumerate(batch):
-        fields = "、".join(f"{k}({props_def[k].get('label', k)}{'; ' + props_def[k]['hint'] if props_def[k].get('hint') else ''})" for k in item["want"])
+        fields = "、".join(f"{k}({props_def[k].get('label', k)}{'; ' + props_def[k]['hint'] if props_def[k].get('hint') else ''}"
+                          f"{'; 只能是 ' + '/'.join(props_def[k]['options']) + ', 都不是就不给' if props_def[k].get('options') else ''})"
+                          for k in item["want"])
         # 11/08: 原件里提到它的段落 (extra) 单独接在正文后面, 不被正文的截断吃掉
         shown = item["body"][:_BODY_FOR_LLM] + (("\n\n[上传的资料里提到它的段落]\n" + item["extra"]) if item.get("extra") else "")
         blocks.append(f"[{i}] 《{item['title']}》 要抽: {fields}\n<<<\n{shown}\n>>>")
@@ -574,21 +602,22 @@ def apply(params: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(items, list) or not items:
         return {"ok": False, "error": "items 为空"}
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    written, errors = 0, []
+    written, errors, aligned = 0, [], []
     for item in items:
         rel = str((item or {}).get("rel_path") or "")
         props = (item or {}).get("props") or {}
         r = set_props_file(rel, props, schema, backup_stamp=stamp)
         if r.get("ok"):
             written += 1
+            aligned += [a["message"] for a in r.get("aligned") or []]
         else:
             errors.append({"rel_path": rel, "error": r.get("error")})
     backup = str(wiki_files._catfish_home() / "wiki" / ".props-backups" / stamp) if written else None
-    return {"ok": not errors, "written": written, "errors": errors, "backup_dir": backup}
+    return {"ok": not errors, "written": written, "errors": errors, "backup_dir": backup, "aligned": aligned}
 
 
 def set_props_file(rel_path: str, props: dict[str, Any], schema: dict[str, dict[str, Any]] | None = None,
-                   backup_stamp: str | None = None) -> dict[str, Any]:
+                   backup_stamp: str | None = None, partial: bool = False) -> dict[str, Any]:
     schema = load_schema() if schema is None else schema
     if not isinstance(props, dict) or not props:
         return {"ok": False, "error": "props 为空"}
@@ -602,8 +631,24 @@ def set_props_file(rel_path: str, props: dict[str, Any], schema: dict[str, dict[
     key = type_of(fm, schema)
     if key is None:
         return {"ok": False, "error": "这条知识的类型还没有类型定义, 不能写属性", "types": list(schema)}
+    tdef = schema[key]
+    defs = {p["key"]: p for p in tdef.get("properties") or []}
+    unknown = [str(k) for k in props if str(k) not in defs]
+    if unknown:
+        return {"ok": False, "error": f"「{tdef.get('label', '')}」没有这个属性: {'、'.join(unknown)}", "properties": list(defs)}
+    current = read_props(fm, tdef)
+    changes = {str(k): _clean(defs[str(k)], "" if v is None else v) for k, v in props.items()}
+    changes = {k: v for k, v in changes.items() if v != current.get(k, "")}
+    # 11/26 约束 (wiki_constraints): 选项 / 格式 / 日期先后 / 不能重复 …… 这次改到的值都要过; partial=True 时坏的跳过、好的照写
+    from . import wiki_constraints  # noqa: PLC0415
+    problems = wiki_constraints.check_props(rel_path, key, current, changes, schema)
+    if problems and not partial:
+        return {"ok": False, "error": "没写进去: " + wiki_constraints.message(problems), "problems": problems}
+    changes = {k: v for k, v in changes.items() if k not in {p["key"] for p in problems}}
+    if not changes:
+        return {"ok": True, "rel_path": rel_path, "changed": False, **({"problems": problems} if problems else {})}
     try:
-        new = set_props(content, {str(k): "" if v is None else str(v) for k, v in props.items()}, schema[key])
+        new = set_props(content, changes, tdef)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     if new == content:
@@ -623,12 +668,23 @@ def set_props_file(rel_path: str, props: dict[str, Any], schema: dict[str, dict[
     except OSError as e:
         tmp.unlink(missing_ok=True)
         return {"ok": False, "error": f"写 {rel_path} 失败: {e}"}
-    return {"ok": True, "rel_path": rel_path, "changed": True}
+    out: dict[str, Any] = {"ok": True, "rel_path": rel_path, "changed": True, "props": changes}
+    if problems:
+        out["problems"] = problems
+    # 11/26: 属性跟关系对齐 (人的「部门」写了企发部 → 补一条「隶属 企发部」), 见 wiki_constraints_report.align_links
+    from . import wiki_constraints_report  # noqa: PLC0415
+    aligned = wiki_constraints_report.align_links(rel_path, key, changes, schema)
+    if aligned:
+        out["aligned"] = aligned
+    return out
 
 
 def tool_dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
     """catfish_wiki_query; catfish_wiki_update 只给 props (不给 content) 时只改属性, 否则照旧整篇覆写。"""
     if name == "catfish_wiki_query":
+        if args.get("check"):
+            from . import wiki_constraints_report  # noqa: PLC0415  (11/26: 约束检查, 跟界面同一份)
+            return wiki_constraints_report.report({"type": args.get("type"), "limit": args.get("limit") or 40})
         return query(args)
     if args.get("props") and "content" not in args and not args.get("content_file"):
         return set_props_file(str(args.get("rel_path") or "").strip(), args["props"])

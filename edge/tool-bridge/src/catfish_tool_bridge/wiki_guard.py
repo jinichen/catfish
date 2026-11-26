@@ -195,22 +195,6 @@ def similar_message(title: str, hits: list[dict[str, str]]) -> str:
 
 # ── 关系按类型定义校验 ────────────────────────────────────────────
 
-def _type_index() -> dict[str, tuple[str, str]]:
-    """名字 (标题 / 别名, 小写) → (rel_path, 类型 key)。"""
-    from . import wiki_files, wiki_types  # noqa: PLC0415
-    schema = wiki_types.load_schema()
-    idx: dict[str, tuple[str, str]] = {}
-    for item in wiki_files.list_wiki_files(limit=100000).get("items", []):
-        if item["kind"] not in ("entity", "concept"):
-            continue
-        if (item.get("ontology_status") or "active").lower() in ("rejected", "deprecated"):
-            continue
-        tk = wiki_types.type_key_of_subtype(item.get("subtype") or "", schema) or ""
-        for n in [item["title"], *(item.get("aliases") or [])]:
-            idx.setdefault(n.strip().lower(), (item["rel_path"], tk))
-    return idx
-
-
 def _allowed(schema: dict[str, Any], src: str, rel: str, dst: str) -> bool | None:
     """True 允许 / False 不允许 / None 不归类型定义管 (两头有一头没有类型定义, 或 rel 是词表外 / 自定义的)。
     两头都有定义时按定义来: 合法 = src 的定义里有 {rel, to ∋ dst} 或 dst 的定义里有 {rel, from ∋ src}。
@@ -226,36 +210,48 @@ def _allowed(schema: dict[str, Any], src: str, rel: str, dst: str) -> bool | Non
     return any(dst in r["to"] for r in src_rels) or any(src in r["from"] for r in dst_rels)
 
 
-def bad_relations(subtype: str, related: list[Any], *, self_title: str = "") -> tuple[list[dict[str, str]], list[str]]:
-    """结构化版本: ([{name, rel, why}], 找不到页的名字)。蒸馏那边按它把写错的关系降成「关联」交给人定。"""
-    from . import wiki_files, wiki_types  # noqa: PLC0415
+def bad_relations(subtype: str, related: list[Any], *, self_title: str = "",
+                  rel_path: str = "") -> tuple[list[dict[str, str]], list[str]]:
+    """结构化版本: ([{name, rel, why}], 找不到页的名字)。蒸馏那边按它把写错的关系降成「关联」交给人定。
+    11/26 加两条 (wiki_constraints): 「最多几个」(人最多隶属一个部门 / 组织, 反向的「包含」一起算) 和不能绕成环
+    (隶属 / 替代 / 前置); 只报这次改动造成的, 老数据里已有的不挡。"""
+    from . import wiki_constraints, wiki_files, wiki_types  # noqa: PLC0415
     if not related:
         return [], []
-    schema = wiki_types.load_schema()
+    kb = wiki_constraints.KB()
+    schema = kb.schema
     src = wiki_types.type_key_of_subtype(subtype or "", schema) or ""
-    idx = _type_index()
-    bad, missing = [], []
+    # 这一页是谁: 给了 rel_path 就按它; 对不上 (蒸馏给的是别的写法 / 老调用方没给) 再按标题认 —— 认错成「新页」
+    # 会把它原有的关系再算一遍, 平白多出一个上级。新建撞了已有标题的另有规则拦 (wiki_files「已是 X 的名字」)。
+    node = rel_path if rel_path in kb.type else (kb.resolve(self_title) or f"new:{self_title or '本条目'}")
+    bad, missing, out = [], [], []
+    label = lambda k: (schema.get(k) or {}).get("label") or k or "未分类"  # noqa: E731
     for raw in related:
         name = wiki_files._relation_name(raw)
         rel = (raw.get("rel") if isinstance(raw, dict) else None) or ""
         if not name or name.strip().lower() == (self_title or "").strip().lower():
             continue
-        hit = idx.get(name.strip().lower())
-        if hit is None:
+        dst = kb.resolve(name)
+        if dst is None:
             missing.append(name)
             continue
-        if rel and src and _allowed(schema, src, rel, hit[1]) is False:
-            label = lambda k: (schema.get(k) or {}).get("label") or k or "未分类"  # noqa: E731
-            ok_rels = sorted({r["rel"] for r in (schema.get(src) or {}).get("relations") or [] if hit[1] in (r.get("to") or [])}
-                             | {r["rel"] for r in (schema.get(hit[1]) or {}).get("relations") or [] if src in (r.get("from") or [])})
-            bad.append({"name": name, "rel": rel, "why": f"{label(src)}→{label(hit[1])}「{name}」不能用「{rel}」"
+        dst_type = kb.type.get(dst, "")
+        if rel and src and _allowed(schema, src, rel, dst_type) is False:
+            ok_rels = sorted({r["rel"] for r in (schema.get(src) or {}).get("relations") or [] if dst_type in (r.get("to") or [])}
+                             | {r["rel"] for r in (schema.get(dst_type) or {}).get("relations") or [] if src in (r.get("from") or [])})
+            bad.append({"name": name, "rel": rel, "why": f"{label(src)}→{label(dst_type)}「{name}」不能用「{rel}」"
                         + (f", 这两类之间能用: {' / '.join(ok_rels)}" if ok_rels else ", 类型定义里这两类之间没有这种关系")})
+            continue
+        if rel:
+            out.append((wiki_files._canonical_relation(rel), dst, name))
+    bad += wiki_constraints.relation_problems(kb, node, src, out)
     return bad, missing
 
 
-def relation_problems(subtype: str, related: list[Any], *, self_title: str = "") -> tuple[list[str], list[str]]:
+def relation_problems(subtype: str, related: list[Any], *, self_title: str = "",
+                      rel_path: str = "") -> tuple[list[str], list[str]]:
     """返回 (不允许的关系的说法, 找不到页的名字)。related 每项 {name, rel} 或裸名字。"""
-    bad, missing = bad_relations(subtype, related, self_title=self_title)
+    bad, missing = bad_relations(subtype, related, self_title=self_title, rel_path=rel_path)
     return [b["why"] for b in bad], missing
 
 
@@ -264,7 +260,8 @@ def check(params: dict[str, Any]) -> dict[str, Any]:
     params: {title, subtype, related: [{name, rel}], rel_path? (改已有页时给, 相似名查重跳过自己), new? (true = 新建)}"""
     title = str(params.get("title") or "").strip()
     rel_path = str(params.get("rel_path") or "")
-    bad, missing = bad_relations(str(params.get("subtype") or ""), list(params.get("related") or []), self_title=title)
+    bad, missing = bad_relations(str(params.get("subtype") or ""), list(params.get("related") or []), self_title=title,
+                                 rel_path=rel_path)
     similar = similar_names(title, exclude=rel_path) if title and params.get("new") else []
     return {"ok": not bad, "bad": bad, "missing": missing, "similar": similar,
             "similar_message": similar_message(title, similar) if similar else "",

@@ -2451,6 +2451,10 @@ button {
 .wiki-type-card__props dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
 .wiki-type-card__props input { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 14px; border: 1px solid var(--catfish-border); border-radius: 6px; background: var(--catfish-bg); color: var(--catfish-text); }
 .wiki-type-card__empty { color: var(--catfish-text-muted); }
+/* 11/26 约束: 必填星号 / 老数据里不合规的值 / 有选项的下拉 */
+.wiki-type-card__required { margin-left: 2px; color: var(--status-err); }
+.wiki-type-card__problem { display: block; color: var(--status-err); font-size: 12px; }
+.wiki-type-card__props select { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 14px; border: 1px solid var(--catfish-border); border-radius: 6px; background: var(--catfish-bg); color: var(--catfish-text); }
 .wiki-type-card__edit-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .wiki-type-card__edit-bar small { color: var(--catfish-text-muted); font-size: 12px; }
 /* 11/07「整理属性」(WikiPropsReview) */

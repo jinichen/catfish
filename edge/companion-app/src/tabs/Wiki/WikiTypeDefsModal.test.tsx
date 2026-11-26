@@ -11,12 +11,15 @@ const VIEW: TypeDefsView = {
     key: "cert", label: "资质证书", origin: "builtin",
     status: { from: "valid_until", warn_days: 180 },
     properties: [
-      { key: "cert_no", label: "证书编号", type: "text", origin: "builtin", hidden: false },
+      { key: "cert_no", label: "证书编号", type: "text", origin: "builtin", hidden: false, required: true, unique: true },
       { key: "valid_until", label: "有效期至", type: "date", origin: "builtin", hidden: false },
       { key: "custom_1", label: "投标用途", type: "text", origin: "local", hidden: false },
     ],
     actions: [{ id: "type.cert.expiry-reminder", label: "到期提醒", instruction: "建提醒", origin: "builtin", hidden: false }],
+    rules: ["颁发日期不能晚于有效期至"],
+    relation_limits: ["最多隶属 1 个组织"],
   }],
+  formats: { email: "邮箱", phone: "电话" },
 };
 
 vi.mock("../../lib/tauri_wiki_types", () => ({
@@ -62,5 +65,21 @@ describe("WikiTypeDefsModal (11/07 类型定义页)", () => {
     fireEvent.change(screen.getByLabelText("新类型名"), { target: { value: "业务系统" } });
     fireEvent.click(screen.getByRole("button", { name: "新建" }));
     await waitFor(() => expect(changes[0]).toEqual({ op: "add_type", type: "system", label: "业务系统" }));
+  });
+
+  it("11/26 约束: 属性上显示必填 / 不能重复, 内置规则只显示; 改属性时能设选项、必填、格式", async () => {
+    render(<WikiTypeDefsModal onClose={() => {}} />);
+    await screen.findByLabelText("提前天数");
+    expect(screen.getByText("必填 · 不能重复")).toBeTruthy();
+    expect(screen.getByText(/内置规则：颁发日期不能晚于有效期至；最多隶属 1 个组织/)).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: "改" })[2]);   // 投标用途 (文本)
+    fireEvent.change(screen.getByLabelText("选项"), { target: { value: "投标、年审" } });
+    fireEvent.change(screen.getByLabelText("格式"), { target: { value: "" } });
+    fireEvent.click(screen.getByLabelText("必填"));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(changes.at(-1)).toMatchObject({
+      op: "update_property", type: "cert", key: "custom_1",
+      property: { options: ["投标", "年审"], required: true, unique: false, format: "", not_future: false },
+    }));
   });
 });

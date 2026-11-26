@@ -80,4 +80,31 @@ describe("WikiTypeCard (11/07 证书属性卡片)", () => {
     const { container } = render(<WikiTypeCard relPath="x" title="x" readOnly={false} />);
     await waitFor(() => expect(container.innerHTML).toBe(""));
   });
+
+  it("11/26 约束: 有选项的给下拉 (老数据里不在选项里的值也列出来), 必填标出来, 不合规的老值点名", async () => {
+    entry = {
+      ...entry,
+      properties: [
+        { key: "level", label: "等级", type: "text", hint: "", value: "与本证书一致", options: ["甲级", "乙级"],
+          problem: "只能是: 甲级 / 乙级" },
+        { key: "cert_no", label: "证书编号", type: "text", hint: "", value: "", required: true },
+      ],
+      missing_required: ["证书编号"],
+      rule_problems: ["颁发日期不能晚于有效期至"],
+    };
+    render(<WikiTypeCard relPath="wiki/entities/c.md" title="证书C" readOnly={false} />);
+    await screen.findByText("资质证书");
+    expect(screen.getByText("只能是: 甲级 / 乙级")).toBeTruthy();
+    expect(screen.getByText("必填 · 未填")).toBeTruthy();
+    expect(screen.getByText("颁发日期不能晚于有效期至")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /改属性/ }));
+    const select = screen.getByLabelText("等级") as HTMLSelectElement;
+    expect(select.tagName).toBe("SELECT");
+    expect(select.value).toBe("与本证书一致");
+    expect([...select.options].map((o) => o.value)).toEqual(["", "与本证书一致", "甲级", "乙级"]);
+    fireEvent.change(select, { target: { value: "甲级" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(applied.length).toBe(1));
+    expect(applied[0]).toEqual([{ rel_path: "wiki/entities/c.md", props: { level: "甲级" } }]);
+  });
 });

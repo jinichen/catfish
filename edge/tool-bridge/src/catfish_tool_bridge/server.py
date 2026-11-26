@@ -178,6 +178,10 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     if method == "wiki/people_emails":
         from . import wiki_people  # noqa: PLC0415
         return _success(req_id, await asyncio.to_thread(wiki_people.handle, params))
+    if method in ("wiki/constraints_report", "wiki/constraints_fix"):   # 11/26 知识体系「约束检查」(wiki_constraints_report.py)
+        from . import wiki_constraints_report  # noqa: PLC0415
+        fn = wiki_constraints_report.report if method == "wiki/constraints_report" else wiki_constraints_report.fix
+        return _success(req_id, await asyncio.to_thread(fn, params))
     if method == "wiki/guard_check":   # 11/08 界面建页 / 改关系前的校验 (相似名 / 关系类型 / 引用不存在的页)
         from . import wiki_guard  # noqa: PLC0415
         return _success(req_id, await asyncio.to_thread(wiki_guard.check, params))

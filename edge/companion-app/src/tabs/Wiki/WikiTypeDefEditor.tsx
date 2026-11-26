@@ -25,16 +25,46 @@ export function keysToLabels(text: string, props: TypeDefProperty[]): string {
   return (text || "").replace(/\{([a-z_][a-z0-9_]*)\}/g, (m, k: string) => (byKey.has(k) ? `{${byKey.get(k)}}` : m));
 }
 
-function PropRow({ type, p, apply, busy }: { type: string; p: TypeDefProperty; apply: Apply; busy: boolean }) {
+/** 11/26 约束一行字: 必填 · 不能重复 · 只能是 a / b · 格式 邮箱 · 不晚于今天 */
+export function constraintSummary(p: TypeDefProperty, formats: Record<string, string>): string {
+  const parts: string[] = [];
+  if (p.required) parts.push("必填");
+  if (p.unique) parts.push("不能重复");
+  if (p.options?.length) parts.push(`只能是 ${p.options.join(" / ")}`);
+  if (p.format) parts.push(`格式：${formats[p.format] ?? p.format}`);
+  if (p.not_future) parts.push("不晚于今天");
+  return parts.join(" · ");
+}
+
+function PropRow({ type, p, apply, busy, formats }: { type: string; p: TypeDefProperty; apply: Apply; busy: boolean; formats: Record<string, string> }) {
   const [edit, setEdit] = useState(false);
   const [label, setLabel] = useState(p.label);
   const [hint, setHint] = useState(p.hint ?? "");
   const [kind, setKind] = useState(p.type);
+  const [options, setOptions] = useState((p.options ?? []).join("、"));
+  const [format, setFormat] = useState(p.format ?? "");
+  const [required, setRequired] = useState(!!p.required);
+  const [unique, setUnique] = useState(!!p.unique);
+  const [notFuture, setNotFuture] = useState(!!p.not_future);
   const save = async () => {
-    if (await apply({ op: "update_property", type, key: p.key, property: { label, hint, type: kind } })) setEdit(false);
+    const isDate = kind === "date";
+    const property: Partial<TypeDefProperty> = {
+      label, hint, type: kind, required, unique,
+      options: isDate ? [] : options.split(/[,，、/\n]/).map((x) => x.trim()).filter(Boolean),
+      format: isDate ? "" : format,
+      not_future: isDate ? notFuture : false,
+    };
+    if (await apply({ op: "update_property", type, key: p.key, property })) setEdit(false);
   };
+  const summary = constraintSummary(p, formats);
+  const check = (text: string, value: boolean, set: (v: boolean) => void) => (
+    <label style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 12 }}>
+      <input type="checkbox" checked={value} onChange={(e) => set(e.target.checked)} />{text}
+    </label>
+  );
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 180px) 64px minmax(0, 1fr) 76px auto", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: `1px solid ${V.border}`, opacity: p.hidden ? 0.55 : 1 }}>
+    <div style={{ padding: "5px 0", borderBottom: `1px solid ${V.border}`, opacity: p.hidden ? 0.55 : 1 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 180px) 64px minmax(0, 1fr) 76px auto", gap: 8, alignItems: "center" }}>
       {edit ? (
         <>
           <input style={input} value={label} onChange={(e) => setLabel(e.target.value)} maxLength={20} aria-label="属性名" />
@@ -48,7 +78,10 @@ function PropRow({ type, p, apply, busy }: { type: string; p: TypeDefProperty; a
         <>
           <strong style={{ fontSize: 13 }}>{p.label}</strong>
           <span style={{ fontSize: 12, color: V.muted }}>{p.type === "date" ? "日期" : "文本"}</span>
-          <span style={{ fontSize: 12, color: V.muted }}>{p.hint}</span>
+          <span style={{ fontSize: 12, color: V.muted }}>
+            {p.hint}
+            {summary && <span style={{ display: "block", color: V.text }}>{summary}</span>}
+          </span>
         </>
       )}
       {tag(p.origin, p.hidden)}
@@ -72,6 +105,23 @@ function PropRow({ type, p, apply, busy }: { type: string; p: TypeDefProperty; a
           </>
         )}
       </span>
+    </div>
+    {edit && (
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", paddingTop: 6 }}>
+        {check("必填", required, setRequired)}
+        {check("同类里不能重复", unique, setUnique)}
+        {kind === "date" ? check("不能晚于今天", notFuture, setNotFuture) : (
+          <>
+            <select style={{ ...input, width: 120 }} value={format} onChange={(e) => setFormat(e.target.value)} aria-label="格式">
+              <option value="">格式不限</option>
+              {Object.entries(formats).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <input style={{ ...input, flex: 1, minWidth: 220 }} value={options} onChange={(e) => setOptions(e.target.value)}
+              placeholder="只能选这些值 (用顿号隔开，不填 = 不限)" aria-label="选项" />
+          </>
+        )}
+      </div>
+    )}
     </div>
   );
 }
@@ -153,7 +203,7 @@ function ActionRow({ type, a, props, apply, busy }: { type: string; a: TypeDefAc
   );
 }
 
-export default function WikiTypeDefEditor({ def, apply, busy }: { def: TypeDef; apply: Apply; busy: boolean }) {
+export default function WikiTypeDefEditor({ def, apply, busy, formats = {} }: { def: TypeDef; apply: Apply; busy: boolean; formats?: Record<string, string> }) {
   const [label, setLabel] = useState(def.label);
   const [days, setDays] = useState(String(def.status?.warn_days ?? ""));
   const [newProp, setNewProp] = useState({ label: "", type: "text", hint: "" });
@@ -185,7 +235,12 @@ export default function WikiTypeDefEditor({ def, apply, busy }: { def: TypeDef; 
 
       <h4 style={section}>属性</h4>
       {def.properties.length === 0 && <p style={{ fontSize: 12, color: V.muted }}>还没有属性。</p>}
-      {def.properties.map((p) => <PropRow key={p.key} type={def.key} p={p} apply={apply} busy={busy} />)}
+      {def.properties.map((p) => <PropRow key={p.key} type={def.key} p={p} apply={apply} busy={busy} formats={formats} />)}
+      {[...(def.rules ?? []), ...(def.relation_limits ?? [])].length > 0 && (
+        <p style={{ fontSize: 12, color: V.muted, margin: "8px 0 0" }}>
+          内置规则：{[...(def.rules ?? []), ...(def.relation_limits ?? [])].join("；")}
+        </p>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 180px) 64px minmax(0, 1fr) auto", gap: 8, padding: "8px 0" }}>
         <input style={input} value={newProp.label} onChange={(e) => setNewProp({ ...newProp, label: e.target.value })} maxLength={20} placeholder="新属性名，如 投标用途" aria-label="新属性名" />
         <select style={input} value={newProp.type} onChange={(e) => setNewProp({ ...newProp, type: e.target.value })} aria-label="新属性类型">

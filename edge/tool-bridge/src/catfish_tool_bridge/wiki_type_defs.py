@@ -21,7 +21,7 @@ _KEY_RE = re.compile(r"^[A-Za-z0-9_一-鿿-]{1,40}$")      # 类型 key: 跟条�
 _PROP_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _ACTION_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
 _PROP_TYPES = ("text", "date")
-_EDITABLE_PROP = ("label", "type", "hint", "keywords", "max_len")
+_EDITABLE_PROP = ("label", "type", "hint", "keywords", "max_len", "options", "required", "unique", "format", "not_future")
 _EDITABLE_ACTION = ("label", "description", "instruction", "skill_path")
 
 
@@ -44,8 +44,13 @@ def view() -> dict[str, Any]:
             "status": tdef.get("status") if isinstance(tdef.get("status"), dict) else None,
             "properties": [{**p, "origin": _origin(key, builtin, local, "key", p["key"])} for p in tdef.get("properties") or [] if p.get("key")],
             "actions": [{**a, "origin": _origin(key, builtin, local, "id", a["id"])} for a in tdef.get("actions") or [] if a.get("id")],
+            # 11/26 约束: 属性之间的规则、关系「最多几个」(内置定义里写的, 页面上只显示)
+            "rules": [r.get("message") or f"{r.get('first')} 不能晚于 {r.get('then')}" for r in tdef.get("rules") or []],
+            "relation_limits": [f"最多{r['rel']} {r['max']} 个{'/'.join(merged[t].get('label', t) for t in r.get('to') or [] if t in merged)}"
+                                for r in tdef.get("relations") or [] if r.get("max")],
         })
-    return {"ok": True, "types": out, "subtypes": _known_subtypes(set(merged))}
+    from .wiki_constraints import FORMATS  # noqa: PLC0415
+    return {"ok": True, "types": out, "subtypes": _known_subtypes(set(merged)), "formats": FORMATS}
 
 
 def _known_subtypes(defined: set[str]) -> list[dict[str, Any]]:
@@ -102,9 +107,23 @@ def _clean_prop(raw: dict[str, Any], partial: bool = False) -> dict[str, Any]:
             v = [str(x).strip() for x in (v if isinstance(v, list) else str(v or "").replace("，", ",").split(",")) if str(x).strip()][:10]
         elif field == "max_len":
             v = max(10, min(int(v or 60), 400))
+        elif field == "options":   # 11/26 约束: 取值范围, 空 = 不限
+            items = v if isinstance(v, list) else re.split(r"[,，、/\n]", str(v or ""))
+            v = list(dict.fromkeys(str(x).strip() for x in items if str(x).strip()))
+            if len(v) > 60 or any(len(x) > 30 for x in v):
+                raise ValueError("选项最多 60 个, 每个最多 30 个字")
+        elif field in ("required", "unique", "not_future"):
+            v = bool(v)
+        elif field == "format":
+            from .wiki_constraints import FORMATS  # noqa: PLC0415
+            v = str(v or "")
+            if v and v not in FORMATS:
+                raise ValueError(f"格式只能是: {' / '.join(FORMATS.values())}")
         out[field] = v
     if not partial and "label" not in out:
         raise ValueError("属性名要填")
+    if out.get("type") == "date" and out.get("options"):
+        raise ValueError("日期属性不能设选项")
     return out
 
 
@@ -202,6 +221,9 @@ def apply(params: dict[str, Any]) -> dict[str, Any]:
                         raise ValueError(f"已经有叫「{patch['label']}」的属性了")
                 if not _PROP_KEY_RE.match(key):
                     raise ValueError(f"属性 key 不合法: {key}")
+                cur = next((p for p in props if p.get("key") == key), {})
+                if patch.get("options") and patch.get("type", cur.get("type")) == "date":
+                    raise ValueError("日期属性不能设选项")
                 t["properties"] = _upsert(t.get("properties") or [], "key", key, patch)
             elif op in ("hide_property", "unhide_property", "delete_property"):
                 key = str(params.get("key") or "")

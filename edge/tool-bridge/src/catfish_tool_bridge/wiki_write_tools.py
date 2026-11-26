@@ -38,7 +38,7 @@ def tool_wiki_create(args: dict) -> dict[str, Any]:
         if hits := wiki_guard.similar_names(title):
             return {"ok": False, "error": wiki_guard.similar_message(title, hits), "similar": hits,
                     "rel_path": hits[0]["rel_path"]}
-    bad, missing = wiki_guard.relation_problems(str(args.get("subtype") or ""), related, self_title=title)
+    bad, missing = wiki_guard.relation_problems(str(args.get("subtype") or ""), related, self_title=title, rel_path="new:")
     if bad:
         return {"ok": False, "error": "关系用得不对, 改好再建: " + "; ".join(bad), "relation_problems": bad}
     r = wiki_files.tool_wiki_create(args)
@@ -65,12 +65,16 @@ def _fill_props(r: dict[str, Any], args: dict) -> dict[str, Any]:
     props.update({str(k): str(v) for k, v in given.items() if str(v).strip()})
     if not props:
         return r
-    w = wiki_types.set_props_file(rel, props, schema)
+    # 11/26: 坏的值 (不在选项里 / 格式不对 / 跟别的条目重复 …) 跳过并点名, 好的照写 —— 页已经建了, 不能因为一个属性白建
+    w = wiki_types.set_props_file(rel, props, schema, partial=True)
     if w.get("ok"):
-        r["props"] = props
+        r["props"] = w.get("props") or {}
         r["type"] = tk
-    else:
-        r["props_error"] = w.get("error")
+        if w.get("aligned"):
+            r["aligned"] = w["aligned"]
+    if w.get("problems") or not w.get("ok"):
+        from . import wiki_constraints  # noqa: PLC0415
+        r["props_error"] = ("这几项没写进去: " + wiki_constraints.message(w["problems"])) if w.get("problems") else w.get("error")
     return r
 
 
@@ -100,11 +104,31 @@ def tool_wiki_update(args: dict) -> dict[str, Any]:
         fm, _ = wiki_files._split_frontmatter(content)
         subtype = wiki_files._parse_field(fm, "entity_type") or wiki_files._parse_field(fm, "concept_type") or ""
         title = wiki_files._parse_field(fm, "title") or ""
-        bad, missing = wiki_guard.relation_problems(subtype, wiki_files._parse_related(fm), self_title=title)
+        bad, missing = wiki_guard.relation_problems(subtype, wiki_files._parse_related(fm), self_title=title, rel_path=rel)
         if bad:
             return {"ok": False, "error": "关系用得不对, 改好再存: " + "; ".join(bad), "relation_problems": bad}
+        if problems := _content_prop_problems(rel, fm):
+            from . import wiki_constraints  # noqa: PLC0415
+            return {"ok": False, "error": "属性不对, 改好再存: " + wiki_constraints.message(problems), "problems": problems}
     r = wiki_files.tool_wiki_update(args)
     return _plain(r, missing) if r.get("ok") else r
+
+
+def _content_prop_problems(rel: str, new_fm: str) -> list[dict[str, str]]:
+    """11/26: 整篇覆写时文件头里的属性也过一遍约束 —— 只查跟现在那份比改了的 (老数据里已有的问题不挡这次修改)。"""
+    from . import wiki_constraints, wiki_types  # noqa: PLC0415
+    schema = wiki_types.load_schema()
+    tk = wiki_types.type_of(new_fm, schema)
+    if not tk:
+        return []
+    tdef = schema[tk]
+    cur = wiki_files.read_wiki_file(rel)
+    old_props = wiki_types.read_props(wiki_files._split_frontmatter(str(cur["content"]))[0], tdef) if cur.get("ok") else {}
+    defs = {p["key"]: p for p in tdef.get("properties") or []}
+    new_props = {k: wiki_types._clean(defs[k], v) for k, v in wiki_types.read_props(new_fm, tdef).items()}
+    changes = {k: v for k, v in new_props.items() if v != old_props.get(k, "")}
+    changes.update({k: "" for k in old_props if k not in new_props})
+    return wiki_constraints.check_props(rel, tk, old_props, changes, schema) if changes else []
 
 
 def tool_wiki_history(args: dict) -> dict[str, Any]:

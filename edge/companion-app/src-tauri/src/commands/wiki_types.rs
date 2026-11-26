@@ -89,6 +89,19 @@ pub async fn wiki_props_apply(items: Value) -> Result<Value, String> {
     call_with_timeout("wiki/props_apply", json!({ "items": items }), Duration::from_secs(60)).await
 }
 
+/// 11/26 知识体系「约束检查」: 必填没填 / 值不合规 / 重复 / 日期先后 / 关系超数量 / 成环 / 属性跟关系对不上 (tool-bridge wiki_constraints_report)。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn wiki_constraints_report(type_key: Option<String>) -> Result<Value, String> {
+    let params = json!({ "type": type_key.unwrap_or_default() });
+    ok_or_err(call_with_timeout("wiki/constraints_report", params, Duration::from_secs(60)).await?, "约束检查失败")
+}
+
+/// 约束检查里的一键改 (填属性 / 补关系 / 关系改成跟属性一样), 每一项照样过写入校验, 改前备份。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn wiki_constraints_fix(items: Value) -> Result<Value, String> {
+    call_with_timeout("wiki/constraints_fix", json!({ "items": items }), Duration::from_secs(120)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

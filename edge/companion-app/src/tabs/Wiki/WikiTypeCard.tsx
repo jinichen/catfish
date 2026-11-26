@@ -63,7 +63,7 @@ export default function WikiTypeCard({ relPath, title, readOnly }: { relPath: st
       const r = await wikiPropsApply([{ rel_path: relPath, props: changed }]);
       if (!r.ok) throw new Error(r.errors.map((e) => e.error).join("；") || "没写进去");
       setEditing(false);
-      setMessage("属性已保存");
+      setMessage(["属性已保存", ...(r.aligned ?? [])].join("；"));
       await load();
       void loadFiles();
     } catch (error) {
@@ -104,31 +104,44 @@ export default function WikiTypeCard({ relPath, title, readOnly }: { relPath: st
       <dl className="wiki-type-card__props">
         {props.map((p) => (
           <div key={p.key} title={p.hint || undefined}>
-            <dt>{p.label}</dt>
+            <dt>{p.label}{p.required && <span aria-label="必填" className="wiki-type-card__required">*</span>}</dt>
             <dd>
-              {editing ? (
+              {editing && p.options?.length ? (
+                <select value={draft[p.key] ?? ""} onChange={(e) => setDraft((d) => ({ ...d, [p.key]: e.target.value }))} aria-label={p.label}>
+                  <option value="">（不填）</option>
+                  {/* 老数据里不在选项里的值也列出来, 不然一打开编辑就被悄悄清掉 */}
+                  {p.value && !p.options.includes(p.value) && <option value={p.value}>{p.value}（不在选项里）</option>}
+                  {p.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              ) : editing ? (
                 <input
-                  type={p.type === "date" ? "date" : "text"}
+                  type={p.type === "date" ? "date" : p.format === "email" ? "email" : "text"}
                   value={draft[p.key] ?? ""}
                   onChange={(e) => setDraft((d) => ({ ...d, [p.key]: e.target.value }))}
                   aria-label={p.label}
                 />
               ) : p.value ? (
-                p.value
+                <>
+                  {p.value}
+                  {p.problem && <small className="wiki-type-card__problem">{p.problem}</small>}
+                </>
               ) : (
-                <span className="wiki-type-card__empty">未填</span>
+                <span className="wiki-type-card__empty">{p.required ? "必填 · 未填" : "未填"}</span>
               )}
             </dd>
           </div>
         ))}
       </dl>
+      {!editing && (entry.rule_problems ?? []).length > 0 && (
+        <div className="wiki-workbench__error">{(entry.rule_problems ?? []).join("；")}</div>
+      )}
       {editing && (
         <div className="wiki-type-card__edit-bar">
           <button type="button" className="wiki-workbench__primary" onClick={() => void save()} disabled={saving}>
             {saving && <SpinnerGap className="wiki-spin" size={16} />}保存
           </button>
           <button type="button" className="wiki-workbench__secondary" onClick={() => setEditing(false)} disabled={saving}>取消</button>
-          <small>只改这几项属性，正文不动；改之前会备份原文件。</small>
+          <small>只改这几项属性，正文不动；改之前会备份原文件。选项、格式、日期先后、编号重复不对的不让存。</small>
         </div>
       )}
 
