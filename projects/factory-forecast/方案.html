@@ -1,0 +1,548 @@
+<title>小鲶工厂预测与决策方案</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* 布局: 单栏长文 + 左侧目录 (宽屏), 章节编号对应实施顺序; 表格承载对照信息 */
+:root {
+  --bg: #f6f7f5;
+  --surface: #ffffff;
+  --fg: #1d2322;
+  --muted: #5b6664;
+  --line: #d9dfdc;
+  --accent: #0f6b62;
+  --accent-soft: #e3f0ed;
+  --warn: #9a5b00;
+  --warn-soft: #fbf1e1;
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121615; --surface: #1a201f; --fg: #e4e9e7; --muted: #9aa6a3; --line: #2e3836;
+    --accent: #5cc2b4; --accent-soft: #1d302d; --warn: #e0a44e; --warn-soft: #2f2617;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121615; --surface: #1a201f; --fg: #e4e9e7; --muted: #9aa6a3; --line: #2e3836;
+  --accent: #5cc2b4; --accent-soft: #1d302d; --warn: #e0a44e; --warn-soft: #2f2617;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body);
+  font-size: 15.5px; line-height: 1.75;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 80px;
+}
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 13.5px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+nav.toc a { color: var(--muted); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+nav.toc .toc-label { font-size: 12px; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; }
+main { min-width: 0; }
+header.doc { margin-bottom: 36px; }
+.eyebrow { font-size: 12.5px; letter-spacing: .08em; color: var(--accent); font-weight: 500; }
+h1 { font-size: 30px; line-height: 1.3; margin: 8px 0 12px; text-wrap: balance; }
+.lede { color: var(--muted); max-width: 62ch; margin: 0; }
+.meta { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); margin-top: 14px; }
+section { margin-top: 44px; }
+h2 { font-size: 21px; margin: 0 0 14px; padding-top: 8px; border-top: 1px solid var(--line); text-wrap: balance; }
+h2 .num { font-family: var(--font-mono); color: var(--accent); font-weight: 500; margin-right: 10px; }
+h3 { font-size: 16.5px; margin: 26px 0 8px; }
+p, li { max-width: 68ch; }
+ul, ol { padding-left: 1.3em; }
+li { margin: 4px 0; }
+strong { font-weight: 700; }
+code { font-family: var(--font-mono); font-size: .9em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+.table-wrap { overflow-x: auto; margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 560px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { font-weight: 500; color: var(--muted); font-size: 13px; background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td.k { white-space: nowrap; font-weight: 500; }
+.pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.have { background: var(--accent-soft); color: var(--accent); }
+.pill.build { background: var(--warn-soft); color: var(--warn); }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; max-width: 72ch; }
+.callout.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.callout p { margin: 0; }
+.principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 14px; }
+.principle { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.principle b { display: block; margin-bottom: 4px; }
+.principle span { color: var(--muted); font-size: 14px; }
+pre.mermaid { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; overflow-x: auto; }
+.phase { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.phase:last-child { border-bottom: 0; }
+.phase .when { font-family: var(--font-mono); font-size: 13px; color: var(--accent); }
+.phase h3 { margin: 0 0 6px; }
+.phase p { margin: 4px 0; }
+.foot { margin-top: 56px; font-size: 13px; color: var(--muted); }
+a { color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 860px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  nav.toc { position: static; margin-bottom: 28px; }
+  nav.toc ol { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  h1 { font-size: 25px; }
+  .phase { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
+</style>
+
+<div class="wrap">
+  <nav class="toc" aria-label="目录">
+    <div class="toc-label">目录</div>
+    <ol>
+      <li><a href="#goal">1 目标与边界</a></li>
+      <li><a href="#principles">2 基本原则</a></li>
+      <li><a href="#arch">3 总体架构</a></li>
+      <li><a href="#forecast">4 预测方案</a></li>
+      <li><a href="#decide">5 决策方案</a></li>
+      <li><a href="#catfish">6 在小鲶里的落地</a></li>
+      <li><a href="#pilot">7 试点项目方案</a></li>
+      <li><a href="#roadmap">8 实施路线</a></li>
+      <li><a href="#factory">9 需要工厂提供</a></li>
+      <li><a href="#risks">10 风险与应对</a></li>
+      <li><a href="#accept">11 验收标准</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="doc">
+      <div class="eyebrow">方案 · 鲶鱼 Catfish · 工厂场景</div>
+      <h1>小鲶工厂预测与决策方案</h1>
+      <p class="lede">让小鲶帮工厂回答两类问题：「接下来会怎样」（预测）和「该怎么安排」（决策）。数字由统计模型、机器学习模型和优化求解器算出，大模型负责理解问题、编排计算、解释结果和补充文字信息，最后由人拍板。</p>
+      <div class="meta">版本 草案 v5 · 2026-11-26 · 补充开源时序模型清单、试点项目方案、计算资源实测、训练结论、回测做法与试跑结果、物料分类处理</div>
+    </header>
+
+    <section id="goal">
+      <h2><span class="num">1</span>目标与边界</h2>
+      <h3>要解决的问题</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>类型</th><th>工厂里的典型问题</th></tr></thead>
+        <tbody>
+          <tr><td class="k">预测</td><td>下个月各物料 / 产品需求多少；哪家供应商可能延期交货；哪张订单可能交不上；不良率会不会继续上升</td></tr>
+          <tr><td class="k">决策</td><td>每种物料什么时候订、订多少（安全库存、再订货点、订货量）；按订单、产能、换线时间怎么排产；采购量怎么在几家供应商之间分配；哪些呆滞库存先处理</td></tr>
+        </tbody>
+      </table></div>
+      <h3>不做的事</h3>
+      <ul>
+        <li><strong>不让大模型直接给预测数字或排产方案。</strong>大模型不擅长精确计算，同一个问题两次答案可能不同，也给不出可信的误差范围。</li>
+        <li><strong>不自动执行。</strong>小鲶给建议和方案对比，不自己下单、不自己改排产；写回 ERP 一律走审批。</li>
+        <li><strong>不用外部预测服务。</strong>会把工厂数据发出去的商业预测 API 不用。</li>
+      </ul>
+    </section>
+
+    <section id="principles">
+      <h2><span class="num">2</span>基本原则</h2>
+      <div class="principles">
+        <div class="principle"><b>数字来自算法</b><span>预测由统计 / 机器学习模型算，方案由求解器算；大模型只写代码、调工具、讲结果。</span></div>
+        <div class="principle"><b>每个数字都带误差</b><span>预测给区间，并附历史回测误差；不给单个「确定」的数。</span></div>
+        <div class="principle"><b>来源可追溯</b><span>每个结果都能看到用了哪些数据、哪段代码、什么口径。</span></div>
+        <div class="principle"><b>人做决定</b><span>决策给 2–3 个方案及各自代价，由计划员、采购员选；执行走审批卡片。</span></div>
+        <div class="principle"><b>数据不出厂</b><span>只读数据库账号；计算在员工机或厂内服务器；大模型用私有部署。</span></div>
+        <div class="principle"><b>不静默换模型</b><span>上游模型不可用时如实报错，不在中央网关设兜底模型，避免结果来源不确定。</span></div>
+      </div>
+    </section>
+
+    <section id="arch">
+      <h2><span class="num">3</span>总体架构</h2>
+      <pre class="mermaid">
+flowchart TB
+  subgraph D["数据层（厂内）"]
+    D1["ERP / MES 只读副本<br/>或已有数据仓库、BI 数据集"]
+    D2["口径词表<br/>（库存、产量、不良率等定义）"]
+    D3["文字信息<br/>邮件、会议纪要、客户沟通"]
+  end
+  subgraph C["计算层（Python，员工机或厂内服务器）"]
+    C1["统计预测<br/>移动平均、季节分解、指数平滑、ARIMA"]
+    C2["机器学习<br/>梯度提升树等"]
+    C3["预训练时序模型（可选）<br/>本地运行，免训练"]
+    C4["优化求解<br/>库存公式、线性 / 整数规划"]
+    C5["回测与误差评估"]
+  end
+  subgraph O["编排层：小鲶（私有大模型）"]
+    O1["理解问题、确定口径"]
+    O2["写代码并调用计算层"]
+    O3["解释结果、提示局限"]
+    O4["从文字中提取调整线索"]
+  end
+  subgraph U["交付层"]
+    U1["对话里的结果卡片与方案对比"]
+    U2["固化技能 + 定时任务<br/>（月度预测、补货建议）"]
+    U3["早安 / 报告：预测与实际对照"]
+    U4["审批卡片 → 写回 ERP"]
+  end
+  D1 --> C1 & C2 & C3
+  C1 & C2 & C3 --> C5 --> C4
+  D2 --> O1
+  D3 --> O4
+  O1 --> O2 --> C1
+  C5 --> O3
+  C4 --> O3
+  O4 --> O3
+  O3 --> U1 & U2 & U3
+  U1 --> U4
+      </pre>
+      <p>各层分工：</p>
+      <ul>
+        <li><strong>数据层</strong>：分析和预测连数据库（只读副本或数仓），不走 ERP 的业务 API。API 适合查单条、建单据，不适合大批量、跨对象的历史数据。</li>
+        <li><strong>计算层</strong>：所有数字在这里产生。代码和输入数据都留存，可以重跑。</li>
+        <li><strong>编排层</strong>：小鲶理解员工的问题，选方法、写代码、跑回测，再把结果讲成人话。邮件、纪要里的信息（如「客户说下月加单」）只作为<em>调整建议</em>提给人，不直接改预测数字。</li>
+        <li><strong>交付层</strong>：验证过的分析固化成技能，按计划自动跑；涉及写回的动作一律审批。</li>
+      </ul>
+    </section>
+
+    <section id="forecast">
+      <h2><span class="num">4</span>预测方案</h2>
+
+      <h3>4.1 数据要求</h3>
+      <ul>
+        <li>至少 12 个月、最好 24 个月以上的历史（出库、订单、到货、质检、产量）。</li>
+        <li>口径统一：同一个指标在不同时期、不同系统里算法一致；有变化的要记录变化时间。</li>
+        <li>缺失和异常先处理并记录（停产月、系统切换月、一次性大单），不悄悄填零。</li>
+      </ul>
+
+      <h3>4.2 方法阶梯（由简到繁，够用即止）</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>层级</th><th>方法</th><th>训练成本</th><th>适合</th></tr></thead>
+        <tbody>
+          <tr><td class="k">0 基线</td><td>上月值、去年同期、近 3 个月平均</td><td>无</td><td>所有预测都要和它比；比不过基线的模型不上线</td></tr>
+          <tr><td class="k">1 统计</td><td>季节分解、指数平滑、ARIMA</td><td>每个品项单独拟合，秒级</td><td>规律稳定的需求、产量、库存。<strong>首选</strong></td></tr>
+          <tr><td class="k">2 机器学习</td><td>梯度提升树等</td><td>用工厂历史训练，分钟级</td><td>影响因素多（订单、季节、供应商、交期）；「会不会发生」类问题（延期、返工）</td></tr>
+          <tr><td class="k">3 预训练时序模型</td><td>开源时序大模型，本地运行</td><td>免训练，可选微调</td><td>历史太短、品项太多来不及逐个调。候选见 4.3，须在工厂数据上回测后才用</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout"><p>这里的「训练」是在工厂自己的数据上拟合小模型，普通电脑的 CPU 就能完成，和训练大语言模型不是一回事。</p></div>
+
+      <h3>4.3 开源预训练时序模型（本地运行）</h3>
+      <p>都可以下载到本机运行，数据不出厂；不用训练，输入历史即出带区间的预测。许可证按模型权重本身核对（2026-11-26）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>模型</th><th>出品</th><th>版本 / 参数量</th><th>权重许可</th><th>结论</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Chronos</td><td>Amazon</td><td>Chronos-2 约 1.2 亿；Chronos-Bolt small 4,800 万 / base 2 亿</td><td>Apache-2.0</td><td><span class="pill have">首选</span> 使用最广，Bolt 在 CPU 上快</td></tr>
+          <tr><td class="k">TimesFM</td><td>Google</td><td>2.5 约 2.3 亿</td><td>Apache-2.0</td><td><span class="pill have">对照</span> 项目活跃</td></tr>
+          <tr><td class="k">TinyTimeMixer（TTM）</td><td>IBM</td><td>r2 约 80 万</td><td>Apache-2.0</td><td><span class="pill have">轻量备选</span> 极小，适合随包；零样本一般，最好用工厂数据轻微调</td></tr>
+          <tr><td class="k">Toto</td><td>Datadog</td><td>约 1.5 亿</td><td>Apache-2.0</td><td>偏监控运维指标，工厂业务数据不优先</td></tr>
+          <tr><td class="k">Sundial</td><td>清华 THUML</td><td>约 1.3 亿</td><td>Apache-2.0</td><td>国内团队，仓库 2025-09 后未更新</td></tr>
+          <tr><td class="k">Time-MoE / Lag-Llama</td><td>学术团队</td><td>—</td><td>Apache-2.0</td><td>研究性质，更新少，不推荐</td></tr>
+          <tr><td class="k">Moirai</td><td>Salesforce</td><td>2.0 / 1.1</td><td>CC-BY-NC-4.0</td><td><span class="pill build">不可用</span> 权重禁止商用</td></tr>
+          <tr><td class="k">TiRex</td><td>NX-AI</td><td>—</td><td>自定义许可</td><td><span class="pill build">暂不用</span> 条款未审</td></tr>
+        </tbody>
+      </table></div>
+      <p>公开排行榜变动频繁，排名好不等于适合中国工厂的月度需求，一律以 4.4 的回测为准。</p>
+
+      <h4 style="font-size:15px;margin:22px 0 6px;">计算资源实测（2026-11-26）</h4>
+      <p>环境：Apple M4、16 GB 内存，只用 CPU（4 线程）。数据：按试点规模模拟，20 种物料、24–36 个月的月度数据（趋势 + 季节 + 噪声）。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>模型</th><th>权重（按参数量估）</th><th>运行峰值内存</th><th>20 个品项预测一次</th><th>完整回测（12 轮 × 20 = 240 次）</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Chronos-Bolt small</td><td>约 190 MB</td><td>约 550 MB</td><td>0.34 秒（含预热）</td><td>0.1 秒</td></tr>
+          <tr><td class="k">Chronos-2</td><td>约 480 MB</td><td>约 820 MB</td><td>0.13 秒</td><td>0.4 秒</td></tr>
+          <tr><td class="k">Chronos-Bolt base</td><td>约 820 MB</td><td>约 1.1 GB</td><td>1.7 秒（含预热）</td><td>0.5 秒</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li><strong>算力不是问题：</strong>不需要 GPU；试点规模的预测和回测都在 1 秒内。几百种物料、按周预测也只是几秒到几十秒。老款 Intel 电脑会慢几倍，同样够用。</li>
+        <li><strong>内存：</strong>运行时 0.5–1.1 GB，8 GB 内存的普通办公电脑够用。</li>
+        <li><strong>真正的成本是安装体积：</strong>PyTorch 运行环境约 590 MB，整个 Python 环境约 790 MB，加 Chronos-Bolt small 权重后约 1 GB。所以做成<strong>可选组件</strong>，只在需要预测的机器上装，不进主安装包。</li>
+        <li><strong>未实测：</strong>TimesFM 2.5 参数量与 Chronos-Bolt base 相近，预计同一量级；IBM TTM 只有约 80 万参数，要求更低。</li>
+        <li>权重首次下载需几分钟（取决于网速）；离线部署时随组件一起分发，装好后加载约 0.1 秒。</li>
+      </ul>
+
+      <h4 style="font-size:15px;margin:22px 0 6px;">要不要训练</h4>
+      <div class="callout"><p><strong>预训练模型默认不用训练。</strong>它已从大量时间序列里学到趋势、季节、波动等通用规律，拿来直接用：输入历史，输出带区间的预测。上面的实测就是零训练。<strong>但「不用训练」不等于「保证准」，回测必须做（见 4.4）。</strong></p></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>方法</th><th>训练</th><th>日常怎么跑</th></tr></thead>
+        <tbody>
+          <tr><td class="k">预训练时序模型</td><td>不需要；可选微调</td><td>每月喂最新历史重新预测，模型本身不变，定时任务自动完成</td></tr>
+          <tr><td class="k">统计方法</td><td>不算训练，每次运行自动拟合，秒级</td><td>每月自动重算</td></tr>
+          <tr><td class="k">机器学习</td><td>需要，用工厂历史训练，CPU 分钟级</td><td>每月或每季自动重训</td></tr>
+        </tbody>
+      </table></div>
+      <p>什么时候考虑微调预训练模型（可选，一次性、离线做，不是日常流程）：</p>
+      <ul>
+        <li>回测后部分物料零样本效果明显不如统计方法，且工厂历史数据较多；</li>
+        <li>用 IBM TTM 这类小模型时，零样本一般，用工厂数据轻微调通常提升明显，CPU 上几分钟。</li>
+      </ul>
+
+      <h3>4.4 回测：上线前必须过</h3>
+      <p>回测就是「假装回到过去」：只用当时手上有的数据去预测，再拿实际发生的数比对，看各方法在这家工厂的数据上到底准不准。它不是训练，是验收。</p>
+
+      <h4 style="font-size:15px;margin:18px 0 6px;">步骤</h4>
+      <ol>
+        <li><strong>定预测场景</strong>：和实际用法一致。例：每月初预测下个月需求（提前 1 个月）；若采购提前期 2 个月，就同时测提前 2 个月。</li>
+        <li><strong>滚动切点</strong>：从 12 个月前开始，每个月做一次「切点」。切点之前的数据当历史，预测切点之后的月份，然后切点后移一个月，重复。12 个切点 × 20 种物料 = 240 次预测。</li>
+        <li><strong>每种方法都按同样切点跑</strong>：基线、统计、机器学习、预训练模型、组合，一个不落。</li>
+        <li><strong>记录</strong>：每次预测的点预测、区间（如 10%–90%）和当月实际值。</li>
+        <li><strong>算指标、出对比表、逐品项选方法</strong>（见下）。</li>
+      </ol>
+
+      <h4 style="font-size:15px;margin:18px 0 6px;">指标</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>指标</th><th>看什么</th><th>怎么算</th></tr></thead>
+        <tbody>
+          <tr><td class="k">WAPE（加权绝对误差）</td><td>准不准，主指标</td><td>Σ|实际 − 预测| ÷ Σ实际。物料有月份为 0 也能算，比逐月百分比误差稳</td></tr>
+          <tr><td class="k">偏差</td><td>是否总是偏高或偏低</td><td>Σ(预测 − 实际) ÷ Σ实际。长期偏高会压库存，偏低会缺料</td></tr>
+          <tr><td class="k">区间覆盖率</td><td>给的区间靠不靠谱</td><td>实际值落在 10%–90% 区间内的比例，应接近 80%</td></tr>
+          <tr><td class="k">相对基线</td><td>值不值得用</td><td>方法 WAPE ÷ 基线 WAPE，小于 1 才说明比「去年同期 / 近 3 月平均」强</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4 style="font-size:15px;margin:18px 0 6px;">防止回测作弊（数据泄露）</h4>
+      <ul>
+        <li>每个切点只能用当时可得的数据：后来补录、改过的数据要按当时版本，或者剔除。</li>
+        <li>外部因素只能用当时已知的：已下的订单可以用，事后才知道的实际产量不能用。</li>
+        <li>异常月（停产、系统切换、一次性大单）先标出来，回测时单独看，不悄悄删掉。</li>
+        <li>选方法和参数只看回测期之前的数据；最后留 2 个月的真实运行（预测在前、实际在后）做最终确认。</li>
+      </ul>
+
+      <h4 style="font-size:15px;margin:18px 0 6px;">怎么选、怎么上线</h4>
+      <ol>
+        <li>每种物料选回测 WAPE 最低的方法，且必须优于基线；没有方法赢基线的物料，继续用基线并在结果里注明。</li>
+        <li>偏差明显（如长期偏高 10% 以上）或区间覆盖率远离 80% 的，即使 WAPE 低也要复查。</li>
+        <li>选定后冻结进技能：方法、参数、数据口径、回测结果一起存档。</li>
+        <li>上线后每月自动把预测和实际对照，滚动更新这些指标；某物料连续 2–3 个月明显变差，提醒计划员并重新回测选方法。</li>
+      </ol>
+
+      <h4 style="font-size:15px;margin:18px 0 6px;">输出示例（回测对比表的样子，数字为示意）</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>物料</th><th>基线 WAPE</th><th>统计</th><th>预训练</th><th>组合</th><th>选用</th><th>偏差</th><th>区间覆盖</th></tr></thead>
+        <tbody>
+          <tr><td class="k">物料 A</td><td>18%</td><td>12%</td><td>11%</td><td>10%</td><td>组合</td><td>+2%</td><td>83%</td></tr>
+          <tr><td class="k">物料 B</td><td>25%</td><td>27%</td><td>26%</td><td>26%</td><td>基线（无方法胜出）</td><td>−1%</td><td>—</td></tr>
+          <tr><td class="k">物料 C</td><td>30%</td><td>22%</td><td>19%</td><td>20%</td><td>预训练</td><td>+12% 需复查</td><td>71%</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>4.5 给员工看的结果</h3>
+      <ul>
+        <li>预测区间：如「最可能 1,200，区间 1,050–1,380」。</li>
+        <li>历史误差：如「过去 6 个月平均偏差 ±12%」。</li>
+        <li>主要依据：如「季节性为主，每年四季度都有高峰」。</li>
+        <li>局限：如「只有 14 个月历史，仅供粗略参考」。</li>
+        <li>文字线索（如有）：如「客户 11/20 邮件提到 12 月可能加单约 20%，未计入预测，请确认是否上调」。</li>
+      </ul>
+
+      <h3>4.6 持续运行</h3>
+      <ul>
+        <li>验证过的预测固化成技能，每月定时用最新数据重新拟合。</li>
+        <li>每期结束自动对比预测与实际，误差超过阈值时提醒负责人复核。</li>
+      </ul>
+
+      <h3>4.7 三类物料要区别对待</h3>
+      <p>试跑（见 7.6）显示，不是每种物料都值得「预测得更准」，要先按需求形态分开：</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>形态</th><th>怎么判断</th><th>怎么处理</th></tr></thead>
+        <tbody>
+          <tr><td class="k">规律型（季节、趋势、水平突变）</td><td>回测里有方法明显赢基线</td><td>用逐品项选出的方法预测，进补货计算</td></tr>
+          <tr><td class="k">高波动型</td><td>所有方法都和基线差不多，误差 30% 以上</td><td>预测用基线即可；重点放在安全库存，用波动幅度算，不追求预测更准</td></tr>
+          <tr><td class="k">间歇型（很多月为 0）</td><td>超过三分之一月份为 0；按月误差接近 100%</td><td>按月点预测基本无意义。改用专门方法（如 Croston、TSB）预测「平均每月用量」，或直接按历史最大用量 / 服务水平定安全库存和再订货点</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="decide">
+      <h2><span class="num">5</span>决策方案</h2>
+
+      <h3>5.1 步骤</h3>
+      <ol>
+        <li><strong>收集约束</strong>：产能、最小起订量、仓库容量、采购提前期、交期、换线时间。由计划员、采购员逐条确认，不靠模型猜。</li>
+        <li><strong>确定目标</strong>：成本最低、延期最少、库存占用最少。多个目标冲突时，由业务负责人定优先级。</li>
+        <li><strong>求解</strong>：
+          <ul>
+            <li>补货：安全库存、再订货点、经济订货量公式，输入用第 4 节的预测和误差。</li>
+            <li>排产、分配：线性 / 整数规划求解器，在约束内算出最优解。</li>
+          </ul>
+        </li>
+        <li><strong>多方案对比</strong>：给 2–3 个方案，写清代价。例：方案 A 成本最低但 2 张单延期；方案 B 全部准时，成本 +4%。</li>
+        <li><strong>情景推演</strong>：员工可以问「供应商晚一周怎么办」「插进一张急单怎么办」，小鲶改参数重算。</li>
+        <li><strong>人选方案、审批执行</strong>：选定后生成采购申请或排产调整，经审批卡片确认后再写回 ERP。</li>
+      </ol>
+
+      <h3>5.2 由易到难</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>决策</th><th>难度</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td class="k">补货建议</td><td>低</td><td>公式成熟，输入是预测结果；输出建议清单，人确认后下单</td></tr>
+          <tr><td class="k">供应商分配</td><td>中</td><td>需要价格、交期、质量数据和分配规则</td></tr>
+          <tr><td class="k">排产</td><td>高</td><td>约束多、要和车间反复磨合；放在前两项取得信任之后</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="catfish">
+      <h2><span class="num">6</span>在小鲶里的落地</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>需要的能力</th><th>现状</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td class="k">小鲶运行 Python 代码</td><td><span class="pill have">已有</span></td><td>对话中写代码、跑代码</td></tr>
+          <tr><td class="k">对话跑通后固化成技能</td><td><span class="pill have">已有</span></td><td>验证过的分析不再每次重新推理</td></tr>
+          <tr><td class="k">定时任务</td><td><span class="pill have">已有</span></td><td>月度重新拟合、预测与实际对照</td></tr>
+          <tr><td class="k">交互卡片</td><td><span class="pill have">已有</span></td><td>填约束参数、并排比较方案、选方案</td></tr>
+          <tr><td class="k">审批卡片</td><td><span class="pill have">已有</span></td><td>写回 ERP 前确认</td></tr>
+          <tr><td class="k">私有大模型</td><td><span class="pill have">已有</span></td><td>经中央网关，数据不出内网</td></tr>
+          <tr><td class="k">预测、优化计算库</td><td><span class="pill build">待加</span></td><td>statsmodels、LightGBM、OR-Tools 等进安装包，或做成可选组件（同会议高精度转写的做法）</td></tr>
+          <tr><td class="k">预训练时序模型</td><td><span class="pill build">待加</span></td><td>许可证已核：Chronos、TimesFM、TTM 可用。作为可选组件，试点回测胜出才装</td></tr>
+          <tr><td class="k">只读数据库连接工具</td><td><span class="pill build">待加</span></td><td>只允许查询；连接串加密保存；大查询和导出走审批</td></tr>
+          <tr><td class="k">口径词表</td><td><span class="pill build">待建</span></td><td>放资料库，和工厂逐条确认；几十条即可起步</td></tr>
+          <tr><td class="k">预测与实际对照展示</td><td><span class="pill build">待做</span></td><td>早安或报告里展示每期误差</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="pilot">
+      <h2><span class="num">7</span>试点项目方案：月度物料需求预测</h2>
+
+      <h3>7.1 范围</h3>
+      <ul>
+        <li>对象：用量（或金额）最大的约 20 种物料，覆盖主要采购支出。</li>
+        <li>粒度：按月；预测未来 1–3 个月。</li>
+        <li>数据：至少 24 个月出库 / 领用记录；能拿到的话加上订单、生产计划、停产月标记。</li>
+        <li>不做：排产、自动下单、写回 ERP。</li>
+      </ul>
+
+      <h3>7.2 候选方法：同台比，不预设哪种最好</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>组</th><th>方法</th><th>为什么放进来</th></tr></thead>
+        <tbody>
+          <tr><td class="k">A 基线</td><td>去年同期、近 3 个月平均</td><td>所有方法都必须赢它</td></tr>
+          <tr><td class="k">B 统计</td><td>指数平滑（ETS）、ARIMA、季节分解</td><td>月度数据点少（24–36 个），这类方法往往很难被打败</td></tr>
+          <tr><td class="k">C 机器学习</td><td>梯度提升树，加订单、生产计划等外部因素</td><td>只有拿到可靠外部因素时才有优势</td></tr>
+          <tr><td class="k">D 预训练时序模型</td><td>Chronos-Bolt small、TimesFM 2.5（对照），TTM r2（轻量）</td><td>历史短、品项多时省事；零样本也能出区间</td></tr>
+          <tr><td class="k">E 组合</td><td>B 与 D 的预测取中位数</td><td>组合通常比任何单一方法更稳</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>7.3 怎么比、怎么选</h3>
+      <ol>
+        <li>滚动回测最近 6–12 个月，每月只用当时可得的数据。</li>
+        <li>按品项算误差（WAPE），再按用量加权算总体；同时看区间是否真的覆盖实际值。</li>
+        <li><strong>逐品项选方法</strong>：每种物料用回测中最准的那个；都赢不了基线的，就用基线并标明。</li>
+        <li>选定后冻结：方法、参数、数据口径写进技能，之后每月自动重跑。</li>
+      </ol>
+
+      <h3>7.4 小鲶要做的</h3>
+      <ul>
+        <li>只读查询试点物料的历史数据，按口径词表清洗。</li>
+        <li>跑 A–E 五组回测，输出对比表和每个品项的选择理由。</li>
+        <li>生成每月预测卡片：区间、历史误差、依据、局限、文字线索。</li>
+        <li>每月对照实际，误差超阈值提醒计划员。</li>
+      </ul>
+
+      <h3>7.5 交付物</h3>
+      <ul>
+        <li>回测对比报告：五组方法在每个品项上的误差，以及选择结果。</li>
+        <li>固化的月度预测技能 + 定时任务。</li>
+        <li>连续 2 个月的预测与实际对照。</li>
+      </ul>
+
+      <h3>7.6 回测脚本试跑（模拟数据，2026-11-26）</h3>
+      <p>脚本：仓库 <code>projects/factory-forecast/backtest.py</code>。拿到真实数据后可直接运行：<code>python backtest.py --csv 历史.csv</code>（列：item、month、qty）。</p>
+      <p>试跑设置：20 种模拟物料（季节型 8、增长型 4、高波动型 4、间歇型 2、水平突变型 2），36 个月；最后 12 个月滚动切点；提前 1 个月和 2 个月各测一遍；共 2,400 次预测，CPU 上用时 41 秒。</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>方法</th><th>提前 1 月 WAPE</th><th>提前 2 月 WAPE</th><th>区间覆盖率（目标 80%）</th></tr></thead>
+        <tbody>
+          <tr><td class="k">A1 基线·去年同期</td><td>17%</td><td>17%</td><td>—</td></tr>
+          <tr><td class="k">A2 基线·近 3 月平均</td><td>18%</td><td>22%</td><td>—</td></tr>
+          <tr><td class="k">B 统计·自动 ETS</td><td>13%</td><td>18%</td><td>72–73%（区间偏窄）</td></tr>
+          <tr><td class="k">D 预训练·Chronos-Bolt small（零训练）</td><td><strong>11%</strong></td><td><strong>12%</strong></td><td>77–80%</td></tr>
+          <tr><td class="k">E 组合·B+D</td><td><strong>11%</strong></td><td>14%</td><td>78–80%</td></tr>
+        </tbody>
+      </table></div>
+      <p>逐品项选用（提前 1 月 / 2 月）：预训练 5 / 10、ETS 7 / 3、组合 4 / 2、<strong>基线 4 / 5</strong>（没有方法赢它就保留基线）。</p>
+      <ul>
+        <li>预训练模型整体最稳，提前 2 个月优势更明显，区间也最可信，而且零训练。</li>
+        <li>没有一种方法通吃：增长型物料多数 ETS 胜，部分物料基线就是最好的，所以必须逐品项选。</li>
+        <li>高波动型物料怎么预测都和基线差不多；间歇型物料所有方法误差都在 100% 左右、偏差很大。这两类按 4.7 单独处理。</li>
+        <li>偏差大或区间覆盖率异常的物料被自动标「需复查」。</li>
+        <li>试跑中发现并修掉一个问题：统计方法拟合失败时曾悄悄退回「近 3 月平均」，结果看起来正常但其实是基线。现在脚本会统计每种方法的回退次数并在结果里打印，本次为 0。</li>
+      </ul>
+      <div class="callout warn"><p>这是模拟数据：形态是人为设定的，只能说明脚本和流程跑得通，<strong>不能据此判断哪种方法在真实工厂数据上更好</strong>。结论以工厂真实数据的回测为准。</p></div>
+
+      <div class="callout"><p><strong>关于「时序大模型是不是更好」：</strong>不预设。月度需求每个品项只有二三十个数据点，传统统计方法和简单基线经常就很强；预训练时序模型的优势在历史短、品项多、来不及逐个调的时候；机器学习只有拿到可靠的外部因素（订单、生产计划）时才明显占优。所以试点让几类方法在同一份工厂数据上回测比较，逐品项挑最准的，组合往往最稳。</p></div>
+    </section>
+
+    <section id="roadmap">
+      <h2><span class="num">8</span>实施路线</h2>
+      <p>时间为估计，取决于工厂数据准备情况。每个阶段达到退出条件再进入下一阶段。</p>
+      <div class="phase">
+        <div class="when">阶段 0</div>
+        <div>
+          <h3>准备</h3>
+          <p>拿到只读副本或数仓账号；确认试点范围；建立口径词表初稿；计算库进安装包；做只读数据库工具。</p>
+          <p><strong>退出条件：</strong>小鲶能在对话里查到试点数据，口径经工厂确认。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="when">阶段 1</div>
+        <div>
+          <h3>需求预测试点</h3>
+          <p>按第 7 节方案：约 20 种物料的月度需求，基线、统计、机器学习、预训练时序模型、组合五组同台回测，逐品项选方法。</p>
+          <p><strong>退出条件：</strong>多数品项误差明显低于基线；连续 2 个月预测与实际对照符合回测误差；计划员认可输出格式。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="when">阶段 2</div>
+        <div>
+          <h3>补货建议</h3>
+          <p>在阶段 1 预测上算安全库存、再订货点、订货量；每周出建议清单，人确认后下单。</p>
+          <p><strong>退出条件：</strong>采纳率和缺料、库存变化有记录；没有出现因建议错误导致的缺料。</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="when">阶段 3</div>
+        <div>
+          <h3>扩展</h3>
+          <p>扩大品项范围；供应商延期预测；供应商分配；条件成熟后再做排产。</p>
+          <p><strong>退出条件：</strong>按场景单独定。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="factory">
+      <h2><span class="num">9</span>需要工厂提供</h2>
+      <ul>
+        <li>ERP / MES 的只读副本，或已有数据仓库、BI 数据集的只读账号。</li>
+        <li>至少 12 个月历史，最好 24 个月以上。</li>
+        <li>一位懂业务的对接人（计划员或采购员）：确认口径、约束，评价输出。</li>
+        <li>IT 对接人：开账号、确认数据不出厂的部署方式。</li>
+        <li>试点范围：哪些物料、哪条产线、哪个仓库。</li>
+      </ul>
+    </section>
+
+    <section id="risks">
+      <h2><span class="num">10</span>风险与应对</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>风险</th><th>应对</th></tr></thead>
+        <tbody>
+          <tr><td class="k">数据质量差、口径不一</td><td>阶段 0 先做数据体检，问题列清单交工厂；口径不清的指标不进试点</td></tr>
+          <tr><td class="k">历史太短</td><td>先用基线和简单方法；评估预训练时序模型；结果明确标注「粗略参考」</td></tr>
+          <tr><td class="k">预测被当成确定数字</td><td>永远给区间和历史误差；界面不出现单个「预测值」大字</td></tr>
+          <tr><td class="k">模型效果随时间变差</td><td>每期自动对照实际，超阈值提醒；每月重新拟合</td></tr>
+          <tr><td class="k">误操作写回 ERP</td><td>只读账号起步；写回一律审批；先只出建议清单</td></tr>
+          <tr><td class="k">大查询拖慢系统</td><td>只连只读副本或数仓，不连生产库；限制单次查询范围</td></tr>
+          <tr><td class="k">数据外流</td><td>私有模型；不用外部预测 API；查询结果只在本机和厂内流转</td></tr>
+          <tr><td class="k">上游模型不稳定</td><td>如实报错、让员工自行切换模型；不设中央兜底</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="accept">
+      <h2><span class="num">11</span>验收标准</h2>
+      <ul>
+        <li><strong>准确：</strong>试点品项的加权误差明显低于基线（具体阈值和工厂一起定）。</li>
+        <li><strong>可追溯：</strong>每个预测和建议都能看到数据范围、方法、代码和回测记录。</li>
+        <li><strong>稳定：</strong>同样数据重跑结果一致。</li>
+        <li><strong>可用：</strong>计划员、采购员能看懂并实际采用；采纳率有记录。</li>
+        <li><strong>安全：</strong>没有数据出厂；所有写回都有审批记录。</li>
+      </ul>
+    </section>
+
+    <p class="foot">说明：预训练时序模型的许可证已按 Hugging Face 上的权重核对（2026-11-26）；在中国工厂数据上的效果尚未验证，以试点回测为准。</p>
+  </main>
+</div>

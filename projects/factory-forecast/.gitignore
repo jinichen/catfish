@@ -1,0 +1,6 @@
+# 军规 (projects/README.md): 真业务数据不进 git, 只 track 方法和脚本。
+data/
+*.csv
+backtest_out/
+__pycache__/
+.venv/
