@@ -316,10 +316,12 @@ def _checked_relation_write(wiki_guard, target: str, it: dict[str, Any], op: str
                        and r.get("rel") == it["rel"])]
     related.append({"name": str(it["name"]), "rel": str(it["rel"])})
     subtype = wiki_files._parse_field(fm, "entity_type") or wiki_files._parse_field(fm, "concept_type") or ""
-    bad, _missing = wiki_guard.relation_problems(re.sub(r'^["\']|["\']$', "", subtype), related,
-                                                 self_title=wc.title_of(fm, target), rel_path=target)
+    bad, _missing = wiki_guard.bad_relations(re.sub(r'^["\']|["\']$', "", subtype), related,
+                                             self_title=wc.title_of(fm, target), rel_path=target)
+    # 只看这次加的这一条: 这页别的关系老早写错的 (例 公司「申报」项目) 不挡 —— 它们在关系整理里改
+    bad = [b for b in bad if b["name"].strip().lower() == str(it["name"]).strip().lower()]
     if bad:
-        return {"ok": False, "error": "; ".join(bad)}
+        return {"ok": False, "error": "; ".join(b["why"] for b in bad)}
     if op == "add_relation":
         return add_relation(target, str(it["name"]), str(it["rel"]))
     return replace_relation(target, str(it["old"]), str(it["rel"]), str(it["name"]))

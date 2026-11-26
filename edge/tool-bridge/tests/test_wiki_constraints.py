@@ -277,3 +277,13 @@ def test_类型定义页能改选项必填不重复格式(home):
     assert not wiki_type_defs.apply({"op": "update_property", "type": "org", "key": "contact", "property": {"format": "qq"}})["ok"]
     assert not wiki_type_defs.apply({"op": "update_property", "type": "cert", "key": "valid_until",
                                      "property": {"options": ["2027-01-01"]}})["ok"]
+
+
+def test_一键补关系_那页别的关系老早写错的不挡(home):
+    _page(home, "wiki/entities/c.md", "ISO 9001", entity_type="cert", holder='"某公司"')
+    _page(home, "wiki/entities/p.md", "某项目", entity_type="project")
+    _page(home, "wiki/entities/o.md", "某公司", entity_type="org", related='[{name: "某项目", rel: "申报"}]')
+    issue = next(i for i in wr.report()["issues"] if i["kind"] == "link_relation")
+    out = wr.fix({"items": [{**issue["fix"], "rel_path": issue["rel_path"]}]})
+    assert out["ok"], out
+    assert {"name": "ISO 9001", "rel": "持有"} in wiki_files._parse_related(_fm(home, "wiki/entities/o.md"))
