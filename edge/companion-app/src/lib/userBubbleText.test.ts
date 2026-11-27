@@ -264,3 +264,21 @@ describe("internalMessage · 引用了内部标记的老催问", () => {
     ).toBeNull();
   });
 });
+
+describe("internalMessage · hermes 把员工的话也标成 internal_notification (v0.23)", () => {
+  it("员工写的话照常显示成气泡", () => {
+    expect(internalMessage({ role: "user", content: "DCMM资质现状", displayKind: "internal_notification" })).toBeNull();
+    expect(employeeWords({ role: "user", content: "DCMM资质现状", displayKind: "internal_notification" })).toBe("DCMM资质现状");
+  });
+  it("真是系统消息的照样折成一行", () => {
+    const restart = "[System note: The previous turn was interrupted by a gateway shutdown; the gateway is now back.]";
+    expect(internalMessage({ role: "user", content: restart, displayKind: "internal_notification" }))
+      .toEqual({ hidden: false, label: "小鲶重启后接着之前的对话" });
+    expect(internalMessage({ role: "user", content: "[ASYNC DELEGATION COMPLETE — deleg_1] done", displayKind: "internal_notification" }))
+      .toEqual({ hidden: false, label: "后台子任务做完了" });
+  });
+  it("assistant 这边照旧按标记折叠", () => {
+    expect(internalMessage({ role: "assistant", content: "随便", displayKind: "internal_notification" }))
+      .toEqual({ hidden: false, label: "系统提示" });
+  });
+});

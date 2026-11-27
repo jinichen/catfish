@@ -193,6 +193,7 @@ _patch_p10_apply_client_headers_localhost = plugin_runtime._patch_p10_apply_clie
 _patch_p64_hygiene_compression_user = plugin_runtime._patch_p64_hygiene_compression_user  # noqa: F401
 plugin_api_turn = _import_sibling("plugin_api_turn")
 _patch_p65_api_turn_identity = plugin_api_turn._patch_p65_api_turn_identity  # noqa: F401
+_patch_p66_api_turn_display_kind = plugin_api_turn._patch_p66_api_turn_display_kind  # noqa: F401
 _patch_p23_inbound_picker_integration = plugin_runtime._patch_p23_inbound_picker_integration  # noqa: F401
 
 plugin_misc = _import_sibling("plugin_misc")
@@ -445,6 +446,7 @@ def _apply_patches() -> None:
     # P64 (11/03): 网关「会话卫生」压缩 (新消息前对话太长先压) 带上员工, 门户配额日志不再记成 client:hermes-cli。
     _try_patch(_patch_p64_hygiene_compression_user, "P64: _patch_p64_hygiene_compression_user 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     _try_patch(_patch_p65_api_turn_identity, "P65: _patch_p65_api_turn_identity 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    _try_patch(_patch_p66_api_turn_display_kind, "P66: _patch_p66_api_turn_display_kind 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P50 (10/6 鸿波"中间有三次任务停下来了"): 模型回了一句"逐项目比对。"这种
     # 打算、没调工具、finish_reason=stop, 回合就结束了 —— 10/5 一晚三次。hermes
     # 没有"承诺了动作却没动作"的续跑 (v0.22 原生续跑只认英文 / 泰文), 这里替员工按最多两次「继续」。

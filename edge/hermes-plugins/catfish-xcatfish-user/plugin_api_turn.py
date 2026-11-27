@@ -210,3 +210,50 @@ def card_hint_hook(*, session_id: str = "", platform: str = "", **_: Any):
     src = platform or ("" if caps else guard.session_platform(session_id))
     hint = guard.hint_for(caps, src)
     return {"context": hint} if hint else None
+
+
+def _patch_p66_api_turn_display_kind() -> None:
+    """P66 (11/27, hermes v0.23+): Companion 经 api_server 发的话存成员工的话, 不存成「系统通知」。
+
+    鸿波 11/27 截图「我输入的任务内容都被隐藏起来了」: 对话页里他的话被折成一行灰色「系统提示」。
+    state.db 里从 11/06 (升 v0.23.0, 1.2.78) 起, api_server 会话的每条员工消息 display_kind 都是 internal_notification
+    (到 11/27 共 1594 条, 全带 submission_id; 真正的内部通知 —— 微信里的「网关重启后接着说」「后台子任务做完了」——
+    一条都不带)。
+
+    原因在 hermes: 网关跑 api 排队的那一轮时 `gateway/session_ingress.py` 把 event.internal 设成 True
+    (注释: 信任来自私有绑定, 不来自客户端 JSON —— 是为了权限), 而存员工那一行时
+    `response_filters.display_kind_for_event` 见 internal 就记成 internal_notification。上游 main 到 11/27 还是这样。
+    后果不止显示: 这一轮被当成「机器自己注入的一轮」(turn_empty_response 的 machinery turn), 模型空回复时按
+    「通知不用回」静默结束, 不会像员工的话那样补问一次。
+
+    只改「正在跑的 api 排队那一轮本身」(api_execution 有值、event 就是这次提交的那条 —— admission_submission 认得出):
+    其它 internal 事件 (后台通知、心跳、帮手回报) 照旧。run_turn 是 from-import 的, 两处都换。
+    """
+    try:
+        from gateway import response_filters as rf  # noqa: PLC0415
+        from gateway.session_api_turn import api_execution  # noqa: PLC0415
+        from gateway.session_display import admission_submission  # noqa: PLC0415
+    except ImportError:
+        logger.info("P66 跳过: 没有 gateway.session_api_turn (hermes < v0.23, api 对话不走排队)")
+        return
+    orig = rf.display_kind_for_event
+    if getattr(orig, "_catfish_p66", False):
+        return
+    internal_kind = getattr(rf, "INTERNAL_NOTIFICATION_DISPLAY_KIND", "internal_notification")
+
+    def display_kind_for_event(event):
+        kind = orig(event)
+        if kind == internal_kind and api_execution.get() is not None and admission_submission(event):
+            return None
+        return kind
+
+    display_kind_for_event._catfish_p66 = True  # type: ignore[attr-defined]
+    display_kind_for_event.__wrapped__ = orig  # type: ignore[attr-defined]
+    rf.display_kind_for_event = display_kind_for_event
+    try:
+        from gateway import run_turn  # noqa: PLC0415
+        if getattr(run_turn, "display_kind_for_event", None) is orig:
+            run_turn.display_kind_for_event = display_kind_for_event
+    except ImportError:
+        pass
+    logger.info("P66 ✓ api 对话的员工消息存成员工的话 (不再记成 internal_notification)")

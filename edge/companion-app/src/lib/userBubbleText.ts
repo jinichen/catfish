@@ -154,7 +154,11 @@ export function internalMessage(
   // 10/16: hermes 自己打的标记优先 —— 它比认正文开头可靠, 而且 user / assistant 两边一视同仁
   if (msg.displayKind === "hidden") return { hidden: true };
   if (msg.displayKind === "compaction") return { hidden: false, label: COMPACTION_LABEL };
-  if (msg.displayKind === "internal_notification") return { hidden: false, label: "系统提示" };
+  // 11/27 鸿波「我输入的任务内容都被隐藏起来了」: hermes v0.23 起 (11/06) 把 Companion 经 api 发的**员工的话**也记成
+  // internal_notification (网关跑 api 那一轮时 event.internal=True, 见 hermes 插件 P66), 本机 1594 条。
+  // 所以 user 这边不能光看标记: 按正文认 (下面那套), 真是系统消息的 (网关重启提示 / 后台子任务做完了 / [System: …])
+  // 照样折成一行, 员工写的话照常显示。assistant 这边 hermes 不会这么标, 照旧。
+  if (msg.displayKind === "internal_notification" && msg.role !== "user") return { hidden: false, label: "系统提示" };
   // 没打标记的 (老库 / hermes 漏标): 按正文认
   const content = msg.content ?? "";
   if (COMPACTION_PLACEHOLDER.test(content)) return { hidden: true };

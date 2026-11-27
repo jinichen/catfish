@@ -54,6 +54,10 @@ REFACTOR_BASE = "cc4d71a"
 #: 一个 patch 悄悄多出来跟悄悄少一个同等危险 —— monkey-patch 是全进程生效的，
 #: 谁加的、为什么加、影响面多大，得有地方写。
 INTENTIONALLY_ADDED: dict[str, str] = {
+    "_patch_p66_api_turn_display_kind": (
+        "11/27 加 (hermes v0.23 跑 api 排队那一轮时 event.internal=True, 员工的话被存成 internal_notification,\n"
+        "Companion 把它折成「系统提示」)。只改正在跑的 api 提交那一轮自己的 display_kind, 其它 internal 事件不动。"
+    ),
     "_patch_p65_api_turn_identity": (
         "11/06 加 (hermes v0.23「一个网关管所有会话」: api 对话先排队、由网关后台任务跑, 不再经过 _create_agent,\n"
         "实测主对话发给网关的请求丢了 X-Catfish-User)。\n"

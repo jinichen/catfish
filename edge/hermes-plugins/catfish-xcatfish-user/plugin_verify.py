@@ -176,6 +176,12 @@ _PATCH_TARGETS = [
     # (context_compressor 里是 from-import 进来的, 静态检查看定义它的模块; 运行时 patch 再确认名字在 context_compressor)
     ("agent.context_compressor_typed_input", "typed_summary_messages", "func"),
     ("agent.context_compressor_typed_input", "TYPED_TURNS_POINTER", "attr"),
+    # P66: api 对话的员工消息别存成 internal_notification —— 包 display_kind_for_event
+    # (run_turn 里是 from-import, 静态检查看不到; 运行时 patch 两处都换)
+    ("gateway.response_filters", "display_kind_for_event", "func"),
+    ("gateway.response_filters", "INTERNAL_NOTIFICATION_DISPLAY_KIND", "attr"),
+    ("gateway.session_api_turn", "api_execution", "attr"),
+    ("gateway.session_display", "admission_submission", "func"),
     ("gateway.platforms.base", "BasePlatformAdapter", "attr"),
     # P53: tool_call 桥参数解析 (v0.22 起支持 {"calls": [...]})
     ("tools.tool_search", "resolve_underlying_call", "func"),
