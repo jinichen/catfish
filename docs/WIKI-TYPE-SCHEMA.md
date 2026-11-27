@@ -137,7 +137,7 @@
   （定义在 `wiki_type_schema.json`，例 证书 `valid_until` 的 terms 是「到期」「有效期」…）。返参 `resolved` 写着怎么对的。
   同一类型里一个说法只能对到一个属性（`tests/test_wiki_query_terms.py` 钉住）。
 - 查不到时：等于条件给 `near_values`（这个属性里实际写着的相近取值，例「工信部」→「中华人民共和国工业和信息化部」）；
-  按 terms 对上的属性在员工知识库里一条都没填，给 `unfilled` 提示，免得「查不到」被当成「没有」。
+  条件 / 排序用到的属性有几条没填，每次都写进 `unfilled`（{属性: {label, count}}），note 让小鲶告诉员工（例「年底前到期 29 张，另有 16 张没填有效期」）——没填的按条件比算不满足，不说出来会被当成全部（1.2.276）。
 - 代码：`wiki_query_terms.py`（文件头有试验数字）。`catfish_wiki_query` 也走同一套对应，`check: true` 照旧。
 - 试验（本机知识库副本，22 道员工口吻的问题，qwen-flash）：只给搜索 30% / 每题 28.7 万 token；
   上线版 95% / 每题 1.8 万 token / 工具调用中位数 3.5 次。

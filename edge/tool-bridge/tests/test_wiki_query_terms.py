@@ -66,8 +66,24 @@ def test_等于查不到时给相近的真实取值(home):
 
 def test_按说法对到的属性一条都没填时提示(home):
     r = wiki_search.tool_wiki_search({"mode": "query", "type": "资质", "where": [{"field": "年审", "before": "2030-01-01"}]})
-    assert r["total"] == 0 and r["unfilled"] == ["review_on"]
-    assert "查不到不代表没有" in r["note"]
+    assert r["total"] == 0 and r["unfilled"] == {"review_on": {"label": "复审日期", "count": 3}}
+    assert "3 条没填复审日期" in r["note"] and "告诉员工" in r["note"]
+
+
+def test_查到了也写明有几条没填_没算进去(home):
+    d = home / "wiki" / "entities"
+    (d / "D证.md").write_text(_cert("D证", maintainer="陈鸿波"), encoding="utf-8")
+    r = wiki_search.tool_wiki_search({"mode": "query", "type": "资质", "where": [{"field": "到期", "before": "2027-12-31"}],
+                                      "sort": "到期"})
+    assert r["total"] == 2
+    assert r["unfilled"] == {"valid_until": {"label": "有效期至", "count": 1}}
+    assert "共 4 条资质证书, 其中 1 条没填有效期至" in r["note"]
+    # 条件里的属性都填全了: 不多话
+    r = wiki_search.tool_wiki_search({"mode": "query", "type": "资质", "where": [{"field": "维护人", "eq": "陈鸿波"}]})
+    assert r["total"] == 3 and "unfilled" not in r
+    # 找没填的 (empty) 本身不算缺口
+    r = wiki_search.tool_wiki_search({"mode": "query", "type": "资质", "where": [{"field": "到期", "empty": True}]})
+    assert r["total"] == 1 and "unfilled" not in r
 
 
 def test_browse_列类型和常见取值(home):

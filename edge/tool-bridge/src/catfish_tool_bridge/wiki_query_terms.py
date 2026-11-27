@@ -13,8 +13,8 @@
 - 属性: key → label → 属性定义里的 terms (wiki_type_schema.json, 「到期」→ valid_until)。
 同一类型里一个说法只能对到一个属性 (tests/test_wiki_query_terms.py 钉住), 对不上的原样交给 query 报错。
 
-对上了也要拿员工自己的数据核对: 按业务说法对到的属性如果在他的知识库里一条都没填, 回一句提示,
-免得「查不到」被当成「没有」。
+条件 / 排序用到的属性有几条没填, 每次都写进结果 (unfilled) 并让小鲶告诉员工 —— 没填的条目按条件比算不满足,
+不说出来员工会把「年底前到期 29 张」当成全部 (11/27 本机: 81 张证书 16 张没填有效期, 67 个项目截止日期全空)。
 """
 from __future__ import annotations
 
@@ -149,29 +149,43 @@ def _near(value: str, values: Counter) -> list[str]:
 
 
 def query(args: dict[str, Any]) -> dict[str, Any]:
-    """wiki_types.query 前后各加一步: 前面把中文说法对到 key, 后面查不到时给相近取值 / 没填的提示。"""
+    """wiki_types.query 前后各加一步: 前面把中文说法对到 key; 后面数条件里的属性有几条没填 (11/27 鸿波「属性空的会不会影响精度」:
+    没填的条目按条件比算不满足, 本机 81 张证书 16 张没填有效期, 不说出来员工会把「29 张」当成全部), 查不到时再给相近取值。"""
     from . import wiki_types  # noqa: PLC0415
     schema = wiki_types.load_schema()
-    real, resolved, by_term = translate(args, schema)
+    real, resolved, _by_term = translate(args, schema)
     res = wiki_types.query(real)
     if resolved:
         res["resolved"] = resolved
     type_key = real.get("type")
-    if not res.get("ok") or res.get("total") or type_key not in schema:
+    if not res.get("ok") or type_key not in schema:
         return res
-    _, seen = _values(type_key, schema)
-    near = {}
-    for c in real.get("where") or []:
-        if isinstance(c, dict) and "eq" in c and c.get("field") in seen:
-            got = _near(str(c["eq"]), seen[c["field"]])
-            if got:
-                near[c["field"]] = got
-    if near:
-        res["near_values"] = near
-        res["note"] = "等于条件没对上任何条目; near_values 是这个属性里实际写着的相近取值, 换成它再查, 或改用 contains"
-    empty = [k for k in by_term if not sum(seen.get(k, Counter()).values())]
-    if empty:
-        res["unfilled"] = empty
-        res["note"] = (res.get("note", "") + "; " if res.get("note") else "") + \
-            f"{'、'.join(empty)} 在员工知识库里一条都没填, 查不到不代表没有"
+    asked = [c["field"] for c in real.get("where") or []
+             if isinstance(c, dict) and c.get("field") and "empty" not in c]
+    if real.get("sort"):
+        asked.append(real["sort"])
+    asked = [f for i, f in enumerate(asked) if f not in asked[:i]]
+    if not asked and res.get("total"):
+        return res
+    total, seen = _values(type_key, schema)
+    labels = {p["key"]: p.get("label", p["key"]) for p in _props(schema[type_key])}
+    missing = {f: total - sum(seen[f].values()) for f in asked if f in seen and total - sum(seen[f].values()) > 0}
+    notes = []
+    if missing:
+        res["unfilled"] = {f: {"label": labels.get(f, f), "count": n} for f, n in missing.items()}
+        gaps = "、".join(f"{n} 条没填{labels.get(f, f)}" for f, n in missing.items())
+        notes.append(f"共 {total} 条{schema[type_key].get('label', type_key)}, 其中 {gaps}, 这些没算进结果; "
+                     "回答时要告诉员工 (例「另有 16 张没填有效期」), 没填的可以在资料库点「整理属性」从正文补")
+    if not res.get("total"):
+        near = {}
+        for c in real.get("where") or []:
+            if isinstance(c, dict) and "eq" in c and c.get("field") in seen:
+                got = _near(str(c["eq"]), seen[c["field"]])
+                if got:
+                    near[c["field"]] = got
+        if near:
+            res["near_values"] = near
+            notes.insert(0, "等于条件没对上任何条目; near_values 是这个属性里实际写着的相近取值, 换成它再查, 或改用 contains")
+    if notes:
+        res["note"] = "; ".join(notes)
     return res
