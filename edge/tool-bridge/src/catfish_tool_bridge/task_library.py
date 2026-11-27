@@ -408,6 +408,13 @@ def tool_create_task(args: dict[str, Any]) -> dict[str, Any]:
             result["summary"] += "\n" + note
             gone = {c["task_id"] for c in superseded}
             similar = [t for t in similar if t["task_id"] not in gone]
+    # 11/27: 新进展追加在正文末尾、开头还是旧状态 → 当场让小鲶改开头 (task_notes.py)
+    if task["status"] in ("pending", "in_progress"):
+        from . import task_notes
+        stale = task_notes.stale_head(task.get("body"))
+        if stale:
+            result["head_stale"] = stale
+            result["summary"] += "\n" + task_notes.stale_notice(task["title"], stale)
     if similar:
         result["possible_duplicates"] = similar
         result["summary"] += (
@@ -545,6 +552,17 @@ def tool_list_tasks(args: dict[str, Any]) -> dict[str, Any]:
     result = list_tasks(args)
     if sync_warning:
         result["sync_warning"] = sync_warning
+    # 11/27: 开头状态比后面的记录旧的待办标出来 (不管是谁、从哪条路写的), 没改的每次列任务都会看到
+    from . import task_notes  # noqa: PLC0415
+    notices = []
+    for task in result.get("tasks") or []:
+        if task.get("status") in ("pending", "in_progress"):
+            stale = task_notes.stale_head(task.get("body"))
+            if stale:
+                task["head_stale"] = stale
+                notices.append(task_notes.stale_notice(str(task.get("title") or ""), stale))
+    if notices:
+        result["head_stale_notice"] = "\n".join(notices[:3])
     return result
 
 

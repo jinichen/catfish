@@ -221,6 +221,21 @@ def register(ctx) -> None:
             except Exception as e:
                 logger.warning("catfish-xcatfish-user 技能验证题门槛注册失败: %s (改技能不验证)", e)
 
+        # 11/27: 脚本直接改提醒事项后, 待办正文开头还是旧状态 → 当场告诉小鲶改开头。见 todo_head_guard.py。只挂一份。
+        if _owns_patches:
+            try:
+                from pathlib import Path as _PathT
+                import importlib.util as _iuT
+                _specT = _iuT.spec_from_file_location(
+                    "_catfish_xcatfish_user_todo_head_guard", _PathT(__file__).parent / "todo_head_guard.py",
+                )
+                _thg = _iuT.module_from_spec(_specT)
+                _specT.loader.exec_module(_thg)
+                ctx.register_middleware("tool_execution", _thg.tool_execution_middleware)
+                logger.info("catfish-xcatfish-user: 待办开头状态检查 ✓ (tool_execution 中间件)")
+            except Exception as e:
+                logger.warning("catfish-xcatfish-user 待办开头状态检查注册失败: %s", e)
+
         # 11/17: 小鲶出图 / 出视频 —— 给 hermes 自带的 image_generate / video_generate 注册「鲶鱼中央」供应商,
         # 转给中央网关 (模型、单价都是中央「模型」页的配置)。见 media_gen.py。每份插件都注册 (按 profile 生效),
         # 同名重复注册 hermes 按替换处理。

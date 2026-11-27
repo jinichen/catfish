@@ -149,6 +149,7 @@ const CATFISH: &[(Pat, Class, &str)] = &[
     (Exact("skills"), Required, "我的技能"),
     (Exact("skill_proposals.jsonl"), Required, "技能建议"),
     (Exact("skill_evals"), Required, "技能验证题 (员工定的口径, 改技能时用)"),
+    (Exact("todo_head_state.json"), Rebuild, "待办正文检查的上次状态 (自动重建)"),
     (Exact("skill_revisions.jsonl"), Required, "技能修订"),
     (Exact("skill_quality.jsonl"), Required, "技能质量"),
     (Exact("tool_archives"), Required, "工具存档"),

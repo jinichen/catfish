@@ -418,9 +418,12 @@ export function latestProgress(body: string | undefined): string {
   const head = text.length > PROGRESS_MAX_CHARS ? `${text.slice(0, PROGRESS_MAX_CHARS)}…` : text;
   if (text.length <= PROGRESS_MAX_CHARS) return head;
   let newest = "";
-  let newestKey = latestDateKey(text.slice(0, PROGRESS_MAX_CHARS));
+  const headKey = latestDateKey(text.slice(0, PROGRESS_MAX_CHARS));
+  let newestKey = headKey;
   for (const line of raw.split(/\n+/)) {
     const k = latestDateKey(line);
+    // 开头只写了日期没写时分: 同一天的记录不算更新
+    if (headKey % 10000 === 0 && Math.floor(k / 10000) === Math.floor(headKey / 10000)) continue;
     if (k > newestKey) {
       newestKey = k;
       newest = line.replace(/\s+/g, " ").trim();

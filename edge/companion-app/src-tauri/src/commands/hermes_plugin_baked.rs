@@ -69,6 +69,9 @@ const BAKED_SKILL_EVAL_GATE: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/skill_eval_gate.py");
 const BAKED_SKILL_EVAL_LEARN: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/skill_eval_learn.py");
+// 11/27: 脚本改提醒事项后, 待办开头状态旧的当场提醒
+const BAKED_TODO_HEAD_GUARD: &str =
+    include_str!("../../../../hermes-plugins/catfish-xcatfish-user/todo_head_guard.py");
 const BAKED_WEIXIN_RESEND: &str =
     include_str!("../../../../hermes-plugins/catfish-xcatfish-user/weixin_resend.py");
 // 10/24 数据外发记录: hermes 出口挂钩, 带内容 / 发第三方的请求记进 outbound_log.db
@@ -212,6 +215,7 @@ pub(crate) const BAKED_FILES: &[(&str, &str)] = &[
     ("skill_session.py", BAKED_SKILL_SESSION),
     ("skill_eval_gate.py", BAKED_SKILL_EVAL_GATE),
     ("skill_eval_learn.py", BAKED_SKILL_EVAL_LEARN),
+    ("todo_head_guard.py", BAKED_TODO_HEAD_GUARD),
     ("weixin_resend.py", BAKED_WEIXIN_RESEND),
     ("egress_log.py", BAKED_EGRESS_LOG),
     ("central_tls.py", BAKED_CENTRAL_TLS),
