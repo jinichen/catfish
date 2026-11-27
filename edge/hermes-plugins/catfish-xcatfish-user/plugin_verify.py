@@ -166,8 +166,16 @@ _PATCH_TARGETS = [
     ("gateway.run", "_resolve_gateway_model", "func"),
     ("gateway.run", "_profile_runtime_scope", "func"),
     ("agent.conversation_compression", "CompressionCommitFence", "attr"),
+    ("agent.conversation_compression", "context_engine_session_db", "func"),
+    ("agent.conversation_compression", "context_engine_persistence", "func"),
+    ("gateway.platforms.api_server_store", "adapter_persistence", "func"),
+    ("persistence.conversation.messages", "ConversationRequest", "attr"),
     # P61b: 摘要篇幅上限 —— 包 ContextCompressor._build_summary_prompt
     ("agent.context_compressor", "ContextCompressor", "attr"),
+    # P61c: 摘要请求里的工具调用改成文字 —— 换 context_compressor 模块里的 typed_summary_messages / TYPED_TURNS_POINTER
+    # (context_compressor 里是 from-import 进来的, 静态检查看定义它的模块; 运行时 patch 再确认名字在 context_compressor)
+    ("agent.context_compressor_typed_input", "typed_summary_messages", "func"),
+    ("agent.context_compressor_typed_input", "TYPED_TURNS_POINTER", "attr"),
     ("gateway.platforms.base", "BasePlatformAdapter", "attr"),
     # P53: tool_call 桥参数解析 (v0.22 起支持 {"calls": [...]})
     ("tools.tool_search", "resolve_underlying_call", "func"),
@@ -263,7 +271,7 @@ _GATEWAYRUNNER_METHOD_TARGETS = [
     "_transport_owner",
     # P61
     "_handle_message", "_session_key_for_source", "_is_session_running", "_resolve_session_agent_runtime",
-    "_evict_cached_agent", "_resolve_profile_home_for_source",
+    "_evict_cached_agent", "_resolve_profile_home_for_source", "persistence",
     "_handle_active_session_busy_message",
     "_delivery_adapter_for",
     "_reply_anchor_for_event",

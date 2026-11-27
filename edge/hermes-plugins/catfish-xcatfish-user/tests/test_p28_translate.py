@@ -156,3 +156,26 @@ def test_非字符串输入原样返回不炸():
 def test_员工正常聊天不被误改():
     plain = "今天的报销单我已经提交了, 麻烦你看一下。"
     assert _translate_hermes_zh(plain) == plain
+
+
+# 11/27 微信里收到的原文 (hermes v0.23.4, agent/conversation_compression.py / compression_facade.py 拼的)
+@pytest.mark.parametrize("en, want", [
+    ("⚠ Compression aborted: Context compression LLM returned empty content (provider=custom "
+     "model=catfish-public-qwen-flash). No messages were dropped — conversation continues unchanged. "
+     "Run /compress to retry, or /new to start a fresh session.", "整理对话记录没成功"),
+    ("⚠ Context is over the compression threshold (~124,535 tokens >= 120,000) but compression is currently "
+     "blocked (cooldown:30). The model may stop responding. Run /new to start a fresh session or /compress to "
+     "retry immediately.", "对话太长了 (约 124,535 tokens)"),
+    ("⚠ Context compression reached its total ceiling after 600.0s after summary output was observed. No "
+     "messages were dropped — continuing without compression. Run /compress to retry or /new for a clean "
+     "session.", "太久没完成"),
+    ("⚠ Context compression timed out after 120.0s with no output from the summary model. No messages were "
+     "dropped — continuing without compression. Run /compress to retry, /new for a clean session, or check "
+     "auxiliary.compression.", "超时了"),
+    ("⚠️ Compression refused: the generated summary would have GROWN the conversation instead of shrinking "
+     "it. No messages were dropped — conversation continues unchanged.", "没能让对话变短"),
+])
+def test_v0234_压缩提示都翻成中文(en, want, caplog):
+    with caplog.at_level("WARNING"):
+        out = _translate_hermes_zh(en)
+    assert want in out and "No messages were dropped" not in out and "P28 miss" not in caplog.text, out

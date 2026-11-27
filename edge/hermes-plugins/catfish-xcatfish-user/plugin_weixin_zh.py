@@ -334,6 +334,25 @@ _P28_REGEX = [
                  r"is unchanged\. Run /compress to retry, /reset for a clean session, or check your "
                  r"auxiliary\.compression model configuration\."),
      "⚠️ 整理对话记录没成功, 对话没有丢。可以发 /compress 再试, 或发「开新对话」。"),
+    # 11/27 v0.23.4 的压缩提示 (agent/conversation_compression.py、compression_facade.py 里拼的, 不走 locales)
+    (_re.compile(r"⚠️? Compression aborted: [\s\S]*?No messages were dropped — conversation continues unchanged\. "
+                 r"Run /compress to retry, or /new to start a fresh session\."),
+     "⚠️ 整理对话记录没成功, 对话没有丢。可以发 /compress 再试, 或发「开新对话」。"),
+    (_re.compile(r"⚠️? Context is over the compression threshold \(~([0-9,]+) tokens >= [0-9,]+\) but compression "
+                 r"is currently blocked \([^)]*\)\. The model may stop responding\. Run /new to start a fresh "
+                 r"session or /compress to retry immediately\."),
+     r"⚠️ 对话太长了 (约 \1 tokens), 这会儿整理不了, 小鲶可能答不上来。可以发 /compress 马上再试, 或发「开新对话」。"),
+    (_re.compile(r"⚠️? Context compression reached its total ceiling after [0-9.]+s(?: after summary output was "
+                 r"observed)?\. No messages were dropped — continuing without compression\. Run /compress to retry "
+                 r"or /new for a clean session\."),
+     "⚠️ 整理对话记录太久没完成, 先不整理了, 对话没有丢。可以发 /compress 再试, 或发「开新对话」。"),
+    (_re.compile(r"⚠️? Context compression timed out after [0-9.]+s with no output from the summary model\. No "
+                 r"messages were dropped — continuing without compression\. Run /compress to retry, /new for a "
+                 r"clean session, or check auxiliary\.compression\."),
+     "⚠️ 整理对话记录超时了, 先不整理了, 对话没有丢。可以发 /compress 再试, 或发「开新对话」。"),
+    (_re.compile(r"⚠️? Compression refused: the generated summary would have GROWN the conversation instead of "
+                 r"shrinking it\. No messages were dropped — conversation continues unchanged\."),
+     "⚠️ 这次整理没能让对话变短, 对话没动。"),
     (_re.compile(r"⚠️ Processing stopped: (.*?)\. Try again\."), r"⚠️ 处理中断了: \1。再试一次。"),
     (_re.compile(r"✅ Primary model restored: "), "✅ 主模型恢复了: "),
     (_re.compile(r"⚠️ Iteration budget exhausted \(([^)]*)\) — asking model to summarise"),

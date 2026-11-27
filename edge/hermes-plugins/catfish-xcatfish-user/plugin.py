@@ -164,6 +164,7 @@ _patch_p60_wechat_expert_routing = plugin_wechat_expert._patch_p60_wechat_expert
 plugin_idle_compact = _import_sibling("plugin_idle_compact")
 _patch_p61_idle_background_compaction = plugin_idle_compact._patch_p61_idle_background_compaction  # noqa: F401  (re-export · 见 plugin_idle_compact.py)
 _patch_p61b_summary_length = plugin_idle_compact._patch_p61b_summary_length  # noqa: F401  (re-export · 见 plugin_idle_compact.py)
+_patch_p61c_flat_tool_turns = plugin_idle_compact._patch_p61c_flat_tool_turns  # noqa: F401  (re-export · 见 plugin_idle_compact.py)
 plugin_locale_zh = _import_sibling("plugin_locale_zh")
 _patch_p58_locale_zh = plugin_locale_zh._patch_p58_locale_zh  # noqa: F401  (re-export · 见 plugin_locale_zh.py)
 plugin_failure_copy_zh = _import_sibling("plugin_failure_copy_zh")
@@ -424,6 +425,9 @@ def _apply_patches() -> None:
     # P61b: 摘要篇幅上限 —— qwen-flash 不管 hermes 的篇幅目标, 一份摘要写 3 万 token / 9 分钟; 旧摘要截到 1.6 万字带进下一轮,
     # 请求末尾加写死数字的上限。10/19 副本实测 539s → 186s、摘要 6 万 → 1.8 万字, 目标 / 文件 / 进度都在。
     _try_patch(_patch_p61b_summary_length, "P61b: _patch_p61b_summary_length 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
+    # P61c (11/27 微信一直弹「Compression aborted: … returned empty content」): hermes v0.23.4 把要压的对话连同
+    # tool_calls / role=tool 原样发给摘要模型 (不给 tools), qwen-flash 照着调工具、内容为空。工具部分改写成文字。
+    _try_patch(_patch_p61c_flat_tool_turns, "P61c: _patch_p61c_flat_tool_turns 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P55 (10/13 审批超时无声无息): 超时结果里加一句必须告诉员工"这一步没做"。必须在 P54 之后装。
     _try_patch(_patch_p55_approval_timeout_note, "P55: _patch_p55_approval_timeout_note 顶层异常 (跳过, 不阻塞 hermes 启动): %s")
     # P56 (10/13 15:08 第二次回「1」没进来): 微信内容去重把 5 分钟内同样的「1」当重投丢了。

@@ -76,6 +76,14 @@ INTENTIONALLY_ADDED: dict[str, str] = {
         "跟已有的闸: 开头那句是 Companion upstreamErrorGuard.ts / 网关 app.py 的识别词, 已同步加上 "
         "(tests/test_failure_copy_zh.py 钉住三处一致)。"
     ),
+    "_patch_p61c_flat_tool_turns": (
+        "11/27 加 (微信一直弹「Compression aborted: … returned empty content」, 11/23–11/27 共 40 次)。\n"
+        "  hermes v0.23.4 (#146750) 把要压的对话按原角色发给摘要模型, 带 tool_calls / role=tool 但不给 tools;\n"
+        "  qwen-flash 照着「再调一个工具」, finish_reason=tool_calls、content 为空, 摘要失败 + 冷却, 对话超线压不下去。\n"
+        "  改: 换 context_compressor 模块里的 typed_summary_messages —— 工具调用 / 工具结果写成 assistant 文字\n"
+        "      ([Tool calls: …] / [TOOL RESULT]: …), 用户的话仍只在 role=user (保住 #146750 防工具输出冒充用户批准);\n"
+        "      TYPED_TURNS_POINTER 跟着改说法, 加一句「不要调工具」。影响面: 所有压缩的摘要请求; 只改请求形状, 不改压哪些。"
+    ),
     "_patch_p61b_summary_length": (
         "10/19 加: 压缩摘要篇幅上限。qwen-flash 无视 hermes 的篇幅目标, 一份摘要 3 万 token / 7.7 万字 / 9 分钟\n"
         "  (会话日志把每次工具调用都列一遍; 上一轮摘要原样带进下一轮越滚越长)。\n"
