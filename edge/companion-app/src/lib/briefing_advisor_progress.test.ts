@@ -1,5 +1,5 @@
 /** 10/21: 早安卡片要能说出任务最新进展, 不能只复述「责任 / 截止时间」。 */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AdvisorInput } from "./briefing_advisor_common";
 import { buildUserPrompt, latestProgress } from "./briefing_advisor_prompts";
@@ -18,6 +18,30 @@ describe("早安任务最新进展", () => {
     expect(p.length).toBeLessThanOrEqual(301);
     expect(latestProgress(undefined)).toBe("");
     expect(latestProgress("  [catfish-task:x] ")).toBe("");
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("新进展追加在正文末尾时也带上 (11/27 ITSS 一级: 开头还是 11/20 的等发证, 末尾 11/27 已取证)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-27T22:08:00+08:00"));
+    const body =
+      "【当前状态 2026-11-20（员工确认口径）】11月20日官网公示, 公示≠已发证, 现阶段不写已取证。" + "通稿改动记录".repeat(80) +
+      "\n- 2026-11-22 15:52 全稿清「技术评审」。" +
+      "\n2026-11-27 09:08 官网挂网取证：ITSS-YW-1-350020260016｜一级｜有效｜2026-11-27至2029-11-26。" +
+      "\n【截止】2026-12-31。\n[catfish-task:itsspub]";
+    const p = latestProgress(body);
+    expect(p.startsWith("【当前状态 2026-11-20")).toBe(true);
+    expect(p).toContain("正文里日期最新的一条");
+    expect(p).toContain("2026-11-27 09:08 官网挂网取证");
+    expect(p).not.toContain("15:52");
+    expect(p).not.toContain("【截止】"); // 今天以后的日期 (截止 / 有效期至) 不算进展
+  });
+
+  it("开头就是最新的, 或正文里没有更新的日期: 只给开头", () => {
+    expect(latestProgress(BODY)).not.toContain("日期最新");
+    const body = "【进展 2026-11-27】已取证。" + "旧记录".repeat(150) + "\n2026-11-20 公示。";
+    expect(latestProgress(body)).not.toContain("日期最新");
   });
 
   it("用户提示里每条任务带上最新进展", () => {

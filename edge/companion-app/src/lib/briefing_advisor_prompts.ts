@@ -393,10 +393,42 @@ Now I have a comprehensive picture. Let me synthesize:
 
 const PROGRESS_MAX_CHARS = 300;
 
-/** 任务正文开头一段 (最新进展), 去掉同步标记、压成一行。 */
+const DATE_RE = /(20\d{2})[-./年](\d{1,2})[-./月](\d{1,2})日?(?:\s*(\d{1,2}):(\d{2}))?/g;
+
+/** 一段文字里最晚的日期 (含时分), 比大小用的数; 没有日期 → 0。
+ * 今天以后的日期不算 (有效期至 2029-11-26 这种不是「最新进展」)。 */
+function latestDateKey(text: string, now: Date = new Date()): number {
+  const today = ((now.getFullYear() * 100 + now.getMonth() + 1) * 100 + now.getDate()) * 10000 + 2359;
+  let best = 0;
+  for (const m of text.matchAll(DATE_RE)) {
+    const k = ((+m[1] * 100 + +m[2]) * 100 + +m[3]) * 10000 + (m[4] ? +m[4] * 100 + +m[5] : 0);
+    if (k > best && k <= today) best = k;
+  }
+  return best;
+}
+
+/** 任务正文开头一段 (最新进展), 去掉同步标记、压成一行。
+ *
+ * 11/27: 约定是「最新状态写在最前面」, 但小鲶更新待办时常把新进展追加在正文**末尾** —— ITSS 一级待办
+ * 开头还是 11/20 的「公示≠已发证」, 11/27 09:08 查到证书写在最后一段, 早安卡片只看开头 300 字,
+ * 当晚照样写「等待正式发证通知」(鸿波截图)。所以再找正文里日期最新的那一行: 比开头里的日期新, 就一起带上。 */
 export function latestProgress(body: string | undefined): string {
-  const text = (body ?? "").replace(/\[catfish-task:[^\]]*\]/g, "").replace(/\s+/g, " ").trim();
-  return text.length > PROGRESS_MAX_CHARS ? `${text.slice(0, PROGRESS_MAX_CHARS)}…` : text;
+  const raw = (body ?? "").replace(/\[catfish-task:[^\]]*\]/g, "");
+  const text = raw.replace(/\s+/g, " ").trim();
+  const head = text.length > PROGRESS_MAX_CHARS ? `${text.slice(0, PROGRESS_MAX_CHARS)}…` : text;
+  if (text.length <= PROGRESS_MAX_CHARS) return head;
+  let newest = "";
+  let newestKey = latestDateKey(text.slice(0, PROGRESS_MAX_CHARS));
+  for (const line of raw.split(/\n+/)) {
+    const k = latestDateKey(line);
+    if (k > newestKey) {
+      newestKey = k;
+      newest = line.replace(/\s+/g, " ").trim();
+    }
+  }
+  if (!newest) return head;
+  const tail = newest.length > PROGRESS_MAX_CHARS ? `${newest.slice(0, PROGRESS_MAX_CHARS)}…` : newest;
+  return `${head}\n  └ 正文里日期最新的一条 (比开头新, 开头的状态可能没改): ${tail}`;
 }
 
 export function buildUserPrompt(input: AdvisorInput): string {
