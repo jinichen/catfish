@@ -82,8 +82,7 @@ def _catfish_home() -> Path:
 
 
 def _skills_root() -> Path:
-    env = os.environ.get("HERMES_HOME", "").strip()
-    return (Path(env).expanduser() if env else Path.home() / ".hermes") / "skills"
+    return _learn().hermes_home() / "skills"
 
 
 def evals_dir() -> Path:

@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 import unicodedata
 from pathlib import Path
@@ -292,9 +293,23 @@ def history_items(state_db: Path) -> list[dict[str, Any]]:
         con.close()
 
 
-def default_state_db() -> Path:
+def hermes_home() -> Path:
+    """跟 card_channel_guard._hermes_home 同一套 (Windows 上 hermes 在 %LOCALAPPDATA%\\hermes, 不是 ~/.hermes)。"""
     env = os.environ.get("HERMES_HOME", "").strip()
-    return (Path(env).expanduser() if env else Path.home() / ".hermes") / "state.db"
+    if env:
+        return Path(env).expanduser()
+    try:
+        from hermes_constants import get_hermes_home  # noqa: PLC0415
+        return Path(get_hermes_home())
+    except Exception:  # noqa: BLE001
+        pass
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "hermes"
+    return Path.home() / ".hermes"  # windows-parity: 上面已按 LOCALAPPDATA 走 Windows, 这里只剩 mac/Linux
+
+
+def default_state_db() -> Path:
+    return hermes_home() / "state.db"
 
 
 def mine(chat: Chat, load: Callable[[str], Optional[dict]], save: Callable[[str, dict], None],
