@@ -23,6 +23,7 @@
         {
           "key": "cert_no",
           "label": "证书编号",
+          "terms": ["编号", "证书号"],
           "type": "text",
           "pattern": "证书编号[为是:：\\s]*([A-Za-z0-9][A-Za-z0-9\\-_/.]*\\d[A-Za-z0-9\\-_/.]*)",
           "required": true,
@@ -31,6 +32,7 @@
         {
           "key": "issuer",
           "label": "发证机构",
+          "terms": ["发证单位", "颁发机构", "发证方", "发证机关"],
           "type": "text",
           "pattern": "由([^，,。；;]{2,60}?)于\\s*\\d{4}",
           "required": true
@@ -38,6 +40,7 @@
         {
           "key": "issued_on",
           "label": "颁发日期",
+          "terms": ["发证日期", "颁发时间", "发证时间"],
           "type": "date",
           "pattern": "于\\s*(\\d{4}[-年./]\\d{1,2}[-月./]\\d{1,2})日?\\s*颁发",
           "not_future": true
@@ -45,6 +48,7 @@
         {
           "key": "valid_until",
           "label": "有效期至",
+          "terms": ["到期", "到期日", "有效期", "过期日"],
           "type": "date",
           "pattern": "有效期至\\s*(\\d{4}[-年./]\\d{1,2}[-月./]\\d{1,2})",
           "required": true
@@ -52,6 +56,7 @@
         {
           "key": "review_on",
           "label": "复审日期",
+          "terms": ["年审", "复审"],
           "type": "date",
           "hint": "下一次复审 / 年审 / 监督审核的日期",
           "keywords": [
@@ -64,6 +69,7 @@
         {
           "key": "level",
           "label": "等级",
+          "terms": ["级别", "资质等级"],
           "type": "text",
           "pattern": "(?:[，,。]\\s*等级(?:为|[:：])?|评定等级[:：]?|\\|\\s*等级\\s*\\|)\\s*([^，,。；;（(\\s|:：]{1,8})",
           "aliases": {
@@ -101,6 +107,7 @@
         {
           "key": "scope",
           "label": "认证范围",
+          "terms": ["范围"],
           "type": "text",
           "keywords": [
             "范围"
@@ -110,6 +117,7 @@
         {
           "key": "holder",
           "label": "持有单位",
+          "terms": ["持证单位", "持有人"],
           "type": "text",
           "pattern": "^\\s*([^，,。\\n]{2,40}?)持有的",
           "required": true,
@@ -122,6 +130,7 @@
         {
           "key": "category",
           "label": "归类",
+          "terms": ["类别", "分类"],
           "type": "text",
           "pattern": "归类为\\s*([^，,。；;\\s]{2,20})",
           "options": [
@@ -137,6 +146,7 @@
         {
           "key": "maintainer",
           "label": "维护人",
+          "terms": ["维护", "谁维护"],
           "type": "text",
           "pattern": "维护人(?:为|是)?\\s*([^，,。；;\\s（(]{2,10})"
         }
@@ -266,6 +276,7 @@
         {
           "key": "reg_no",
           "label": "登记号",
+          "terms": ["软著登记号", "软著号", "登记编号"],
           "type": "text",
           "hint": "软件著作权登记号 / 证书号, 例 2023SR0622870",
           "pattern": "(?:登记号|证书号|登记证书号)(?:为|是)?[:：\\s]*(\\d{4}SR\\d{5,})",
@@ -277,12 +288,14 @@
         {
           "key": "version",
           "label": "版本",
+          "terms": ["版本号"],
           "type": "text",
           "pattern": "版本(?:号)?(?:为|是)?[:：\\s]*([Vv]\\s?\\d+(?:\\.\\d+)*)"
         },
         {
           "key": "reg_date",
           "label": "登记日期",
+          "terms": ["登记时间", "登记年份"],
           "type": "date",
           "pattern": "登记日期(?:为|是)?[:：\\s]*(\\d{4}[-年./]\\d{1,2}[-月./]\\d{1,2})",
           "not_future": true
@@ -290,6 +303,7 @@
         {
           "key": "owner",
           "label": "著作权人",
+          "terms": ["权利人", "版权人"],
           "type": "text",
           "hint": "著作权人 / 归属单位 (例 中电福富、ICT-BG)",
           "pattern": "(?:著作权人|归属)(?:为|是)?[:：\\s]*([^，,。；;\\s]{2,30})",
@@ -372,6 +386,7 @@
         {
           "key": "customer",
           "label": "客户",
+          "terms": ["甲方"],
           "type": "text",
           "keywords": [
             "客户",
@@ -384,6 +399,7 @@
         {
           "key": "owner",
           "label": "负责人",
+          "terms": ["项目经理"],
           "type": "text",
           "hint": "项目经理 / 负责人",
           "keywords": [
@@ -401,6 +417,7 @@
         {
           "key": "department",
           "label": "承建部门",
+          "terms": ["承建单位", "负责部门"],
           "type": "text",
           "keywords": [
             "承建",
@@ -477,6 +494,7 @@
         {
           "key": "due_on",
           "label": "截止日期",
+          "terms": ["截止", "交付日期"],
           "type": "date",
           "hint": "计划完成 / 交付 / 合同到期",
           "keywords": [
@@ -594,6 +612,7 @@
         {
           "key": "department",
           "label": "部门",
+          "terms": ["所在部门"],
           "type": "text",
           "hint": "所在部门 / 分公司 / 中心",
           "keywords": [
@@ -613,6 +632,7 @@
         {
           "key": "job_title",
           "label": "职务",
+          "terms": ["岗位", "职位"],
           "type": "text",
           "keywords": [
             "经理",
@@ -628,6 +648,7 @@
         {
           "key": "email",
           "label": "邮箱",
+          "terms": ["邮件地址"],
           "type": "text",
           "pattern": "邮箱\\s*[:：]?\\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})",
           "format": "email",
@@ -636,6 +657,7 @@
         {
           "key": "phone",
           "label": "电话",
+          "terms": ["手机", "电话号码"],
           "type": "text",
           "pattern": "(?:电话|手机)(?:号码?)?\\s*[:：]?\\s*(1\\d{10}|0\\d{2,3}-?\\d{7,8})",
           "format": "phone"
@@ -746,6 +768,7 @@
         {
           "key": "system",
           "label": "所属体系",
+          "terms": ["体系"],
           "type": "text",
           "hint": "生产运营体系 / 市场经营体系 / 典型职能体系 …",
           "pattern": "福富([^，,。\\s]{2,8}?体系)",
@@ -759,6 +782,7 @@
         {
           "key": "level",
           "label": "层级",
+          "terms": ["级别"],
           "type": "text",
           "hint": "一级部 / 二级部 / 研究院 …",
           "pattern": "体系(一级部|二级部|三级部|研究院|分公司)",
@@ -792,6 +816,7 @@
         {
           "key": "children",
           "label": "下辖",
+          "terms": ["下属部门", "下级"],
           "type": "text",
           "pattern": "下辖\\s*([^。\\n]{2,200})",
           "max_len": 300
@@ -799,6 +824,7 @@
         {
           "key": "leader",
           "label": "负责人",
+          "terms": ["领导", "主管"],
           "type": "text",
           "keywords": [
             "负责人",
@@ -869,7 +895,7 @@
           "id": "type.department.overview",
           "label": "部门概况",
           "description": "汇总这个部门的上下级、负责的项目、软著、资质和人员",
-          "instruction": "整理这个部门（{full_name}，{system}{level}）的概况：先用 catfish_wiki_read 看它的全部关系（上下级、谁隶属于它、它负责什么），再用 catfish_wiki_query 查 type=project 承建部门、type=software 著作权人、type=person 部门里含这个部门名的条目，汇总成「组织位置 / 负责的项目 / 名下软著和资质 / 人员」几段，每条注明来自哪条知识。查不到的写查不到，不要编。"
+          "instruction": "整理这个部门（{full_name}，{system}{level}）的概况：先用 catfish_wiki_read 看它的全部关系（上下级、谁隶属于它、它负责什么），再用 catfish_wiki_search mode=query 查 type=project 承建部门、type=software 著作权人、type=person 部门里含这个部门名的条目，汇总成「组织位置 / 负责的项目 / 名下软著和资质 / 人员」几段，每条注明来自哪条知识。查不到的写查不到，不要编。"
         },
         {
           "id": "type.department.recent",
@@ -1050,7 +1076,7 @@
           "id": "type.org.recent",
           "label": "往来汇总",
           "description": "汇总和这个组织有关的项目、邮件、合同",
-          "instruction": "汇总我们和这个组织（{full_name}，{org_type}）的往来：用 catfish_wiki_read 看它的关系，用 catfish_wiki_query 查 type=project 客户含它名字的项目，再用邮件搜索找最近的往来，按「合作项目 / 最近往来 / 待办」写，每条注明出处和日期，查不到的不要编。"
+          "instruction": "汇总我们和这个组织（{full_name}，{org_type}）的往来：用 catfish_wiki_read 看它的关系，用 catfish_wiki_search mode=query 查 type=project 客户含它名字的项目，再用邮件搜索找最近的往来，按「合作项目 / 最近往来 / 待办」写，每条注明出处和日期，查不到的不要编。"
         },
         {
           "id": "type.org.verify-public",

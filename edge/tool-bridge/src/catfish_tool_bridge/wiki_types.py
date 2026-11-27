@@ -685,7 +685,10 @@ def tool_dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("check"):
             from . import wiki_constraints_report  # noqa: PLC0415  (11/26: 约束检查, 跟界面同一份)
             return wiki_constraints_report.report({"type": args.get("type"), "limit": args.get("limit") or 40})
-        return query(args)
+        from . import wiki_query_terms  # noqa: PLC0415  (11/27: 中文说法对到属性 key, 查不到给相近取值)
+        if args.get("mode") == "browse":
+            return wiki_query_terms.browse(args)
+        return wiki_query_terms.query(args)
     if args.get("props") and "content" not in args and not args.get("content_file"):
         return set_props_file(str(args.get("rel_path") or "").strip(), args["props"])
     from . import wiki_write_tools  # noqa: PLC0415  (11/08: 先过把关 —— base_mtime / 关系校验)

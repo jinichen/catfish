@@ -128,6 +128,20 @@
 - `catfish_wiki_query`：按类型 + 属性查，例 `{type: "cert", where: [{field: "valid_until", before: "2027-06-30"}], sort: "valid_until"}`、`{type: "cert", status: "即将到期"}`、`{type: "cert", where: [{field: "valid_until", empty: true}]}`（找没填的）。
 - `catfish_wiki_update` 只给 `rel_path` + `props`：只改属性，不用整篇覆写。
 
+### 11/27: 按属性查并进 `catfish_wiki_search`，能写中文说法（1.2.275）
+
+- 线上小鲶核心工具里只有 `catfish_wiki_search`，`catfish_wiki_query` 在 tool_search 后面，模型不会去找。
+  现在 `catfish_wiki_search` 有三种用法：`mode: "search"`（默认，原来的搜索）、`mode: "query"`（参数同 `catfish_wiki_query`）、
+  `mode: "browse"`（不带 type 列类型和条数；带 type 列每个属性的名字、说法、填了几条、常见取值）。不另占核心工具名额。
+- `type` 认 key / label / 受控词表（资质、软著、员工…）；`where.field`、`sort`、`fields` 认 key / label / 属性的 `terms`
+  （定义在 `wiki_type_schema.json`，例 证书 `valid_until` 的 terms 是「到期」「有效期」…）。返参 `resolved` 写着怎么对的。
+  同一类型里一个说法只能对到一个属性（`tests/test_wiki_query_terms.py` 钉住）。
+- 查不到时：等于条件给 `near_values`（这个属性里实际写着的相近取值，例「工信部」→「中华人民共和国工业和信息化部」）；
+  按 terms 对上的属性在员工知识库里一条都没填，给 `unfilled` 提示，免得「查不到」被当成「没有」。
+- 代码：`wiki_query_terms.py`（文件头有试验数字）。`catfish_wiki_query` 也走同一套对应，`check: true` 照旧。
+- 试验（本机知识库副本，22 道员工口吻的问题，qwen-flash）：只给搜索 30% / 每题 28.7 万 token；
+  上线版 95% / 每题 1.8 万 token / 工具调用中位数 3.5 次。
+
 ## 11/08 整改: 小鲶真能找到、写进去有人把关、本体填实
 
 鸿波 11/08 让我把「小鲶基于本体的知识库还有什么要优化」仔细看一遍 (659 条实体 / 概念, 134 份原件, 实测 + 读代码), 一次改完三批:

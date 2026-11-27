@@ -116,25 +116,36 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
     # BM25 char-level, 纯离线, 不走 gateway. 装机部门 wiki 物理在本机, 隐私边界同自家.
     {
         "name": "catfish_wiki_search",
+        # 11/27: mode=query / browse 是按属性查 (原 catfish_wiki_query 在 tool_search 后面, 模型不去找;
+        # 试验见 wiki_query_terms.py 文件头)。说明压到最短: 总量闸 test_tool_schema_budget.py 已经顶格。
         "description": (
-            "搜员工个人知识库 (wiki, 含装到本机的部门 wiki): 关键词 + 语义 + 顺着关系扩一跳, 标题 / 别名 / "
-            "属性值 (证书编号、登记号) / 全文都搜。每条带类型、已填属性、状态 (有效 / 即将到期 …)、最相关的一段。\n"
-            "用于: 知识库里关于 X 写过啥 / 公司或部门的流程规定 / 某客户、证书、项目、人有没有条目.\n"
-            "全文和全部关系 → catfish_wiki_read 调 rel_path; 按属性筛 (快到期 / 某部门的 / 没填的) → catfish_wiki_query; "
-            "列全部 → catfish_wiki_list. 已过期 / 已结束、待确认的默认不列 (summary 里说有几条).\n"
-            "不用于: 邮件 / 本机文件 / catfish 设计文档 / skill (各有自己的搜索工具)."
+            "查员工个人知识库 (含装到本机的部门 wiki)。mode:\n"
+            "· search (默认): 关键词 + 语义, 标题 / 别名 / 属性值 / 全文都搜, 每条带类型、属性、状态和最相关一段。"
+            "已过期、待确认的默认不列。\n"
+            "· query: 按类型和属性筛 / 数 / 排序 —— 「哪些证书年底前到期」「谢竞翔维护的有几张」用它, 比搜索准。"
+            "type 和 where.field 直接写中文 (资质 / 到期 / 维护人 / 发证单位), 自动对到属性; 日期用 before / after (YYYY-MM-DD)。"
+            "total 是全部符合的条数 (含已过期)。\n"
+            "· browse: 看有哪些类型、属性、常见取值 (可带 type)。\n"
+            "全文和关系 → catfish_wiki_read。不查邮件 / 本机文件。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "关键词或自然语言, 例 '资质评估流程' / 'ZTY2026…' (编号也行)"},
-                "top_k": {"type": "integer", "description": "默认 5, 上限 15"},
-                "include_expired": {"type": "boolean", "description": "true 把已过期 / 已结束的也列出来"},
-                "include_pending": {"type": "boolean", "description": "true 把待确认 (关系没对上) 的也列出来"},
-                "include_sources": {"type": "boolean", "description": "true 把员工上传的原始资料 (原件转存) 也列出来"},
-                "include_withdrawn": {"type": "boolean", "description": "true 把部门里已撤回的共享页也列出来"},
+                "mode": {"type": "string", "enum": ["search", "query", "browse"], "description": "默认 search"},
+                "query": {"type": "string", "description": "search: 关键词或问题"},
+                "top_k": {"type": "integer", "description": "search: 默认 5, 上限 15"},
+                "include_expired": {"type": "boolean", "description": "也列已过期的"},
+                "include_pending": {"type": "boolean", "description": "也列待确认的"},
+                "include_sources": {"type": "boolean", "description": "也列原始资料"},
+                "include_withdrawn": {"type": "boolean", "description": "也列已撤回的"},
+                "type": {"type": "string", "description": "query / browse: 类型, 例 资质 / 软件 / 人"},
+                "where": {"type": "array", "items": {"type": "object"},
+                          "description": "query: 全部满足, 每条 {field, eq | contains | before | after | empty}"},
+                "status": {"type": "string", "description": "query: 状态, 例 即将到期"},
+                "sort": {"type": "string", "description": "query: 升序排的属性"},
+                "fields": {"type": "array", "items": {"type": "string"}, "description": "query: 要带的属性, [\"*\"] 全部"},
+                "limit": {"type": "integer", "description": "query: 默认 15"},
             },
-            "required": ["query"],
         },
         "emoji": "📚",
         "toolset": "catfish_native",
@@ -324,31 +335,20 @@ WIKI_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_wiki_query",
         "description": (
-            "按类型和属性查知识库 —— 「哪些证书 2027 年 6 月前到期」「谢竞翔维护的证书」「即将到期的证书」这类问题用它, "
-            "比全文搜索准. type 是类型 key (现有: cert=资质证书, software=软件产品/软著, project=项目, person=人, department=部门, org=组织); "
-            "属性 key 见 catfish_wiki_read 返参 type_info.properties. "
-            "日期属性用 before / after (YYYY-MM-DD, 含当天). 属性没填的条目不满足条件, 要找没填的用 empty: true. "
-            "返回 total 是符合条件的总数, items 最多 limit 条. check: true 查哪些不合约束."
+            "按类型和属性查知识库, 跟 catfish_wiki_search mode=query 同一个 (那个在核心里, 优先用它)。"
+            "check: true 查哪些条目不合约束。"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "type": {"type": "string", "description": "类型 key, 例 cert"},
-                "where": {
-                    "type": "array",
-                    "description": "条件, 全部满足. 每条 {field, eq | contains | before | after | empty}",
-                    "items": {"type": "object"},
-                },
-                "status": {"type": "string", "description": "按自动算的状态筛, 例 证书: 有效 / 即将到期 / 已过期; 项目: 进行中 / 临近截止 / 已过截止 / 已结束"},
-                "sort": {"type": "string", "description": "按哪个属性升序排, 例 valid_until"},
-                "fields": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "每条还要带哪些属性 (默认只带条件 / 排序 / 有效期用到的); [\"*\"] 带全部",
-                },
-                "limit": {"type": "integer", "description": "最多返回几条, 默认 15; total 是全部符合的条数"},
+                "type": {"type": "string", "description": "例 资质"},
+                "where": {"type": "array", "items": {"type": "object"}, "description": "{field, eq | contains | before | after | empty}"},
+                "status": {"type": "string"},
+                "sort": {"type": "string"},
+                "fields": {"type": "array", "items": {"type": "string"}},
+                "limit": {"type": "integer"},
+                "check": {"type": "boolean", "description": "查约束"},
             },
-            "required": ["type"],
         },
         "emoji": "🗂️",
         "toolset": "catfish_native",

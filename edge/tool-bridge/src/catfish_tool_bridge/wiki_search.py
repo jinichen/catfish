@@ -486,7 +486,7 @@ def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
         src = ", ".join(x for x in [f"{own} 自家" if own else "", f"{len(matches) - own} 部门" if len(matches) > own else ""] if x)
         summary = (f"找到 {len(matches)} 份 wiki ({src}, top: {', '.join(titles)}). "
                    "head 是最相关的一段; 想看全文和全部关系用 catfish_wiki_read 调 rel_path; "
-                   "按属性筛 (到期 / 某部门 / 没填) 用 catfish_wiki_query.")
+                   "按属性筛 / 数 (到期 / 某部门 / 没填) 用 catfish_wiki_search mode=query.")
     if unreviewed:
         summary += f" 其中 {unreviewed} 份是部门同事分享、主管还没审过的页 (review=待审), 引用时说明一下。"
     if semantic is None:
@@ -502,7 +502,18 @@ def search_wiki(query: str, top_k: int = 5, *, include_expired: bool = False,
 
 
 def tool_wiki_search(args: dict) -> dict[str, Any]:
-    """tool-bridge dispatch 入口. args = {"query": str, "top_k"?: int, "include_expired"?, "include_pending"?}。"""
+    """tool-bridge dispatch 入口. args = {"query": str, "top_k"?: int, "include_expired"?, "include_pending"?}。
+
+    11/27: mode=query / browse 走按属性查 (wiki_query_terms.py 文件头有试验数字) —— 核心工具名额满了,
+    按属性查并进这个已经在核心里的工具, 不另占一格。"""
+    mode = str(args.get("mode") or "").strip()
+    if mode in ("query", "browse"):
+        from . import wiki_query_terms  # noqa: PLC0415
+        try:
+            return wiki_query_terms.browse(args) if mode == "browse" else wiki_query_terms.query(args)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("wiki_search mode=%s 失败", mode)
+            return {"ok": False, "error": f"按属性查出错: {e}"}
     query = str(args.get("query", "")).strip()
     if not query:
         return {"matches": [], "count": 0, "total_indexed": 0, "summary": "query 空: 给关键词或问题", "error": "query 空"}
