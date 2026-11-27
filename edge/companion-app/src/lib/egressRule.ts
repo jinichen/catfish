@@ -135,6 +135,7 @@ export const SOURCE_PURPOSE: Record<string, string> = {
   "plugin:memory-summarize": "长期记忆整理",
   "plugin:memory-reconcile": "长期记忆整理",
   "plugin:memory-classify": "记忆归类",
+  "plugin:skill-eval": "技能验证题",
   "plugin:memory-recall-embed": "记忆检索",
   "plugin:memory": "长期记忆",
   "companion-email-scheduler": "邮件整理",

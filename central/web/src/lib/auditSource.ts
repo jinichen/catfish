@@ -21,6 +21,7 @@ const LABELS: Record<string, string> = {
   "plugin:memory-distill": "后台 · 记忆蒸馏",
   "plugin:memory-summarize": "后台 · 对话摘要",
   "plugin:memory-classify": "后台 · 记忆分类",
+  "plugin:skill-eval": "后台 · 技能验证题",
   "plugin:memory-wiki-analysis": "后台 · 知识库整理",
   "plugin:memory-wiki-generation": "后台 · 知识库整理",
   "plugin:memory-wiki-merge": "后台 · 知识库整理",

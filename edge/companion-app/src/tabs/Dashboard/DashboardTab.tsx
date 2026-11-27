@@ -115,6 +115,7 @@ import StyleFingerprintCard from "./StyleFingerprintCard";
 // backend daemon 不动 (hermes 自家 housekeeping). 真要看状态去"控制台" tab.
 // import CuratorCard from "./CuratorCard";
 import CollapsibleSection from "./CollapsibleSection";
+import SkillEvalsCard from "./SkillEvalsCard";
 // 9/23: 「导出聊天记录分析」卡片退役 —— 导入入口挪到聊天框 (拖 ZIP), 这里只管已导入的
 import WeChatImportsCard from "./WeChatImportsCard";
 import WebPortalLink from "./WebPortalLink";
@@ -325,6 +326,8 @@ export default function DashboardTab() {
             { key: "my-skills", label: "我的技能", render: () => <MySkillsCard /> },
             { key: "installed", label: "技能库", render: () => <SkillsLibraryCard /> },
             // 10/17: 工作流 —— 把教过的技能和鲶鱼会的能力串成一条 (docs/WORKFLOW-SKILL-PLAN.md)
+            // 11/27: 验证题 —— 小鲶照员工原话出的题, 改技能时考一遍, 答错了撤回 (hermes 插件 skill_eval_gate.py)
+            { key: "evals", label: "验证题", render: () => <SkillEvalsCard /> },
             { key: "workflows", label: "工作流", render: () => <WorkflowsCard /> },
             // 10/18: 本机专家 —— 把工作流 / 技能交给一个只管这类事的小鲶分身 (docs/EXPERT-PACK-PLAN.md)
             { key: "experts", label: "专家", render: () => <ExpertsCard /> },

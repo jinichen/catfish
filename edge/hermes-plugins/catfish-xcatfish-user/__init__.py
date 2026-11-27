@@ -204,6 +204,23 @@ def register(ctx) -> None:
         except Exception as e:
             logger.warning("catfish-xcatfish-user skill_session register fail: %s (固化技能不带代码)", e)
 
+        # 11/27: 改技能要过验证题 (员工定的口径), 原来答对的题改完答错了就撤回。见 skill_eval_gate.py。
+        # 只挂一份: 每份插件各有一份快照表, 挂几份就会跑几遍题、撤回几遍。
+        if _owns_patches:
+            try:
+                from pathlib import Path as _PathE
+                import importlib.util as _iuE
+                _specE = _iuE.spec_from_file_location(
+                    "_catfish_xcatfish_user_skill_eval_gate", _PathE(__file__).parent / "skill_eval_gate.py",
+                )
+                _seg = _iuE.module_from_spec(_specE)
+                _specE.loader.exec_module(_seg)
+                # 中间件, 不用 pre_tool_call / transform_tool_result 钩子: 那两个限时 30 秒, 跑题会超时被丢下
+                ctx.register_middleware("tool_execution", _seg.tool_execution_middleware)
+                logger.info("catfish-xcatfish-user: 技能验证题门槛 ✓ (tool_execution 中间件)")
+            except Exception as e:
+                logger.warning("catfish-xcatfish-user 技能验证题门槛注册失败: %s (改技能不验证)", e)
+
         # 11/17: 小鲶出图 / 出视频 —— 给 hermes 自带的 image_generate / video_generate 注册「鲶鱼中央」供应商,
         # 转给中央网关 (模型、单价都是中央「模型」页的配置)。见 media_gen.py。每份插件都注册 (按 profile 生效),
         # 同名重复注册 hermes 按替换处理。

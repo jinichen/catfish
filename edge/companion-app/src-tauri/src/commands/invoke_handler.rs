@@ -557,6 +557,9 @@ pub(crate) fn handler(
             crate::commands::skill_revision::skill_revision_accept,
             crate::commands::skill_revision::skill_revision_reject,
             crate::commands::skill_revision::skill_revision_check_effectiveness,
+            crate::commands::skill_evals::skill_evals_summary,
+            crate::commands::skill_evals::skill_evals_update,
+            crate::commands::skill_evals::skill_evals_mine,
             // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button → wiki/queries/ 写盘
             crate::commands::wiki_save::wiki_save_chat_message,
             // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API

@@ -64,6 +64,7 @@ _SOURCE_PURPOSE = {
     "plugin:memory-reconcile": "长期记忆整理",
     # 10/28: 这两个原来落到下面的「长期记忆」, 看不出在干什么
     "plugin:memory-classify": "记忆归类",
+    "plugin:skill-eval": "技能验证题",
     "plugin:memory-recall-embed": "记忆检索",
     "plugin:memory": "长期记忆",
     # 11/17: 小鲶出图 / 出视频 (media_gen.py) —— 改图 / 图生视频会带上原图

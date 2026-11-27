@@ -141,6 +141,7 @@ pub mod user_requests;
 pub mod skill_audit;
 pub mod skill_feedback;
 pub mod skill_revision;
+pub mod skill_evals; // 11/27: 技能验证题 (员工口径出的题, 改技能时拦退步)
 pub mod skills; // 8/14 拆分: 只剩 tauri command 层, 实现在下面三个
 pub mod skills_install; // 安装 / 卸载 / zip 导入 / 还原
 pub mod skill_names;
