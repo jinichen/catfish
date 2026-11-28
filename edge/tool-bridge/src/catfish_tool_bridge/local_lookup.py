@@ -255,14 +255,47 @@ def shared_origin(home: Path, rel: str) -> str | None:
     return f"{dept} · {by} 分享" if by else f"{dept}同事分享"
 
 
-def _table_rows(conn: Any, rowid: int, terms: list[str], path: str) -> list[str]:
-    """表格文件 (Excel / CSV / 带表的文档): 命中的那几行配表头 (11/28, 见 table_rows.py); 不是表格返回 []。"""
+FILE_ROWS_CHARS = 1000   # 一份文件附的表格行最多这么多字
+
+
+def best_excerpt(content: str, words: list[str], n: int = FILE_EXCERPT_CHARS) -> str:
+    """搜索词出现最集中的一段 (11/28 复查: 原来只围着第一个词第一次出现的地方取, 简单题的文件题只答对一半 ——
+    「岗位设置全景图 技术研发类」第一个词在标题, 答案在后面几页)。每个词最多看 40 处, 窗口里不同的词越多、越长越好。"""
+    low = content.lower()
+    spots: list[tuple[int, str]] = []
+    for w in dict.fromkeys(x.lower() for x in words if len(x) >= 2):
+        k, c = low.find(w), 0
+        while k >= 0 and c < 40:
+            spots.append((k, w))
+            k, c = low.find(w, k + len(w)), c + 1
+    if not spots:
+        return re.sub(r"\s+", " ", content[:n]).strip()
+    spots.sort()
+    best, best_at, j = -1, spots[0][0], 0
+    for i, (pos, _) in enumerate(spots):
+        while spots[j][0] < pos - n + 60:
+            j += 1
+        score = sum(len(w) for w in {w for _, w in spots[j:i + 1]})
+        if score > best:
+            best, best_at = score, spots[j][0]
+    start = max(0, best_at - 60)
+    return re.sub(r"\s+", " ", content[start:start + n]).strip()
+
+
+def _file_text(conn: Any, rowid: int, words: list[str], path: str) -> str:
+    """一份文件给模型的片段: 搜索词最集中的一段; 是表格的再附上命中的行 (配表头, 见 table_rows.py)。
+    表格行是**附加**不是替换 —— Word 里大量正文排在表格里, 只给一行会丢掉上下文 (11/28 f14 / f20 改后反而错)。"""
     from .table_rows import table_rows  # noqa: PLC0415
     try:
         (content,) = conn.execute("SELECT content FROM documents WHERE rowid = ?", (rowid,)).fetchone()
     except Exception:  # noqa: BLE001
-        return []
-    return table_rows(content or "", terms, Path(path).suffix)
+        return ""
+    content = content or ""
+    text = best_excerpt(content, words)
+    rows = [r for r in table_rows(content, words, Path(path).suffix, max_rows=2) if r[:40] not in text]
+    if rows:
+        text += " / 表格里命中的行: " + " / ".join(rows)[:FILE_ROWS_CHARS]
+    return text
 
 
 def _files(queries: list[str]) -> list[dict[str, str]]:
@@ -286,13 +319,8 @@ def _files(queries: list[str]) -> list[dict[str, str]]:
                 for rowid, path in rows:
                     if path in out:
                         continue
-                    (excerpt,) = conn.execute(
-                        "SELECT substr(content, max(1, instr(content, ?) - 200), ?) FROM documents WHERE rowid = ?",
-                        (usable[0], FILE_EXCERPT_CHARS, rowid)).fetchone()
-                    rows = _table_rows(conn, rowid, q.split(), path)
                     out[path] = {"kind": "本机文件", "title": Path(path).name, "where": path,
-                                 "text": ("表格里命中的行: " + " / ".join(rows)) if rows
-                                 else re.sub(r"\s+", " ", excerpt or "").strip()}
+                                 "text": _file_text(conn, rowid, q.split(), path)}
             try:
                 named = sf.search_files(q, limit=FILES_PER_QUERY)
             except Exception:  # noqa: BLE001
@@ -300,8 +328,8 @@ def _files(queries: list[str]) -> list[dict[str, str]]:
             for m in named.get("matches") or []:
                 if m["path"] not in out:
                     out[m["path"]] = {"kind": "本机文件", "title": Path(m["path"]).name, "where": m["path"],
-                                      "text": ("表格里命中的行: " + " / ".join(m["rows"])) if m.get("rows") else
-                                      (m.get("snippet") or "").replace("⟦", "").replace("⟧", "") or "(文件名对得上)"}
+                                      "text": ((m.get("snippet") or "").replace("⟦", "").replace("⟧", "") or "(文件名对得上)")
+                                      + ((" / 表格里命中的行: " + " / ".join(m["rows"])[:FILE_ROWS_CHARS]) if m.get("rows") else "")}
     except Exception as e:  # noqa: BLE001
         logger.info("local_lookup: 文件索引查询失败: %s", e)
     finally:
@@ -551,8 +579,9 @@ async def follow_queries(question: str, queries: list[str], found: list[dict[str
     out = []
     for q in dict.fromkeys(qs):
         words = [w for w in q.split() if len(w) >= 2]
-        # 名字得是第一轮资料里原样有的 (模型自己编的人名 / 单位不搜)
-        if q and q.lower() not in done and words and any(w.lower() in text for w in words):
+        # 名字 (第一个词) 得是第一轮资料里原样有的 —— 模型自己编的人名 / 单位不搜。
+        # 11/28 复查: 原来「任一个词在资料里」就放行, 「李四 部门」会因为资料里有「部门」两个字混过去。
+        if q and q.lower() not in done and words and words[0].lower() in text:
             out.append(q)
     return out[:FOLLOW_MAX]
 

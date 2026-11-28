@@ -281,7 +281,7 @@ def test_lookup_second_round_follows_bridge_name_from_first_round(monkeypatch):
         if len(calls) == 1:
             return '{"queries": ["资质管理系统"]}'
         assert "负责人: 张三" in msgs[-1]["content"]          # 判断那步看得到第一轮的资料
-        return '{"queries": ["张三", "李四 部门"]}'            # 李四资料里没有 = 模型编的, 不搜
+        return '{"queries": ["张三", "李四 负责人"]}'          # 李四资料里没有 = 模型编的, 不搜 (「负责人」三个字资料里有也不行)
 
     res = asyncio.run(ll.lookup("资质管理系统的负责人现在在哪个部门", "", fake, {}))
     assert res["follow"] == ["张三"] and res["queries"] == ["资质管理系统", "张三"]
@@ -371,8 +371,17 @@ def test_files_gives_table_rows_with_header(tmp_path, monkeypatch):
     conn.close()
     monkeypatch.setattr(sf, "_db_path", lambda: db)
     got = ll._files(["数据共享平台"])
-    assert got[0]["text"] == "表格里命中的行: [表] 系统=数据共享平台; 经理=郑志浩"
+    assert got[0]["text"].endswith(" / 表格里命中的行: [表] 系统=数据共享平台; 经理=郑志浩")
+    assert got[0]["text"].startswith("## 表 | 系统 | 经理 |")                 # 前后文还在, 表格行是附加的
     assert sf.search_files("数据共享平台")["matches"][0]["rows"] == ["[表] 系统=数据共享平台; 经理=郑志浩"]
+
+
+def test_best_excerpt_takes_densest_window_not_first_occurrence():
+    """11/28: 第一个词在标题, 答案在后面 —— 取搜索词最集中的一段。"""
+    doc = "岗位设置全景图\n" + "无关内容。" * 400 + "技术研发类 一级岗位 下设 13 个二级岗位 (岗位设置全景图 附表)" + "别的。" * 300
+    got = ll.best_excerpt(doc, ["岗位设置全景图", "技术研发类", "二级岗位"])
+    assert "13 个二级岗位" in got and len(got) <= ll.FILE_EXCERPT_CHARS
+    assert ll.best_excerpt("没有任何搜索词的文件" * 100, ["不存在"]).startswith("没有任何搜索词")
 
 
 def test_table_row_keeps_matching_cell_when_row_is_long():
@@ -383,3 +392,26 @@ def test_table_row_keeps_matching_cell_when_row_is_long():
     got = table_rows("## 表\n" + header + "\n" + row, ["AlpaSim"], ".xlsx")[0]
     assert "说明=" in got and "英伟达开源了 AlpaSim" in got and got.startswith("[表] 序号=7; 部门=智能网联")
     assert len(got) < 1100
+
+
+def test_table_rows_never_pairs_values_with_wrong_header():
+    """11/28 鲁棒性复查: 配错列名比不配更糟。老 extractor 行首没竖线; Word 表第一行常是空表头; Excel 第一行常是标题。"""
+    from catfish_tool_bridge.table_rows import table_rows
+    # 老 extractor: 「a | b」, 第一格空的行是「 | b | c」—— 不能错一格
+    native = "台账\n月份 | 凭证号 | 摘要 | 金额\n | 0012 | 差旅报销 | 3200\n1月 | 0013 | 办公用品 | 150"
+    assert table_rows(native, ["差旅报销"], ".xls") == ["凭证号=0012; 摘要=差旅报销; 金额=3200"]
+    # Word: 空表头 + 分隔行 → 只列值
+    word = "|  |  |  |\n| --- | --- | --- |\n| 受审核方名称 | 中电福富 | 福州 |\n| 合同编号 | 2026-155 | 备注 |"
+    assert table_rows(word, ["2026-155"], ".docx") == ["合同编号; 2026-155; 备注"]
+    # Excel: 第一行是标题 / Unnamed, 真表头在第二行
+    titled = "## 值班表\n| 附件 | Unnamed: 1 | Unnamed: 2 |\n| --- | --- | --- |\n| 序号 | 系统 | 经理 |\n| 1 | 数据共享平台 | 郑志浩 |"
+    assert table_rows(titled, ["数据共享平台"], ".xlsx") == ["[值班表] 序号=1; 系统=数据共享平台; 经理=郑志浩"]
+    # 格数对不上 (合并格 / 单元格里换行拆了行) → 只列值, 不硬配
+    ragged = "## 表\n| 序号 | 系统 | 经理 |\n| --- | --- | --- |\n| 1 | 平台甲 | 张三 | 多出来的一格 |"
+    assert table_rows(ragged, ["平台甲"], ".xlsx") == ["[表] 1; 平台甲; 张三; 多出来的一格"]
+    # 第一行是数据不是表头 (全是数字 / 长句) → 只列值
+    nohead = "| 115.0 | 3200 | 2026-10-01 |\n| 116.0 | 150 | 平台乙 |"
+    assert table_rows(nohead, ["平台乙"], ".xlsx") == ["116.0; 150; 平台乙"]
+    # CSV 带换行的引号格拆了行 (格数对不上) → 只列值, 不把值安到别的列头上
+    broken = table_rows('id,姓名,说明\n7,崔冉,第一行\n第二行 备注,x', ["备注"], ".csv")
+    assert broken == ["第二行 备注; x"]
