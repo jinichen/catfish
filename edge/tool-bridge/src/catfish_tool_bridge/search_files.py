@@ -127,6 +127,28 @@ def _connect(path: Path) -> sqlite3.Connection:
         return sqlite3.connect(str(path), timeout=DB_BUSY_TIMEOUT_SEC)
 
 
+TABLE_ROW_FILES = 8   # 前几个内容命中的文件才去抠表格行 (要读全文)
+
+
+def _add_table_rows(conn: sqlite3.Connection, out: list[dict[str, Any]], terms: list[str]) -> None:
+    """11/28: 表格文件 (Excel / CSV / 带表的 Word、PDF) 命中时加 rows = 命中的那几行配表头 (见 table_rows.py)。
+    snippet 只有十几个字, 一行几十列的表看不出哪格是什么。按 rowid 取全文 (documents 的 path 是 UNINDEXED, 不能按 path 查)。"""
+    from .table_rows import table_rows  # noqa: PLC0415
+    n = 0
+    for r in out:
+        rowid = r.pop("_rowid", None)
+        if rowid is None or n >= TABLE_ROW_FILES:
+            continue
+        n += 1
+        try:
+            (content,) = conn.execute("SELECT content FROM documents WHERE rowid = ?", (rowid,)).fetchone()
+        except (sqlite3.Error, TypeError):
+            continue
+        got = table_rows(content or "", terms, r.get("file_type") or "")
+        if got:
+            r["rows"] = got
+
+
 def search_files(query: str, limit: int = DEFAULT_LIMIT,
                  file_types: list[str] | None = None) -> dict[str, Any]:
     """内容 MATCH + 文件名 LIKE 双路查, 合并去重。"""
@@ -150,16 +172,16 @@ def search_files(query: str, limit: int = DEFAULT_LIMIT,
         # ── 路 1: 全文内容 (FTS5 MATCH) ──
         if usable:
             sql = (
-                "SELECT path, file_type, snippet(documents, 2, '⟦', '⟧', '…', ?) "
+                "SELECT rowid, path, file_type, snippet(documents, 2, '⟦', '⟧', '…', ?) "
                 "FROM documents WHERE documents MATCH ? "
                 "ORDER BY bm25(documents) LIMIT ?"
             )
-            for path, ftype, snip in conn.execute(
+            for rowid, path, ftype, snip in conn.execute(
                 sql, (SNIPPET_TOKENS, _fts_expr(usable), limit * 3)
             ):
                 rows[path] = {"path": path, "file_type": ftype,
                               "snippet": (snip or "").replace("\n", " ").strip(),
-                              "matched_by": "content"}
+                              "matched_by": "content", "_rowid": rowid}
 
         # ── 路 2: 文件名 —— 查 file_meta, **不要查 documents** ──
         #
@@ -211,6 +233,7 @@ def search_files(query: str, limit: int = DEFAULT_LIMIT,
         rank = {"filename": 0, "content+filename": 0, "content": 1}
         out.sort(key=lambda r: (rank.get(r["matched_by"], 2), -(r.get("mtime") or 0)))
         out = out[:limit]
+        _add_table_rows(conn, out, [t for t in re.split(r"\s+", query.strip()) if t])
     finally:
         conn.close()
 

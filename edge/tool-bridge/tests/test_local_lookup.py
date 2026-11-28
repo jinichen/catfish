@@ -256,3 +256,130 @@ def test_shared_pages_are_labelled_department_knowledge_with_publisher(tmp_path,
     assert hits["wiki-shared/dept/市场部/f2.md"]["text"].startswith("(市场部同事分享, 不是员工自己确认的) ")
     block = ll.prompt_block({"queries": ["ITSS"], "found": [], "used": [], "block": "- [部门知识] ITSS一级: x"})
     assert "两边各怎么说都写出来" in block and "不要把同事写的说成员工自己的" in block
+
+
+def _fake_sources(monkeypatch, wiki_by_query):
+    monkeypatch.setattr(ll, "_wiki", lambda qs, question="": [w for q in qs for w in wiki_by_query.get(q, [])])
+    monkeypatch.setattr(ll, "_files", lambda qs: [])
+    monkeypatch.setattr(ll, "_mails", lambda qs: [])
+    monkeypatch.setattr(ll, "_journal", lambda qs: [])
+    monkeypatch.setattr(ll, "_chats", lambda qs: [])
+    monkeypatch.setattr(ll, "_learned", lambda q: [])
+
+
+SYSTEM_PAGE = {"kind": "知识库", "title": "资质管理系统", "where": "wiki/sys.md", "text": "资质管理系统 负责人: 张三。2024 年上线。"}
+PERSON_PAGE = {"kind": "知识库", "title": "张三", "where": "wiki/zs.md", "text": "张三 2026-09 调到科创研发部。"}
+
+
+def test_lookup_second_round_follows_bridge_name_from_first_round(monkeypatch):
+    """11/28 答案分在两份里: 系统页写负责人是张三, 张三在哪写在他自己那页 —— 问题里没有「张三」, 第一轮搜不到他那页。"""
+    _fake_sources(monkeypatch, {"资质管理系统": [SYSTEM_PAGE], "张三": [PERSON_PAGE]})
+    calls = []
+
+    async def fake(msgs, **kw):
+        calls.append(msgs[-1]["content"])
+        if len(calls) == 1:
+            return '{"queries": ["资质管理系统"]}'
+        assert "负责人: 张三" in msgs[-1]["content"]          # 判断那步看得到第一轮的资料
+        return '{"queries": ["张三", "李四 部门"]}'            # 李四资料里没有 = 模型编的, 不搜
+
+    res = asyncio.run(ll.lookup("资质管理系统的负责人现在在哪个部门", "", fake, {}))
+    assert res["follow"] == ["张三"] and res["queries"] == ["资质管理系统", "张三"]
+    titles = [f["title"] for f in res["used"]]
+    assert titles == ["资质管理系统", "张三"]
+    assert res["used"][1]["text"].startswith("(按资料里的「张三」再查到的)")
+    block = ll.prompt_block(res)
+    assert "两步连起来说" in block and "科创研发部" in block
+
+
+def test_lookup_no_second_round_when_enough_or_repeated_or_failed(monkeypatch):
+    _fake_sources(monkeypatch, {"资质管理系统": [SYSTEM_PAGE]})
+    for second in ('{"queries": []}', '{"queries": ["资质管理系统"]}', "不是 JSON", RuntimeError("超时")):
+        n = []
+
+        async def fake(msgs, second=second, **kw):
+            n.append(1)
+            if len(n) == 1:
+                return '{"queries": ["资质管理系统"]}'
+            if isinstance(second, Exception):
+                raise second
+            return second
+
+        res = asyncio.run(ll.lookup("资质管理系统谁负责", "", fake, {}))
+        assert res["follow"] == [] and [f["title"] for f in res["used"]] == ["资质管理系统"]
+        assert "两步连起来说" not in ll.prompt_block(res)
+
+
+def test_lookup_skips_follow_check_when_nothing_found(monkeypatch):
+    _fake_sources(monkeypatch, {})
+    n = []
+
+    async def fake(msgs, **kw):
+        n.append(1)
+        return '{"queries": ["不存在的东西"]}'
+
+    res = asyncio.run(ll.lookup("不存在的东西", "", fake, {}))
+    assert len(n) == 1 and res["follow"] == [] and res["block"] == ""
+
+
+def test_second_round_has_own_budget_and_never_pushes_out_first_round(monkeypatch):
+    """11/28 f20: 第二轮跟第一轮抢同一个字数上限, 把第一轮里本来对的文件挤掉了 —— 第二轮另给 FOLLOW_CHARS。"""
+    big = "x" * 1500
+    first_files = [{"kind": "本机文件", "title": f"f{i}", "where": f"/f{i}", "text": big} for i in range(7)]
+    monkeypatch.setattr(ll, "_wiki", lambda qs, question="": [SYSTEM_PAGE] if "资质管理系统" in qs else
+                        [PERSON_PAGE, SYSTEM_PAGE])        # 第二轮又搜到的 SYSTEM_PAGE 去重
+    monkeypatch.setattr(ll, "_files", lambda qs: first_files if "资质管理系统" in qs else
+                        [{"kind": "本机文件", "title": f"g{i}", "where": f"/g{i}", "text": big} for i in range(5)])
+    for name in ("_mails", "_journal", "_chats"):
+        monkeypatch.setattr(ll, name, lambda qs: [])
+    monkeypatch.setattr(ll, "_learned", lambda q: [])
+    n = []
+
+    async def fake(msgs, **kw):
+        n.append(1)
+        return '{"queries": ["资质管理系统"]}' if len(n) == 1 else '{"queries": ["张三"]}'
+
+    res = asyncio.run(ll.lookup("资质管理系统负责人在哪", "", fake, {}))
+    titles = [f["title"] for f in res["used"]]
+    assert titles[:3] == ["资质管理系统", "f0", "张三"]                       # 第二轮紧跟第一轮最前两条
+    assert all(f"f{i}" in titles for i in range(7))                         # 第一轮挑上的一条都没被挤掉
+    assert titles.count("资质管理系统") == 1
+    second = [f for f in res["used"] if f["text"].startswith("(按资料里的")]
+    assert sum(len(ll._line(f)) for f in second) <= ll.FOLLOW_CHARS
+
+
+def test_table_rows_pipe_and_csv():
+    from catfish_tool_bridge.table_rows import table_rows
+    md = "## 发送版\n| 序号 | 部门 | 系统 | 备注 |\n| --- | --- | --- | --- |\n| 1 | 数智化 | 数据共享平台 | NaN |\n| 2 | 政企 | 别的系统 |  |\n"
+    assert table_rows(md, ["数据共享平台"], ".xlsx") == ["[发送版] 序号=1; 部门=数智化; 系统=数据共享平台"]
+    assert table_rows(md, ["序号"], ".xlsx") == []                       # 命中表头本身不算
+    csv_text = '"id","姓名","部门"\n"7","崔冉",北京分公司销售部\n"8","张三",福州\n'
+    assert table_rows(csv_text, ["崔冉"], ".csv") == ["id=7; 姓名=崔冉; 部门=北京分公司销售部"]
+    assert table_rows("普通段落 崔冉 写的", ["崔冉"], ".docx") == []
+    rows = table_rows(md, ["政企", "别的系统", "数智化"], ".xlsx")
+    assert rows[0].startswith("[发送版] 序号=2")                          # 含的词多的在前
+
+
+def test_files_gives_table_rows_with_header(tmp_path, monkeypatch):
+    db = tmp_path / "search.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE VIRTUAL TABLE documents USING fts5(path UNINDEXED, title, content, file_type UNINDEXED, tokenize='trigram')")
+    conn.execute("CREATE TABLE file_meta (path TEXT PRIMARY KEY, mtime REAL)")
+    conn.execute("INSERT INTO documents VALUES (?,?,?,?)", ("/a/值班.xlsx", "值班", "## 表\n| 系统 | 经理 |\n| 数据共享平台 | 郑志浩 |\n", ".xlsx"))
+    conn.execute("INSERT INTO file_meta VALUES (?,?)", ("/a/值班.xlsx", 1.0))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(sf, "_db_path", lambda: db)
+    got = ll._files(["数据共享平台"])
+    assert got[0]["text"] == "表格里命中的行: [表] 系统=数据共享平台; 经理=郑志浩"
+    assert sf.search_files("数据共享平台")["matches"][0]["rows"] == ["[表] 系统=数据共享平台; 经理=郑志浩"]
+
+
+def test_table_row_keeps_matching_cell_when_row_is_long():
+    """11/28 f28: 一行几十列, 答案在后面一大段说明格里; 原来从头截 500 字截掉了, 小鲶答「没找到」。"""
+    from catfish_tool_bridge.table_rows import table_rows
+    header = "| 序号 | 部门 | " + " | ".join(f"列{i}" for i in range(30)) + " | 说明 |"
+    row = "| 7 | 智能网联 | " + " | ".join("很长的填充内容" * 3 for _ in range(30)) + " | " + "前文" * 200 + "当前英伟达开源了 AlpaSim, 可做验证" + "后文" * 200 + " |"
+    got = table_rows("## 表\n" + header + "\n" + row, ["AlpaSim"], ".xlsx")[0]
+    assert "说明=" in got and "英伟达开源了 AlpaSim" in got and got.startswith("[表] 序号=7; 部门=智能网联")
+    assert len(got) < 1100

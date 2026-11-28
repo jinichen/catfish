@@ -86,13 +86,16 @@ plan 给员工看, 简洁: "我先 search 找原稿, 看完改第 3/5/7 节. 30 
 
 | 场景 | 用 |
 |---|---|
-| 本地文件 / 文档 | `mcp_catfish_local_search_local_search` |
+| 本地文件 / 文档 | `catfish_search_files` |
+| 个人知识库 | `catfish_wiki_search` |
 | 跨 session 搜对话 | `catfish_search_sessions` |
 | 搜邮件 | `catfish_email_search` |
 | 邮件 (列/读/起草) | `catfish-email` skill |
 | 内网系统登录 | Catfish Chrome CDP 已登录态 |
 
 MCP 名必须全名 `mcp_<server>_<tool>`, 不能短名.
+
+答案分在几份资料里 (系统介绍写着负责人是谁, 这人现在在哪写在另一份): 先查到中间那个人 / 物 / 单位, 再用资料里的这个名字接着查, 不拿第一份资料猜后半截; 哪一步没查到就照实说哪一步. 回答里的编号 / 日期 / 人名 / 单位 / 金额只写查到的资料里有的, 问的之外不顺手补没核对过的细节.
 
 ## 提醒 / 通知 / 日历
 
